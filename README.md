@@ -8,6 +8,7 @@ Code extension, desktop app).
 - **`packages/tools`** — gated built-in tools: workspace files, outbound
   network, and shell execution.
 - **`packages/sdk`** — stable public facade (`createRingKo`) for hosts.
+- **`packages/session`** — event-sourced session storage (`~/.ringko/sessions`).
 - **`packages/providers`** — AI SDK-backed model providers (OpenAI, Anthropic).
 - **`packages/tui` / `webui` / `app` / `code`** — the user-facing surfaces.
 
@@ -24,9 +25,10 @@ Configuration, skills, and MCP servers live outside the project, under two roots
 | Config | `~/.ringko/config` |
 | Skills | `~/.ringko/skills`, `~/.agents/skills` (and the `skill` alias) |
 | MCP servers | `~/.ringko/.mcp.json`, `~/.agents/.mcp.json` |
+| Sessions | `~/.ringko/sessions/**` (event-sourced JSONL) |
 
 `RINGKO_HOME` / `AGENTS_HOME` override the home directories. Inspect them with
-`ringko config show`, `ringko skills`, and `ringko mcp`.
+`ringko config show`, `ringko skills`, `ringko mcp`, and `ringko session list`.
 
 ## Providers
 

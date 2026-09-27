@@ -12,6 +12,7 @@ import {
   gate,
   validateToolDefinition,
 } from "@ringko-ai/harness";
+import { recordAgentEvent, recordUserMessage, type SessionHandle } from "@ringko-ai/session";
 import type {
   Access,
   AnyToolDefinition,
@@ -76,6 +77,8 @@ export interface RingKoConfig {
   instructions?: string;
   maxTurns?: number;
   onEvent?: (event: AgentEvent) => void;
+  /** When set, the conversation is recorded to this session log. */
+  session?: SessionHandle;
 }
 
 export interface RingKo {
@@ -93,7 +96,28 @@ export function createRingKo(config: RingKoConfig): RingKo {
     throw new TypeError("RingKo requires a model client.");
   }
   const tools = new ToolRegistry();
-  const agent = new Agent({ ...config, tools });
+  const session = config.session;
+  const baseOnEvent = config.onEvent;
+
+  const onEvent =
+    baseOnEvent || session
+      ? (event: AgentEvent): void => {
+          baseOnEvent?.(event);
+          if (session) {
+            recordAgentEvent(session, event);
+            session.flush();
+          }
+        }
+      : undefined;
+
+  const agent = new Agent({
+    model: config.model,
+    tools,
+    ...(config.requestApproval ? { requestApproval: config.requestApproval } : {}),
+    ...(config.instructions ? { instructions: config.instructions } : {}),
+    ...(config.maxTurns ? { maxTurns: config.maxTurns } : {}),
+    ...(onEvent ? { onEvent } : {}),
+  });
 
   return {
     tools,
@@ -105,6 +129,10 @@ export function createRingKo(config: RingKoConfig): RingKo {
       tools.registerAll(bundle);
     },
     run(prompt) {
+      if (session) {
+        recordUserMessage(session, prompt);
+        session.flush();
+      }
       return agent.run(prompt);
     },
   };

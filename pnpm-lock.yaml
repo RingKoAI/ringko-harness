@@ -58,6 +58,18 @@ importers:
       '@ringko-ai/harness':
         specifier: workspace:*
         version: link:../harness
+      '@ringko-ai/session':
+        specifier: workspace:*
+        version: link:../session
+
+  packages/session:
+    dependencies:
+      '@ringko-ai/config':
+        specifier: workspace:*
+        version: link:../config
+      '@ringko-ai/harness':
+        specifier: workspace:*
+        version: link:../harness
 
   packages/tools:
     dependencies:
@@ -76,6 +88,9 @@ importers:
       '@ringko-ai/sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@ringko-ai/session':
+        specifier: workspace:*
+        version: link:../session
       '@ringko-ai/tools':
         specifier: workspace:*
         version: link:../tools

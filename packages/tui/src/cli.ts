@@ -12,6 +12,7 @@ import {
   unsetConfigValue,
   type RingkoConfig,
 } from "@ringko-ai/config";
+import { SessionStore } from "@ringko-ai/session";
 import { loadProviderModel } from "./provider.ts";
 
 export const VERSION = "0.1.0";
@@ -31,6 +32,7 @@ Commands:
   tools                List the registered tools
   skills               List installed skills (~/.ringko/skills, ~/.agents/skills)
   mcp                  List configured MCP servers (~/.ringko/.mcp.json)
+  session list         List stored sessions (~/.ringko/sessions)
   info                 Show the access mode
   config show          Print the config path and contents
   config path          Print the config path
@@ -127,11 +129,24 @@ async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   }
 
   const workspace = parsed.workspace ?? config.workspace ?? process.cwd();
-  const ringko = createRingKo({ model, requestApproval: denyApprovals(io) });
+  const session = new SessionStore({ cwd: workspace }).create();
+  const ringko = createRingKo({ model, requestApproval: denyApprovals(io), session });
   registerTools(ringko, config, workspace);
 
-  const result = await ringko.run(prompt);
-  io.out(result.content);
+  try {
+    const result = await ringko.run(prompt);
+    io.out(result.content);
+    io.err(`session ${session.id}`);
+    return 0;
+  } finally {
+    session.close();
+  }
+}
+
+function sessionCommand(io: CliIo): number {
+  for (const meta of new SessionStore().list()) {
+    io.out(`${meta.id}\t${new Date(meta.header.createdAt).toISOString()}\t${meta.header.cwd ?? ""}`);
+  }
   return 0;
 }
 
@@ -248,6 +263,8 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       return skillsCommand(io);
     case "mcp":
       return mcpCommand(io);
+    case "session":
+      return sessionCommand(io);
     case "config":
       return configCommand(parsed, io);
     case "run":

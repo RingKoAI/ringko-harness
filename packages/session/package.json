@@ -1,5 +1,5 @@
 {
-  "name": "@ringko-ai/sdk",
+  "name": "@ringko-ai/session",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,7 +11,7 @@
     "test": "bun test src"
   },
   "dependencies": {
-    "@ringko-ai/harness": "workspace:*",
-    "@ringko-ai/session": "workspace:*"
+    "@ringko-ai/config": "workspace:*",
+    "@ringko-ai/harness": "workspace:*"
   }
 }
