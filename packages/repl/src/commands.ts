@@ -27,6 +27,8 @@ export interface SlashContext {
   pickThinking(arg: string): void | Promise<void>;
   /** Toggle whether model reasoning is shown (arg: on|off). */
   toggleThinking(arg: string): void | Promise<void>;
+  /** Compact the running context into a summary (optional focus text). */
+  compact(arg: string): void | Promise<void>;
 }
 
 export interface SlashCommand {
@@ -67,6 +69,13 @@ export function buildCommands(): SlashCommand[] {
       description: "set the reasoning depth (off|low|high|max)",
       run: (ctx, arg) => {
         void ctx.pickThinking(arg);
+      },
+    },
+    {
+      name: "compact",
+      description: "compact the context into a summary",
+      run: (ctx, arg) => {
+        void ctx.compact(arg);
       },
     },
     {

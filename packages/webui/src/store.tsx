@@ -12,6 +12,7 @@ import {
   type Info,
   type ServerMessage,
   type SessionMeta,
+  type TodoItem,
 } from '@/api'
 
 export interface AppState {
@@ -25,6 +26,7 @@ export interface AppState {
   messages: ServerMessage[]
   busy: boolean
   approval: Approval | null
+  todos: TodoItem[]
   send(prompt: string, attachments?: string[]): void
   stop(): void
   decide(approved: boolean): void
@@ -42,6 +44,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [sessionId, setSessionId] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [approval, setApproval] = useState<Approval | null>(null)
+  const [todos, setTodos] = useState<TodoItem[]>([])
   const streamRef = useRef<{ abort(): void } | null>(null)
 
   const refreshSessions = useCallback(() => {
@@ -87,6 +90,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         onTool: (message) =>
           setMessages((previous) => [...previous, { role: 'tool', name: message.name, content: message.content }]),
         onApproval: (value) => setApproval(value),
+        onTodo: (items) => setTodos(items),
         onDone: (result) => {
           setSessionId(result.sessionId)
           setBusy(false)
@@ -126,6 +130,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setSessionId(id)
         setMessages(data.messages)
         setApproval(null)
+        setTodos([])
       })
       .catch((cause: unknown) => {
         if (cause instanceof UnauthorizedError) setUnauthorized(true)
@@ -151,6 +156,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setMessages([])
     setSessionId(undefined)
     setApproval(null)
+    setTodos([])
   }, [])
 
   const value = useMemo<AppState>(
@@ -165,13 +171,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       messages,
       busy,
       approval,
+      todos,
       send,
       stop,
       decide,
       openSession,
       newChat,
     }),
-    [info, unauthorized, refreshInfo, refreshSessions, clearSession, sessions, sessionId, messages, busy, approval, send, stop, decide, openSession, newChat],
+    [info, unauthorized, refreshInfo, refreshSessions, clearSession, sessions, sessionId, messages, busy, approval, todos, send, stop, decide, openSession, newChat],
   )
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

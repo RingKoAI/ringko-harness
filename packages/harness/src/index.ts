@@ -21,6 +21,7 @@ export type {
   AnyToolDefinition,
   ApprovalHandler,
   ToolApprovalRequest,
+  ToolConcurrency,
   ToolDefinition,
   ToolMetadata,
   ToolRiskAssessment,
@@ -35,4 +36,6 @@ export type {
   ModelRequest,
   ModelToolCall,
   ModelTurn,
+  ModelUsage,
 } from "./agent.ts";
+export { estimateMessagesTokens, estimateTokens, estimateToolsTokens } from "./tokens.ts";

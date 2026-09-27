@@ -18,11 +18,18 @@ export interface ModelToolCall {
   arguments: unknown;
 }
 
+export interface ModelUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
 export interface ModelTurn {
   content: string;
   toolCalls: readonly ModelToolCall[];
   /** Model reasoning text, when the provider exposes it. */
   reasoning?: string;
+  /** Token usage reported by the provider, when available. */
+  usage?: ModelUsage;
 }
 
 export interface ModelRequest {
@@ -46,6 +53,8 @@ export interface AgentRunResult {
   messages: readonly ChatMessage[];
   content: string;
   turns: number;
+  /** Usage of the final model turn, when the provider reported it. */
+  usage?: ModelUsage;
 }
 
 export interface AgentOptions {
@@ -140,6 +149,7 @@ export class Agent {
     }
     messages.push({ role: "user", content: prompt });
 
+    let lastUsage: ModelUsage | undefined;
     for (let turn = 1; turn <= this.maxTurns; turn += 1) {
       const response = await this.model({
         messages,
@@ -158,9 +168,10 @@ export class Agent {
       };
       messages.push(assistant);
       this.onEvent?.({ type: "model", turn, message: assistant });
+      lastUsage = response.usage;
 
       if (response.toolCalls.length === 0) {
-        return { messages, content: response.content, turns: turn };
+        return { messages, content: response.content, turns: turn, ...(lastUsage ? { usage: lastUsage } : {}) };
       }
 
       for (const call of response.toolCalls) {

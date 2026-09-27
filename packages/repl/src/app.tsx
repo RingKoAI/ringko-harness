@@ -390,6 +390,18 @@ export function Repl(props: ReplProps) {
     [applyThinking, thinking],
   );
 
+  const compact = useCallback(
+    (arg: string): void => {
+      const ringko = ringkoRef.current;
+      if (!ringko) return;
+      ringko
+        .compact(arg.trim() || undefined)
+        .then((result) => print(result.compacted ? "compacted context." : "nothing to compact."))
+        .catch((error: unknown) => print(`compact failed: ${(error as Error).message}`));
+    },
+    [print],
+  );
+
   const toggleThinking = useCallback(
     (arg: string): void => {
       const trimmed = arg.trim().toLowerCase();
@@ -525,8 +537,22 @@ export function Repl(props: ReplProps) {
       pickSession: openSessionPicker,
       pickThinking,
       toggleThinking,
+      compact,
     }),
-    [print, exit, modelLabelText, workspace, sessionId, connect, login, pickModel, openSessionPicker, pickThinking, toggleThinking],
+    [
+      print,
+      exit,
+      modelLabelText,
+      workspace,
+      sessionId,
+      connect,
+      login,
+      pickModel,
+      openSessionPicker,
+      pickThinking,
+      toggleThinking,
+      compact,
+    ],
   );
 
   async function submit(input: string): Promise<void> {

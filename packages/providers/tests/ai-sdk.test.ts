@@ -32,7 +32,7 @@ describe("AI SDK model client", () => {
       tools: [],
     });
 
-    expect(turn).toEqual({ content: "hello", toolCalls: [] });
+    expect(turn).toMatchObject({ content: "hello", toolCalls: [] });
   });
 
   it("surfaces model tool calls with their arguments", async () => {

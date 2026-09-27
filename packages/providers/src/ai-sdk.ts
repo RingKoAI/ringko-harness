@@ -101,6 +101,16 @@ export function toToolSet(metadata: readonly ToolMetadata[]): Record<string, Ret
   return set;
 }
 
+/** Provider usage may be a flat number or a `{ total }` object. */
+function tokenCount(value: unknown): number | undefined {
+  if (typeof value === "number") return value;
+  if (typeof value === "object" && value !== null) {
+    const total = (value as { total?: unknown }).total;
+    if (typeof total === "number") return total;
+  }
+  return undefined;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -223,10 +233,16 @@ export function createAiSdkModelClient(model: LanguageModel, options: AiSdkModel
       arguments: call.input,
     }));
     const reasoning = result.reasoningText ?? "";
+    const usage = result.usage;
+    const inputTokens = tokenCount(usage?.inputTokens);
+    const outputTokens = tokenCount(usage?.outputTokens);
     const turn: ModelTurn = {
       content: result.text,
       toolCalls,
       ...(reasoning.length > 0 ? { reasoning } : {}),
+      ...(inputTokens !== undefined || outputTokens !== undefined
+        ? { usage: { ...(inputTokens !== undefined ? { inputTokens } : {}), ...(outputTokens !== undefined ? { outputTokens } : {}) } }
+        : {}),
     };
     return turn;
   };

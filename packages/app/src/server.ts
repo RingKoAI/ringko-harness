@@ -99,9 +99,14 @@ function sse(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-function registerTools(ringko: RingKo, config: RingkoConfig, workspace: string): void {
+function registerTools(
+  ringko: RingKo,
+  config: RingkoConfig,
+  workspace: string,
+  onTodo?: (items: unknown) => void,
+): void {
   registerWorkspaceTools(ringko.tools, { workspace });
-  ringko.tools.register(createTodoTool(createTodoStore()));
+  ringko.tools.register(createTodoTool(createTodoStore(onTodo ? (items) => onTodo(items) : undefined)));
   if (config.capabilities?.network) registerNetworkTools(ringko.tools);
   if (config.capabilities?.shell) registerShellTools(ringko.tools, { cwd: workspace });
 }
@@ -173,6 +178,9 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       auth: { required: Boolean(options.authToken) },
       access: access(accessMode),
       accessMode,
+      thinking: config.thinking ?? null,
+      expandThinking: config.expandThinking ?? false,
+      expandTools: config.expandTools ?? false,
       model: typeof model === "string" ? null : modelLabel(model.selection),
       modelId:
         typeof model === "string" ? null : `${model.selection.provider.name}/${model.selection.model.id}`,
@@ -461,6 +469,66 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     return json({ files: saved });
   }
 
+  async function handleSetThinking(request: Request): Promise<Response> {
+    const body = await readJson<{ level?: unknown }>(request);
+    const level = typeof body?.level === "string" ? body.level.trim().toLowerCase() : "";
+    if (!["off", "low", "high", "max"].includes(level)) {
+      return json({ error: 'level must be "off" | "low" | "high" | "max".' }, 400);
+    }
+    const config = readConfig();
+    if (typeof config === "string") return json({ error: config }, 500);
+    saveSettings({ ...config, thinking: level });
+    return await handleInfo();
+  }
+
+  async function handleSetUi(request: Request): Promise<Response> {
+    const body = await readJson<{ expandThinking?: unknown; expandTools?: unknown }>(request);
+    const config = readConfig();
+    if (typeof config === "string") return json({ error: config }, 500);
+    const next: RingkoConfig = { ...config };
+    if (typeof body?.expandThinking === "boolean") next.expandThinking = body.expandThinking;
+    if (typeof body?.expandTools === "boolean") next.expandTools = body.expandTools;
+    saveSettings(next);
+    return await handleInfo();
+  }
+
+  async function handleCompact(request: Request): Promise<Response> {
+    const body = await readJson<{ sessionId?: unknown; instructions?: unknown }>(request);
+    const sessionId = typeof body?.sessionId === "string" ? body.sessionId : "";
+    if (sessionId.length === 0) return json({ error: "sessionId is required." }, 400);
+    const config = readConfig();
+    if (typeof config === "string") return json({ error: config }, 500);
+    const model = loadModel(config);
+    if (typeof model === "string") return json({ error: model }, 400);
+    const small = config.small_model ? loadModel({ ...config, model: config.small_model }) : undefined;
+    let session: SessionHandle;
+    let history: ChatMessage[] = [];
+    try {
+      history = toChatMessages(store.open(sessionId, "read").all());
+      session = store.open(sessionId, "write");
+    } catch {
+      return json({ error: "Unknown session." }, 404);
+    }
+    try {
+      const ringko = createRingKo({
+        model: model.client,
+        session,
+        history,
+        modelId: model.selection.model.id,
+        ...(small && typeof small !== "string" ? { smallModel: small.client } : {}),
+        ...(model.selection.model.maxInputTokens ? { contextWindow: model.selection.model.maxInputTokens } : {}),
+        ...(model.selection.model.maxOutputTokens ? { reserveOutputTokens: model.selection.model.maxOutputTokens } : {}),
+        ...(config.compaction ? { compaction: config.compaction } : {}),
+      });
+      const result = await ringko.compact(typeof body?.instructions === "string" ? body.instructions : undefined);
+      return json({ compacted: result.compacted, summary: result.summary ?? null, tokens: ringko.tokens() });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Compaction failed." }, 500);
+    } finally {
+      session.close();
+    }
+  }
+
   async function handleSetModel(request: Request): Promise<Response> {
     const body = await readJson<{ model?: unknown }>(request);
     const target = typeof body?.model === "string" ? body.model.trim() : "";
@@ -590,6 +658,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     if (typeof config === "string") return json({ error: config }, 500);
     const model = loadModel(config);
     if (typeof model === "string") return json({ error: model }, 400);
+    const small = config.small_model ? loadModel({ ...config, model: config.small_model }) : undefined;
 
     let session: SessionHandle;
     let history: ChatMessage[] = [];
@@ -617,6 +686,10 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
             session,
             history,
             modelId: model.selection.model.id,
+            ...(small && typeof small !== "string" ? { smallModel: small.client } : {}),
+            ...(model.selection.model.maxInputTokens ? { contextWindow: model.selection.model.maxInputTokens } : {}),
+            ...(model.selection.model.maxOutputTokens ? { reserveOutputTokens: model.selection.model.maxOutputTokens } : {}),
+            ...(config.compaction ? { compaction: config.compaction } : {}),
             ...(isAccessMode(config.mode) ? { accessMode: config.mode } : {}),
             requestApproval: async (approval) => {
               const id = randomUUID();
@@ -646,7 +719,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
               }
             },
           });
-          registerTools(ringko, config, workspace);
+          registerTools(ringko, config, workspace, (items) => send("todo", { items }));
           const result = await ringko.run(prompt);
           send("done", { sessionId: session.id, content: result.content, turns: result.turns });
         } catch (error) {
@@ -741,6 +814,9 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         if (request.method === "POST" && action === "current") return handleSetCurrentProject(id);
       }
       if (url.pathname === "/api/model" && request.method === "POST") return await handleSetModel(request);
+      if (url.pathname === "/api/thinking" && request.method === "POST") return await handleSetThinking(request);
+      if (url.pathname === "/api/ui" && request.method === "POST") return await handleSetUi(request);
+      if (url.pathname === "/api/compact" && request.method === "POST") return await handleCompact(request);
       if (url.pathname === "/api/access" && request.method === "POST") return await handleSetAccess(request);
       if (url.pathname === "/api/upload" && request.method === "POST") return await handleUpload(request);
       if (url.pathname === "/api/sessions" && request.method === "GET") return handleSessions();

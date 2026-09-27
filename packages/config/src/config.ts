@@ -54,6 +54,15 @@ export interface RingkoConfig {
   thinking?: string;
   /** Whether model reasoning is expanded in the UI (false = collapsed). */
   expandThinking?: boolean;
+  /** Whether tool outputs/arguments are expanded in the UI (false = collapsed). */
+  expandTools?: boolean;
+  /** Automatic compaction settings. */
+  compaction?: {
+    enabled?: boolean;
+    ratio?: number;
+    keepRecent?: number;
+    margin?: number;
+  };
   /** Currently selected model, `"<providerName>/<modelId>"`. */
   model?: string;
   /** Optional cheaper model for helper tasks. */

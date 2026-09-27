@@ -8,12 +8,21 @@ import {
   UnknownToolError,
   access,
   defineTool,
+  estimateMessagesTokens,
+  estimateTokens,
+  estimateToolsTokens,
   executeTool,
   gate,
   isAccessMode,
   validateToolDefinition,
 } from "@ringko-ai/harness";
-import { recordAgentEvent, recordModelCall, recordUserMessage, type SessionHandle } from "@ringko-ai/session";
+import {
+  recordAgentEvent,
+  recordModelCall,
+  recordSessionCompaction,
+  recordUserMessage,
+  type SessionHandle,
+} from "@ringko-ai/session";
 import type {
   Access,
   AccessMode,
@@ -91,6 +100,27 @@ export interface RingKoConfig {
   accessMode?: AccessMode;
   /** Max parallel (non-exclusive) tool calls per turn (default: 10). */
   maxParallelTools?: number;
+  /** Cheaper model used for session titles and compaction (defaults to `model`). */
+  smallModel?: ModelClient;
+  /** Model context window in tokens (used for the compaction budget). */
+  contextWindow?: number;
+  /** Reserved output tokens, subtracted from the context window. */
+  reserveOutputTokens?: number;
+  /** Automatic compaction settings. */
+  compaction?: {
+    enabled?: boolean;
+    /** Trigger at `budget * ratio` (default: 0.8). */
+    ratio?: number;
+    /** Trailing messages kept verbatim (default: 6). */
+    keepRecent?: number;
+    /** Safety margin subtracted from the budget (default: 2000). */
+    margin?: number;
+  };
+}
+
+export interface CompactionResult {
+  compacted: boolean;
+  summary?: string;
 }
 
 export interface RingKo {
@@ -104,6 +134,10 @@ export interface RingKo {
   registerAll(tools: readonly AnyToolDefinition[]): void;
   /** Run the agent; an optional signal aborts in-flight provider requests. */
   run(prompt: string, options?: { signal?: AbortSignal }): Promise<AgentRunResult>;
+  /** Estimated tokens currently held (last provider usage, else heuristic). */
+  tokens(): number;
+  /** Compact the running history into a summary. Manual `/compact`. */
+  compact(instructions?: string): Promise<CompactionResult>;
 }
 
 export function createRingKo(config: RingKoConfig): RingKo {
@@ -114,6 +148,54 @@ export function createRingKo(config: RingKoConfig): RingKo {
   const session = config.session;
   const baseOnEvent = config.onEvent;
   let history: ChatMessage[] = [...(config.history ?? [])];
+  let lastInputTokens: number | undefined;
+
+  const compaction = {
+    enabled: true,
+    ratio: 0.8,
+    keepRecent: 6,
+    margin: 2000,
+    ...(config.compaction ?? {}),
+  };
+  const summarizer: ModelClient = config.smallModel ?? config.model;
+  const historyTokens = (): number => estimateMessagesTokens(history) + estimateToolsTokens(tools.list());
+  const budget = (): number =>
+    Math.max(1024, (config.contextWindow ?? 128_000) - (config.reserveOutputTokens ?? 4096) - compaction.margin);
+  const overThreshold = (extra = 0): boolean =>
+    compaction.enabled && (lastInputTokens ?? historyTokens()) + extra >= budget() * compaction.ratio;
+
+  async function compact(instructions?: string): Promise<CompactionResult> {
+    const systems = history.filter((message) => message.role === "system");
+    const rest = history.filter((message) => message.role !== "system");
+    const keep = Math.max(0, compaction.keepRecent);
+    if (rest.length <= keep + 1) return { compacted: false };
+    const middle = rest.slice(0, rest.length - keep);
+    const recent = rest.slice(rest.length - keep);
+    const transcript = middle.map((message) => `${message.role}: ${message.content}`).join("\n").slice(0, 200_000);
+    const summaryTurn = await summarizer({
+      messages: [
+        {
+          role: "system",
+          content:
+            "You compact an agent conversation. Preserve decisions, file paths, code facts, tool outcomes, and open tasks. Be concise and factual; no preamble.",
+        },
+        {
+          role: "user",
+          content: `Summarize the conversation so far for continuity.\n\n${transcript}${instructions ? `\n\nExtra focus: ${instructions}` : ""}`,
+        },
+      ],
+      tools: [],
+    });
+    const summary = summaryTurn.content.trim();
+    if (summary.length === 0) return { compacted: false };
+    history = [...systems, { role: "system", content: `Conversation summary so far:\n${summary}` }, ...recent];
+    lastInputTokens = undefined;
+    if (session) {
+      recordSessionCompaction(session, summary);
+      session.flush();
+    }
+    return { compacted: true, summary };
+  }
 
   const onEvent =
     baseOnEvent || session
@@ -138,7 +220,20 @@ export function createRingKo(config: RingKoConfig): RingKo {
     get history() {
       return history;
     },
+    tokens() {
+      return lastInputTokens ?? historyTokens();
+    },
+    compact,
     async run(prompt, options) {
+      // Auto-compact before recording the prompt: the log order stays
+      // [.., compaction, user] so replay resumes the compacted history.
+      if (overThreshold(estimateTokens(prompt))) {
+        try {
+          await compact();
+        } catch {
+          // Compaction is best effort; continue with the full history.
+        }
+      }
       if (session) {
         recordUserMessage(session, prompt);
         if (config.modelId) recordModelCall(session, config.modelId);
@@ -159,6 +254,7 @@ export function createRingKo(config: RingKoConfig): RingKo {
       });
       const result = await agent.run(prompt);
       history = [...result.messages];
+      lastInputTokens = result.usage?.inputTokens ?? historyTokens();
       return result;
     },
   };

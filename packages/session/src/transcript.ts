@@ -12,6 +12,7 @@ export const TRANSCRIPT_EVENT = {
   title: "session/title",
   thinking: "session/thinking",
   archive: "session/archived",
+  compaction: "session/compaction",
 } as const;
 
 interface HandleLike {
@@ -69,6 +70,14 @@ export function recordSessionThinking(handle: HandleLike, level: string): Sessio
 /** Record whether the session is archived. */
 export function recordSessionArchived(handle: HandleLike, archived: boolean): SessionEvent {
   return handle.appendEvent(TRANSCRIPT_EVENT.archive, { archived });
+}
+
+/**
+ * Record a compaction: on replay the transcript restarts from this summary, so
+ * resume sees the compacted history rather than the full log.
+ */
+export function recordSessionCompaction(handle: HandleLike, summary: string): SessionEvent {
+  return handle.appendEvent(TRANSCRIPT_EVENT.compaction, { summary });
 }
 
 function lastString(events: readonly SessionEvent[], type: string, key: string): string | undefined {
@@ -146,6 +155,14 @@ export function toChatMessages(events: readonly SessionEvent[]): ChatMessage[] {
   for (const event of events) {
     const data = asRecord(event.data);
     if (!data) continue;
+    if (event.type === TRANSCRIPT_EVENT.compaction) {
+      // A compaction resets the conversation to its summary plus everything logged after it.
+      messages.length = 0;
+      if (typeof data.summary === "string" && data.summary.length > 0) {
+        messages.push({ role: "system", content: data.summary });
+      }
+      continue;
+    }
     if (event.type === TRANSCRIPT_EVENT.user) {
       messages.push({ role: "user", content: typeof data.content === "string" ? data.content : "" });
     } else if (event.type === TRANSCRIPT_EVENT.assistant) {

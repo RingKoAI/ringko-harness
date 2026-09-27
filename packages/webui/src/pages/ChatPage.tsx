@@ -1,10 +1,12 @@
 import { ArrowUp, Brain, Paperclip, Square, Terminal, User, Wrench, X } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { reload, uploadFile, type ServerMessage, type ToolCall, type UploadedFile } from '@/api'
+import { compact, reload, setUi, uploadFile, type ServerMessage, type ToolCall, type UploadedFile } from '@/api'
 import { AccessPicker } from '@/components/access-picker'
 import { Markdown } from '@/components/markdown'
 import { ModelPicker } from '@/components/model-picker'
+import { ThinkingPicker } from '@/components/thinking-picker'
+import { TodoPanel } from '@/components/todo-panel'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -15,7 +17,10 @@ import { useApp } from '@/store'
 import { cn } from '@/lib/utils'
 
 const SUGGESTIONS: MessageKey[] = ['chat.suggest.1', 'chat.suggest.2', 'chat.suggest.3']
-const COMMANDS: { name: string; label: MessageKey }[] = [{ name: 'reload', label: 'command.reload' }]
+const COMMANDS: { name: string; label: MessageKey }[] = [
+  { name: 'reload', label: 'command.reload' },
+  { name: 'compact', label: 'command.compact' },
+]
 
 type Translate = ReturnType<typeof useI18n>['t']
 
@@ -70,7 +75,15 @@ function ToolResult({ message, t }: { message: ServerMessage; t: Translate }) {
   )
 }
 
-function MessageRow({ message }: { message: ServerMessage }) {
+function MessageRow({
+  message,
+  showThinking,
+  showTools,
+}: {
+  message: ServerMessage
+  showThinking: boolean
+  showTools: boolean
+}) {
   const { t } = useI18n()
   const isUser = message.role === 'user'
   const isTool = message.role === 'tool'
@@ -88,7 +101,7 @@ function MessageRow({ message }: { message: ServerMessage }) {
         <div className="text-xs font-medium text-muted-foreground">
           {isUser ? t('message.you') : isTool ? t('message.tool', { name: message.name ?? '' }) : t('message.assistant')}
         </div>
-        {message.reasoning ? (
+        {message.reasoning && showThinking ? (
           <Card className="gap-0 border-dashed bg-muted/30 py-0 shadow-none">
             <CardContent className="px-3 py-2">
               <details>
@@ -100,14 +113,20 @@ function MessageRow({ message }: { message: ServerMessage }) {
         ) : null}
         {message.content ? (
           isTool ? (
-            <ToolResult message={message} t={t} />
+            showTools ? (
+              <ToolResult message={message} t={t} />
+            ) : (
+              <p className="truncate text-xs text-muted-foreground">
+                <span className="font-mono">{message.name}</span> · {toolSummary(t, message.name, message.content)}
+              </p>
+            )
           ) : isUser ? (
             <div className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</div>
           ) : (
             <Markdown content={message.content} />
           )
         ) : null}
-        {message.toolCalls && message.toolCalls.length > 0 ? <ToolCallList calls={message.toolCalls} t={t} /> : null}
+        {showTools && message.toolCalls && message.toolCalls.length > 0 ? <ToolCallList calls={message.toolCalls} t={t} /> : null}
       </div>
     </div>
   )
@@ -143,12 +162,34 @@ export function ChatPage() {
         .catch((cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)))
       return
     }
+    if (prompt === '/compact') {
+      setDraft('')
+      if (!app.sessionId) {
+        toast.error(t('compact.none'))
+        return
+      }
+      compact(app.sessionId)
+        .then((result) => {
+          toast.success(result.compacted ? t('compact.done') : t('compact.none'))
+          app.refreshInfo()
+        })
+        .catch((cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)))
+      return
+    }
     const paths = attachments.map((file) => file.path)
     setDraft('')
     setAttachments([])
     app.send(prompt, paths)
   }
 
+  function toggleUi(patch: { expandThinking?: boolean; expandTools?: boolean }): void {
+    setUi(patch)
+      .then(() => app.refreshInfo())
+      .catch((cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)))
+  }
+
+  const showThinking = app.info?.expandThinking ?? false
+  const showTools = app.info?.expandTools ?? false
   const empty = app.messages.length === 0
   const commandHints =
     draft.startsWith('/') && !draft.includes(' ') ? COMMANDS.filter((command) => command.name.startsWith(draft.slice(1))) : []
@@ -182,7 +223,7 @@ export function ChatPage() {
         ) : (
           <div className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
             {app.messages.map((message, index) => (
-              <MessageRow key={index} message={message} />
+              <MessageRow key={index} message={message} showThinking={showThinking} showTools={showTools} />
             ))}
             {app.busy ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -195,6 +236,7 @@ export function ChatPage() {
       </ScrollArea>
 
       <div className="border-t bg-background/60 p-3 backdrop-blur sm:p-4">
+        <TodoPanel />
         <div className="mx-auto max-w-3xl rounded-2xl border bg-card shadow-sm transition-all focus-within:ring-2 focus-within:ring-ring/40">
           {commandHints.length > 0 ? (
             <div className="flex flex-col gap-0.5 px-2 pt-2">
@@ -244,7 +286,26 @@ export function ChatPage() {
           <div className="flex items-center justify-between gap-2 px-2 pt-1 pb-2">
             <div className="flex min-w-0 items-center gap-1">
               <ModelPicker />
+              <ThinkingPicker />
               <AccessPicker />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                title={t('ui.showThinking')}
+                onClick={() => toggleUi({ expandThinking: !showThinking })}
+              >
+                <Brain className={showThinking ? 'size-3.5 text-primary' : 'size-3.5'} />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                title={t('ui.showTools')}
+                onClick={() => toggleUi({ expandTools: !showTools })}
+              >
+                <Wrench className={showTools ? 'size-3.5 text-primary' : 'size-3.5'} />
+              </Button>
               <Button
                 variant="ghost"
                 size="icon"

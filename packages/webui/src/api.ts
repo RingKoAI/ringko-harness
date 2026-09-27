@@ -33,6 +33,9 @@ export interface Info {
   auth: { required: boolean };
   access: Access;
   accessMode: AccessMode;
+  thinking: string | null;
+  expandThinking: boolean;
+  expandTools: boolean;
   model: string | null;
   modelId: string | null;
   providers: ProviderInfo[];
@@ -90,6 +93,13 @@ export interface ServerMessage {
   reasoning?: string;
 }
 
+export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+
+export interface TodoItem {
+  content: string
+  status: TodoStatus
+}
+
 export interface Approval {
   id: string;
   toolName: string;
@@ -107,6 +117,7 @@ export interface ChatHandlers {
   onAssistant(message: { content: string; reasoning: string | null; toolCalls: ToolCall[]; turn: number }): void;
   onTool(message: { name: string; content: string; error: boolean; turn: number }): void;
   onApproval(approval: Approval): void;
+  onTodo?(items: TodoItem[]): void;
   onDone(result: { sessionId: string; content: string; turns: number }): void;
   onError(message: string): void;
   onUnauthorized?(): void;
@@ -400,6 +411,42 @@ export async function uploadFile(file: File): Promise<UploadedFile> {
   return data.files[0];
 }
 
+export async function setThinking(level: string): Promise<Info> {
+  const response = await fetch(`${BASE}/api/thinking`, {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ level }),
+  });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok) throw new Error(`Set thinking failed (${response.status}).`);
+  return (await response.json()) as Info;
+}
+
+export async function setUi(patch: { expandThinking?: boolean; expandTools?: boolean }): Promise<Info> {
+  const response = await fetch(`${BASE}/api/ui`, {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(patch),
+  });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok) throw new Error(`Set UI failed (${response.status}).`);
+  return (await response.json()) as Info;
+}
+
+export async function compact(sessionId: string, instructions?: string): Promise<{ compacted: boolean; summary: string | null; tokens: number }> {
+  const response = await fetch(`${BASE}/api/compact`, {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ sessionId, ...(instructions ? { instructions } : {}) }),
+  });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Compaction failed (${response.status}).`);
+  }
+  return (await response.json()) as { compacted: boolean; summary: string | null; tokens: number };
+}
+
 export async function setModel(model: string): Promise<Info> {
   const response = await fetch(`${BASE}/api/model`, {
     method: "POST",
@@ -502,6 +549,9 @@ export function streamChat(
         break;
       case "approval":
         handlers.onApproval(payload as Approval);
+        break;
+      case "todo":
+        handlers.onTodo?.(((payload as { items?: TodoItem[] }).items ?? []) as TodoItem[]);
         break;
       case "done":
         handlers.onDone(payload as Parameters<ChatHandlers["onDone"]>[0]);
