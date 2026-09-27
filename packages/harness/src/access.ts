@@ -91,7 +91,7 @@ export function gate(request: GateRequest = { kind: "safe" }): GateDecision {
       asked: false,
       mode: ACCESS.id,
       approvalRequired: false,
-      riskLevel,
+      riskLevel: riskLevel as "none" | "low",
       reason: request.description ?? "No risky action detected.",
     };
   }
@@ -101,7 +101,7 @@ export function gate(request: GateRequest = { kind: "safe" }): GateDecision {
     asked: true,
     mode: ACCESS.id,
     approvalRequired: true,
-    riskLevel,
+    riskLevel: riskLevel as "medium" | "high",
     reason: request.description ?? (
       request.kind === "external_file"
         ? "External file edits require explicit approval."

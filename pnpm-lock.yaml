@@ -39,6 +39,12 @@ importers:
         specifier: workspace:*
         version: link:../harness
 
+  packages/tools:
+    dependencies:
+      '@ringko-ai/harness':
+        specifier: workspace:*
+        version: link:../harness
+
   packages/tui:
     dependencies:
       '@ringko-ai/harness':
