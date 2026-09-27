@@ -1,5 +1,6 @@
 import { createRingKo, access, type ApprovalHandler, type ModelClient } from "@ringko-ai/sdk";
 import { registerWorkspaceTools } from "@ringko-ai/tools";
+import { createProviderClient, type ProviderName } from "@ringko-ai/providers";
 
 export const VERSION = "0.1.0";
 
@@ -21,7 +22,8 @@ Commands:
   help               Show this help
 
 Options:
-  --provider <name>  Model provider for "run" (available: echo)
+  --provider <name>  Model provider for "run": echo | openai | anthropic (default: echo)
+  --model <id>       Model id for openai/anthropic (e.g. gpt-4o-mini)
   --workspace <dir>  Workspace root for file tools (default: current directory)
 `;
 
@@ -37,10 +39,6 @@ export function createEchoProvider(): ModelClient {
   };
 }
 
-const PROVIDERS: Record<string, () => ModelClient> = {
-  echo: createEchoProvider,
-};
-
 /** Non-interactive default: deny every approval request (fail closed). */
 function denyApprovals(io: CliIo): ApprovalHandler {
   return async (request) => {
@@ -53,6 +51,7 @@ interface ParsedArgs {
   command: string | undefined;
   positionals: string[];
   provider?: string;
+  model?: string;
   workspace?: string;
 }
 
@@ -60,20 +59,36 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   const [command, ...rest] = argv;
   const positionals: string[] = [];
   let provider: string | undefined;
+  let model: string | undefined;
   let workspace: string | undefined;
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
-    if (arg === "--provider" || arg === "--workspace") {
+    if (arg === "--provider" || arg === "--model" || arg === "--workspace") {
       const value = rest[i + 1];
       if (value === undefined) throw new TypeError(`Missing value for ${arg}.`);
       if (arg === "--provider") provider = value;
+      else if (arg === "--model") model = value;
       else workspace = value;
       i += 1;
     } else {
       positionals.push(arg);
     }
   }
-  return { command, positionals, provider, workspace };
+  return { command, positionals, provider, model, workspace };
+}
+
+/** Resolve the model client for a provider name, or return an error message. */
+function resolveModel(providerName: string, modelId: string | undefined): ModelClient | string {
+  if (providerName === "echo") {
+    return createEchoProvider();
+  }
+  if (providerName === "openai" || providerName === "anthropic") {
+    if (!modelId) {
+      return `--model is required for provider "${providerName}".`;
+    }
+    return createProviderClient({ provider: providerName as ProviderName, model: modelId });
+  }
+  return `Unknown provider "${providerName}".`;
 }
 
 function registerRingko(workspace: string, io: CliIo) {
@@ -88,14 +103,13 @@ async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
     io.err('run requires a prompt, e.g. `ringko run "hello"`.');
     return 1;
   }
-  const providerName = parsed.provider ?? "echo";
-  const factory = PROVIDERS[providerName];
-  if (!factory) {
-    io.err(`Unknown provider "${providerName}".`);
+  const model = resolveModel(parsed.provider ?? "echo", parsed.model);
+  if (typeof model === "string") {
+    io.err(model);
     return 1;
   }
   const workspace = parsed.workspace ?? process.cwd();
-  const ringko = createRingKo({ model: factory(), requestApproval: denyApprovals(io) });
+  const ringko = createRingKo({ model, requestApproval: denyApprovals(io) });
   registerWorkspaceTools(ringko.tools, { workspace });
 
   const result = await ringko.run(prompt);

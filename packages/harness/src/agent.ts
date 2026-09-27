@@ -5,6 +5,8 @@ export interface ChatMessage {
   content: string;
   toolCallId?: string;
   name?: string;
+  /** Tool calls the model requested in this assistant turn (arguments included). */
+  toolCalls?: readonly ModelToolCall[];
 }
 
 export interface ModelToolCall {
@@ -110,7 +112,11 @@ export class Agent {
         throw new TypeError("Model client returned an invalid turn.");
       }
 
-      const assistant: ChatMessage = { role: "assistant", content: response.content };
+      const assistant: ChatMessage = {
+        role: "assistant",
+        content: response.content,
+        toolCalls: response.toolCalls,
+      };
       messages.push(assistant);
       this.onEvent?.({ type: "model", turn, message: assistant });
 

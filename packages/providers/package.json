@@ -1,0 +1,19 @@
+{
+  "name": "@ringko-ai/providers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test src"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.65",
+    "@ai-sdk/openai": "^4.0.78",
+    "@ringko-ai/harness": "workspace:*",
+    "ai": "^7.0.118"
+  }
+}

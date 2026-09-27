@@ -13,8 +13,8 @@
     "dev:tui": "pnpm --filter @ringko-ai/tui start",
     "dev:webui": "pnpm --filter @ringko-ai/webui dev",
     "dev:app": "pnpm --filter @ringko-ai/app start",
-    "test": "pnpm --filter @ringko-ai/harness test && pnpm --filter @ringko-ai/tools test && pnpm --filter @ringko-ai/sdk test && pnpm --filter @ringko-ai/tui test",
-    "typecheck": "bunx tsc -p packages/harness/tsconfig.json && bunx tsc -p packages/tools/tsconfig.json && bunx tsc -p packages/sdk/tsconfig.json && bunx tsc -p packages/tui/tsconfig.json"
+    "test": "pnpm --filter @ringko-ai/harness test && pnpm --filter @ringko-ai/tools test && pnpm --filter @ringko-ai/sdk test && pnpm --filter @ringko-ai/providers test && pnpm --filter @ringko-ai/tui test",
+    "typecheck": "bunx tsc -p packages/harness/tsconfig.json && bunx tsc -p packages/tools/tsconfig.json && bunx tsc -p packages/sdk/tsconfig.json && bunx tsc -p packages/providers/tsconfig.json && bunx tsc -p packages/tui/tsconfig.json"
   },
   "devDependencies": {
     "bun-types": "^1.2.19"
