@@ -21,21 +21,16 @@ Model providers are adapted from the [Vercel AI SDK](https://ai-sdk.dev).
 `ModelClient`; the harness still owns the tool loop and the approval gate (tools
 are declared without `execute`, so the SDK returns tool calls and stops).
 
-```ts
-import { createProviderClient } from "@ringko-ai/providers";
-import { createRingKo } from "@ringko-ai/sdk";
+Providers are introduced **through configuration** and loaded at run time, so
+they are never compiled into the `ringko` binary:
 
-const ringko = createRingKo({
-  model: createProviderClient({ provider: "openai", model: "gpt-4o-mini" }),
-});
+```json
+{ "provider": { "name": "openai", "model": "gpt-4o-mini" } }
 ```
 
-API keys come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`). The
-CLI exposes this directly:
-
-```sh
-ringko run "list the files" --provider openai --model gpt-4o-mini
-```
+See [docs/PROVIDERS.md](docs/PROVIDERS.md) for custom OpenAI-compatible
+endpoints and for reading a VS Code providers file. Never commit real API keys
+or endpoint URLs — the examples use placeholders only.
 
 ## Development
 

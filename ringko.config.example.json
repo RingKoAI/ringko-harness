@@ -1,0 +1,10 @@
+{
+  "workspace": ".",
+  "provider": {
+    "name": "echo"
+  },
+  "capabilities": {
+    "network": false,
+    "shell": false
+  }
+}

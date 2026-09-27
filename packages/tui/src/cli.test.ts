@@ -34,7 +34,7 @@ describe("ringko cli", () => {
     expect(out).toContain("list_dir");
   });
 
-  it("runs the offline echo provider", async () => {
+  it("runs the offline echo provider when none is configured", async () => {
     const { io, out } = collect();
     expect(await runCli(["run", "hello", "world"], io)).toBe(0);
     expect(out).toEqual(["echo: hello world"]);
@@ -46,13 +46,21 @@ describe("ringko cli", () => {
     expect(err.join("\n")).toContain("requires a prompt");
   });
 
-  it("rejects unknown commands and providers", async () => {
-    const unknownCommand = collect();
-    expect(await runCli(["bogus"], unknownCommand.io)).toBe(1);
-    expect(unknownCommand.err.join("\n")).toContain("Unknown command");
+  it("rejects an unknown command", async () => {
+    const { io, err } = collect();
+    expect(await runCli(["bogus"], io)).toBe(1);
+    expect(err.join("\n")).toContain("Unknown command");
+  });
 
-    const unknownProvider = collect();
-    expect(await runCli(["run", "x", "--provider", "nope"], unknownProvider.io)).toBe(1);
-    expect(unknownProvider.err.join("\n")).toContain('Unknown provider "nope"');
+  it("reports an unknown provider from the configured module", async () => {
+    const { io, err } = collect();
+    expect(await runCli(["run", "x", "--provider", "nope", "--model", "m"], io)).toBe(1);
+    expect(err.join("\n")).toContain('Unknown provider "nope"');
+  });
+
+  it("fails when an explicit config file is missing", async () => {
+    const { io, err } = collect();
+    expect(await runCli(["run", "x", "--config", "definitely-missing.json"], io)).toBe(2);
+    expect(err.join("\n")).toContain("Cannot read config");
   });
 });

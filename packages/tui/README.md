@@ -15,9 +15,14 @@ ringko tools                # registered tool names
 ringko run "list the files"  # run the agent (offline `echo` provider by default)
 ```
 
-`run` accepts `--provider <name>` and `--workspace <dir>`. Without an
-interactive approval prompt the CLI denies risky operations, so it fails closed;
-workspace reads and directory listings do not require approval.
+`run` reads `ringko.config.json` (or `--config <path>`); `--provider`,
+`--model`, and `--workspace` override it. Providers are introduced through
+configuration and imported at run time — they are **not** compiled into the
+binary (only the offline `echo` provider is). See
+[docs/PROVIDERS.md](../../docs/PROVIDERS.md).
+
+Without an interactive approval prompt the CLI denies risky operations, so it
+fails closed; workspace reads and directory listings do not require approval.
 
 ## Build
 

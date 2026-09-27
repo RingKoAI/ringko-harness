@@ -1,6 +1,7 @@
-import { createRingKo, access, type ApprovalHandler, type ModelClient } from "@ringko-ai/sdk";
-import { registerWorkspaceTools } from "@ringko-ai/tools";
-import { createProviderClient, type ProviderName } from "@ringko-ai/providers";
+import { createRingKo, access, type ApprovalHandler, type RingKo } from "@ringko-ai/sdk";
+import { registerNetworkTools, registerShellTools, registerWorkspaceTools } from "@ringko-ai/tools";
+import { loadConfig, type RingkoConfig } from "./config.ts";
+import { loadProviderModel } from "./provider.ts";
 
 export const VERSION = "0.1.0";
 
@@ -15,29 +16,21 @@ Usage:
   ringko <command> [options]
 
 Commands:
-  run <prompt>       Run the agent against a model provider
+  run <prompt>       Run the agent
   tools              List the registered tools
   info               Show the access mode
   version            Print the version
   help               Show this help
 
 Options:
-  --provider <name>  Model provider for "run": echo | openai | anthropic (default: echo)
-  --model <id>       Model id for openai/anthropic (e.g. gpt-4o-mini)
+  --config <path>    Config file (default: ringko.config.json)
+  --provider <name>  Override the configured provider (default: echo)
+  --model <id>       Override the configured model id
   --workspace <dir>  Workspace root for file tools (default: current directory)
-`;
 
-/**
- * A deterministic, offline model provider. It echoes the last message so the
- * binary and the tool pipeline can be exercised without network access; real
- * provider adapters replace it.
- */
-export function createEchoProvider(): ModelClient {
-  return async (request) => {
-    const last = request.messages.at(-1)?.content ?? "";
-    return { content: `echo: ${last}`, toolCalls: [] };
-  };
-}
+Providers are introduced through configuration; the config names a provider
+module that is imported at run time. See "provider" in ringko.config.json.
+`;
 
 /** Non-interactive default: deny every approval request (fail closed). */
 function denyApprovals(io: CliIo): ApprovalHandler {
@@ -50,6 +43,7 @@ function denyApprovals(io: CliIo): ApprovalHandler {
 interface ParsedArgs {
   command: string | undefined;
   positionals: string[];
+  config?: string;
   provider?: string;
   model?: string;
   workspace?: string;
@@ -58,15 +52,17 @@ interface ParsedArgs {
 function parseArgs(argv: readonly string[]): ParsedArgs {
   const [command, ...rest] = argv;
   const positionals: string[] = [];
+  let config: string | undefined;
   let provider: string | undefined;
   let model: string | undefined;
   let workspace: string | undefined;
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
-    if (arg === "--provider" || arg === "--model" || arg === "--workspace") {
+    if (arg === "--config" || arg === "--provider" || arg === "--model" || arg === "--workspace") {
       const value = rest[i + 1];
       if (value === undefined) throw new TypeError(`Missing value for ${arg}.`);
-      if (arg === "--provider") provider = value;
+      if (arg === "--config") config = value;
+      else if (arg === "--provider") provider = value;
       else if (arg === "--model") model = value;
       else workspace = value;
       i += 1;
@@ -74,27 +70,22 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       positionals.push(arg);
     }
   }
-  return { command, positionals, provider, model, workspace };
+  return { command, positionals, config, provider, model, workspace };
 }
 
-/** Resolve the model client for a provider name, or return an error message. */
-function resolveModel(providerName: string, modelId: string | undefined): ModelClient | string {
-  if (providerName === "echo") {
-    return createEchoProvider();
+function readConfig(parsed: ParsedArgs, io: CliIo): RingkoConfig | undefined {
+  try {
+    return loadConfig(parsed.config);
+  } catch (error) {
+    io.err(error instanceof Error ? error.message : "Invalid config.");
+    return undefined;
   }
-  if (providerName === "openai" || providerName === "anthropic") {
-    if (!modelId) {
-      return `--model is required for provider "${providerName}".`;
-    }
-    return createProviderClient({ provider: providerName as ProviderName, model: modelId });
-  }
-  return `Unknown provider "${providerName}".`;
 }
 
-function registerRingko(workspace: string, io: CliIo) {
-  const ringko = createRingKo({ model: createEchoProvider(), requestApproval: denyApprovals(io) });
+function registerTools(ringko: RingKo, config: RingkoConfig, workspace: string): void {
   registerWorkspaceTools(ringko.tools, { workspace });
-  return ringko;
+  if (config.capabilities?.network) registerNetworkTools(ringko.tools);
+  if (config.capabilities?.shell) registerShellTools(ringko.tools, { cwd: workspace });
 }
 
 async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
@@ -103,14 +94,24 @@ async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
     io.err('run requires a prompt, e.g. `ringko run "hello"`.');
     return 1;
   }
-  const model = resolveModel(parsed.provider ?? "echo", parsed.model);
+
+  const config = readConfig(parsed, io);
+  if (!config) return 2;
+
+  const provider = {
+    ...config.provider,
+    ...(parsed.provider ? { name: parsed.provider } : {}),
+    ...(parsed.model ? { model: parsed.model } : {}),
+  };
+  const model = await loadProviderModel(provider);
   if (typeof model === "string") {
     io.err(model);
     return 1;
   }
-  const workspace = parsed.workspace ?? process.cwd();
+
+  const workspace = parsed.workspace ?? config.workspace ?? process.cwd();
   const ringko = createRingKo({ model, requestApproval: denyApprovals(io) });
-  registerWorkspaceTools(ringko.tools, { workspace });
+  registerTools(ringko, config, workspace);
 
   const result = await ringko.run(prompt);
   io.out(result.content);
@@ -146,7 +147,11 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       return 0;
     }
     case "tools": {
-      const ringko = registerRingko(parsed.workspace ?? process.cwd(), io);
+      const config = readConfig(parsed, io);
+      if (!config) return 2;
+      const workspace = parsed.workspace ?? config.workspace ?? process.cwd();
+      const ringko = createRingKo({ model: async () => ({ content: "", toolCalls: [] }) });
+      registerTools(ringko, config, workspace);
       for (const tool of ringko.tools.list()) io.out(tool.name);
       return 0;
     }
