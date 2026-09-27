@@ -3,6 +3,7 @@ import {
   ApprovalHandlerUnavailableError,
   ToolApprovalRejectedError,
   ToolRegistry,
+  defineTool,
   executeTool,
   type ToolDefinition,
 } from "./tools.ts";
@@ -148,6 +149,45 @@ describe("tool approval boundary", () => {
 
     await expect(promise).rejects.toThrow("Expected a string value.");
     expect(requested).toBe(false);
+  });
+});
+
+describe("tool registration", () => {
+  it("rejects definitions that cannot be mediated", () => {
+    expect(() => defineTool({ ...makeTool("safe", () => "x"), name: "bad name" })).toThrow("Invalid tool name");
+    expect(() => defineTool({ ...makeTool("safe", () => "x"), description: "   " })).toThrow(
+      "must have a description",
+    );
+    expect(() => defineTool({ ...makeTool("safe", () => "x"), inputSchema: { type: "string" } })).toThrow(
+      "must declare an object input schema",
+    );
+  });
+
+  it("freezes a defined tool against later mutation", () => {
+    const tool = defineTool(makeTool("safe", ({ value }) => value));
+    expect(Object.isFrozen(tool)).toBe(true);
+    expect(Object.isFrozen(tool.inputSchema)).toBe(true);
+  });
+
+  it("registers a bundle atomically, adding none when one is invalid", () => {
+    const registry = new ToolRegistry();
+    expect(() => registry.registerAll([makeTool("safe", () => "a"), makeTool("safe", () => "b")])).toThrow(
+      "already registered",
+    );
+    expect(registry.size()).toBe(0);
+    expect(registry.has("sample_tool")).toBe(false);
+  });
+
+  it("exposes metadata and registration order without executors", () => {
+    const registry = new ToolRegistry();
+    registry.register(makeTool("safe", () => "a"));
+
+    expect(registry.size()).toBe(1);
+    expect(registry.names()).toEqual(["sample_tool"]);
+    expect(registry.has("sample_tool")).toBe(true);
+    expect(registry.get("sample_tool")).toMatchObject({ name: "sample_tool", description: "A test tool." });
+    expect(registry.get("missing")).toBeUndefined();
+    expect(registry.get("sample_tool")).not.toHaveProperty("execute");
   });
 });
 

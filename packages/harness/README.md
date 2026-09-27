@@ -60,6 +60,21 @@ registry.register({
 const result = await registry.call("read_workspace_file", input, requestApproval);
 ```
 
+Wrap definitions with `defineTool` to validate and freeze them where they are
+written, so a malformed tool fails at author time instead of at first call:
+
+```ts
+import { defineTool } from "@ringko-ai/harness";
+
+const readTool = defineTool({ /* the same fields as above */ });
+```
+
+`registry.register` runs the same validation at the boundary, and
+`registry.registerAll([...])` registers a bundle atomically: if any definition is
+invalid or collides, none are added. The registry only ever exposes metadata
+(`list`, `get`, `has`, `names`, `size`); executors stay behind `call`, so model
+output can never reach an implementation that was not registered.
+
 The registry's `list()` metadata and `call()` dispatcher are intended integration
 points for a future MCP adapter. The adapter must preserve the same approval gate
 and must not expose tool executors directly.

@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "@ringko-ai/harness";
+import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
 
 export interface FetchUrlInput {
   url: string;
@@ -49,7 +49,7 @@ function parseFetchInput(value: unknown): FetchUrlInput {
 /** Perform an outbound HTTP(S) request; classified as medium risk (approval). */
 export function createFetchUrlTool(options: FetchUrlOptions = {}): ToolDefinition<FetchUrlInput, FetchUrlOutput> {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
-  return {
+  return defineTool({
     name: "fetch_url",
     description: "Perform an outbound HTTP(S) request. Requires approval.",
     inputSchema: {
@@ -71,5 +71,5 @@ export function createFetchUrlTool(options: FetchUrlOptions = {}): ToolDefinitio
         body: text.length > maxBytes ? text.slice(0, maxBytes) : text,
       };
     },
-  };
+  });
 }

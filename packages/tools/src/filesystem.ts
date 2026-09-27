@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { ToolDefinition } from "@ringko-ai/harness";
+import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
 import type { Workspace } from "./workspace.ts";
 
 export interface ReadFileInput {
@@ -86,7 +86,7 @@ const PATH_SCHEMA = {
 
 /** Read a UTF-8 text file; external targets are classified as high risk. */
 export function createReadFileTool(workspace: Workspace): ToolDefinition<ReadFileInput, ReadFileOutput> {
-  return {
+  return defineTool({
     name: "read_file",
     description: "Read a UTF-8 text file. Targets outside the workspace require approval.",
     inputSchema: PATH_SCHEMA,
@@ -102,12 +102,12 @@ export function createReadFileTool(workspace: Workspace): ToolDefinition<ReadFil
       const content = await readFile(target.absolute, "utf8");
       return { path: target.insideWorkspace ? target.relative : target.absolute, content };
     },
-  };
+  });
 }
 
 /** Write a UTF-8 text file; overwrites and external targets require approval. */
 export function createWriteFileTool(workspace: Workspace): ToolDefinition<WriteFileInput, WriteFileOutput> {
-  return {
+  return defineTool({
     name: "write_file",
     description:
       "Write a UTF-8 text file. Overwriting an existing file, or writing outside the workspace, requires approval.",
@@ -139,12 +139,12 @@ export function createWriteFileTool(workspace: Workspace): ToolDefinition<WriteF
       await writeFile(target.absolute, content, "utf8");
       return { path: target.insideWorkspace ? target.relative : target.absolute, bytes: Buffer.byteLength(content, "utf8") };
     },
-  };
+  });
 }
 
 /** List a directory; external targets are classified as high risk. */
 export function createListDirTool(workspace: Workspace): ToolDefinition<ListDirInput, ListDirOutput> {
-  return {
+  return defineTool({
     name: "list_dir",
     description: "List a directory. Targets outside the workspace require approval.",
     inputSchema: {
@@ -170,5 +170,5 @@ export function createListDirTool(workspace: Workspace): ToolDefinition<ListDirI
         .sort((a, b) => a.name.localeCompare(b.name));
       return { path: target.insideWorkspace ? target.relative : target.absolute, entries };
     },
-  };
+  });
 }

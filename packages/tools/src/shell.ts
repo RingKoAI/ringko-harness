@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "@ringko-ai/harness";
+import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
 
 export interface RunShellInput {
   command: string;
@@ -44,7 +44,7 @@ export function createRunShellTool(options: RunShellOptions): ToolDefinition<Run
   if (typeof options?.cwd !== "string" || options.cwd.trim().length === 0) {
     throw new TypeError("run_shell requires a non-empty cwd.");
   }
-  return {
+  return defineTool({
     name: "run_shell",
     description: "Run an external command. Requires approval.",
     inputSchema: {
@@ -74,5 +74,5 @@ export function createRunShellTool(options: RunShellOptions): ToolDefinition<Run
       const exitCode = await proc.exited;
       return { command, args, exitCode, stdout, stderr };
     },
-  };
+  });
 }

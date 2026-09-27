@@ -5,9 +5,12 @@ export {
   ToolApprovalRejectedError,
   ToolRegistry,
   UnknownToolError,
+  defineTool,
   executeTool,
+  validateToolDefinition,
 } from "./tools.ts";
 export type {
+  AnyToolDefinition,
   ApprovalHandler,
   ToolApprovalRequest,
   ToolDefinition,
