@@ -12,7 +12,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ModelClient } from "@ringko-ai/sdk";
-import type { ProviderConfig } from "./config.ts";
+import type { ProviderConfig } from "@ringko-ai/config";
 
 export const DEFAULT_PROVIDER_MODULE = "@ringko-ai/providers";
 

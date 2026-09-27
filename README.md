@@ -14,6 +14,20 @@ Code extension, desktop app).
 Every tool invocation passes through the harness approval gate; hosts supply the
 approval handler, and risky operations fail closed when none is configured.
 
+## User-level resources
+
+Configuration, skills, and MCP servers live outside the project, under two roots
+(ringko-specific entries win on name collisions):
+
+| Resource | Locations |
+| --- | --- |
+| Config | `~/.ringko/config` |
+| Skills | `~/.ringko/skills`, `~/.agents/skills` (and the `skill` alias) |
+| MCP servers | `~/.ringko/.mcp.json`, `~/.agents/.mcp.json` |
+
+`RINGKO_HOME` / `AGENTS_HOME` override the home directories. Inspect them with
+`ringko config show`, `ringko skills`, and `ringko mcp`.
+
 ## Providers
 
 Model providers are adapted from the [Vercel AI SDK](https://ai-sdk.dev).

@@ -31,6 +31,8 @@ importers:
         specifier: ^1.100.0
         version: 1.138.0
 
+  packages/config: {}
+
   packages/harness: {}
 
   packages/providers:
@@ -65,6 +67,9 @@ importers:
 
   packages/tui:
     dependencies:
+      '@ringko-ai/config':
+        specifier: workspace:*
+        version: link:../config
       '@ringko-ai/providers':
         specifier: workspace:*
         version: link:../providers

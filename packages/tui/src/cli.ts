@@ -1,15 +1,17 @@
 import { createRingKo, access, type ApprovalHandler, type RingKo } from "@ringko-ai/sdk";
 import { registerNetworkTools, registerShellTools, registerWorkspaceTools } from "@ringko-ai/tools";
 import {
-  defaultConfigPath,
+  configPath,
+  discoverSkills,
   getConfigValue,
   loadConfig,
+  loadMcpServers,
   parseConfigValue,
   saveConfig,
   setConfigValue,
   unsetConfigValue,
   type RingkoConfig,
-} from "./config.ts";
+} from "@ringko-ai/config";
 import { loadProviderModel } from "./provider.ts";
 
 export const VERSION = "0.1.0";
@@ -27,6 +29,8 @@ Usage:
 Commands:
   run <prompt>         Run the agent
   tools                List the registered tools
+  skills               List installed skills (~/.ringko/skills, ~/.agents/skills)
+  mcp                  List configured MCP servers (~/.ringko/.mcp.json)
   info                 Show the access mode
   config show          Print the config path and contents
   config path          Print the config path
@@ -131,9 +135,32 @@ async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   return 0;
 }
 
+function skillsCommand(io: CliIo): number {
+  for (const skill of discoverSkills()) {
+    const description = skill.description ? `\t${skill.description}` : "";
+    io.out(`${skill.name}\t${skill.source}\t${skill.dir}${description}`);
+  }
+  return 0;
+}
+
+function mcpCommand(io: CliIo): number {
+  let servers;
+  try {
+    servers = loadMcpServers();
+  } catch (error) {
+    io.err(error instanceof Error ? error.message : "Invalid MCP configuration.");
+    return 2;
+  }
+  for (const server of servers) {
+    const kind = server.config.url ? "http" : "stdio";
+    io.out(`${server.name}\t${server.source}\t${kind}`);
+  }
+  return 0;
+}
+
 function configCommand(parsed: ParsedArgs, io: CliIo): number {
   const [sub, key, value] = parsed.positionals;
-  const path = parsed.config ? parsed.config : defaultConfigPath();
+  const path = parsed.config ? parsed.config : configPath();
   const config = readConfig(parsed, io);
   if (!config) return 2;
 
@@ -217,6 +244,10 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       for (const tool of ringko.tools.list()) io.out(tool.name);
       return 0;
     }
+    case "skills":
+      return skillsCommand(io);
+    case "mcp":
+      return mcpCommand(io);
     case "config":
       return configCommand(parsed, io);
     case "run":

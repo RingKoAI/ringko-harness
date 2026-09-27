@@ -1,13 +1,10 @@
-// Runtime configuration for the ringko CLI.
+// The RingKo config file at `~/.ringko/config` (JSON).
 //
-// Providers are not compiled into the binary: the config names a provider
-// module that is imported at run time (see provider.ts). Configuration lives in
-// the user's home directory, `~/.ringko/config`, so keys never sit in a project
-// tree. `RINGKO_HOME` overrides the home directory (used by tests); `--config`
-// overrides the file.
+// Providers and capabilities are declared here and resolved at run time; keys
+// stay out of project trees, and the file is written 0600 on POSIX.
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname } from "node:path";
+import { configPath } from "./paths.ts";
 
 export interface ProviderConfig {
   /** Module to import at run time. Defaults to "@ringko-ai/providers". */
@@ -41,41 +38,16 @@ export interface RingkoConfig {
   };
 }
 
-export const CONFIG_DIR_NAME = ".ringko";
-export const CONFIG_FILE_NAME = "config";
-
-/** The RingKo home directory (`RINGKO_HOME` or the OS home). */
-export function ringkoHome(): string {
-  return process.env.RINGKO_HOME || homedir();
-}
-
-export function configDir(home: string = ringkoHome()): string {
-  return join(home, CONFIG_DIR_NAME);
-}
-
-/** The default config file: `~/.ringko/config`. */
-export function defaultConfigPath(home: string = ringkoHome()): string {
-  return join(configDir(home), CONFIG_FILE_NAME);
-}
-
 export interface LoadConfigOptions {
   /** Explicit config file; a missing one is an error. */
   path?: string;
-  /** Home directory override (tests); defaults to `RINGKO_HOME`/OS home. */
-  home?: string;
-  /** Base directory for a relative `path`. */
-  cwd?: string;
+  /** Environment (for `RINGKO_HOME`); defaults to `process.env`. */
+  env?: NodeJS.ProcessEnv;
 }
 
-/**
- * Load the config. A missing default file yields `{}`; a missing explicit file
- * is an error. The result is validated well enough to fail closed on bad input.
- */
+/** Load the config. A missing default file yields `{}`; a missing explicit file errors. */
 export function loadConfig(options: LoadConfigOptions = {}): RingkoConfig {
-  const target = options.path
-    ? resolve(options.cwd ?? process.cwd(), options.path)
-    : defaultConfigPath(options.home);
-
+  const target = options.path ?? configPath(options.env);
   let text: string;
   try {
     text = readFileSync(target, "utf8");
@@ -97,10 +69,9 @@ export function loadConfig(options: LoadConfigOptions = {}): RingkoConfig {
 }
 
 /** Write the config to `~/.ringko/config` (0600 on POSIX). Returns the path. */
-export function saveConfig(config: RingkoConfig, home: string = ringkoHome()): string {
-  const dir = configDir(home);
-  mkdirSync(dir, { recursive: true });
-  const target = defaultConfigPath(home);
+export function saveConfig(config: RingkoConfig, env: NodeJS.ProcessEnv = process.env): string {
+  const target = configPath(env);
+  mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`);
   try {
     chmodSync(target, 0o600);
@@ -163,3 +134,6 @@ export function parseConfigValue(raw: string): unknown {
     return raw;
   }
 }
+
+/** Re-exported for callers that need the resolved path. */
+export { configPath };

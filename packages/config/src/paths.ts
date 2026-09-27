@@ -1,0 +1,55 @@
+// User-level resource locations.
+//
+// RingKo reads user configuration, skills, and MCP servers from two roots:
+//   ~/.ringko/                ringko-specific (takes precedence)
+//   ~/.agents/                shared agent resources
+//
+// `RINGKO_HOME` and `AGENTS_HOME` override the home directories (used by tests
+// and portable installs).
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+export const RINGKO_DIR_NAME = ".ringko";
+export const AGENTS_DIR_NAME = ".agents";
+
+export const CONFIG_FILE_NAME = "config";
+export const MCP_FILE_NAME = ".mcp.json";
+
+/** Supported skills directory names, in precedence order. */
+export const SKILLS_DIR_NAMES = ["skills", "skill"] as const;
+
+function homeOf(env: NodeJS.ProcessEnv, key: string): string {
+  const override = env[key];
+  return override && override.trim().length > 0 ? override : homedir();
+}
+
+/** `~/.ringko` (or `$RINGKO_HOME/.ringko`). */
+export function ringkoRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return join(homeOf(env, "RINGKO_HOME"), RINGKO_DIR_NAME);
+}
+
+/** `~/.agents` (or `$AGENTS_HOME/.agents`). */
+export function agentsRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return join(homeOf(env, "AGENTS_HOME"), AGENTS_DIR_NAME);
+}
+
+/** Config file: `~/.ringko/config`. */
+export function configPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(ringkoRoot(env), CONFIG_FILE_NAME);
+}
+
+/** MCP files, precedence order (ringko first). */
+export function mcpPaths(env: NodeJS.ProcessEnv = process.env): string[] {
+  return [join(ringkoRoot(env), MCP_FILE_NAME), join(agentsRoot(env), MCP_FILE_NAME)];
+}
+
+/** Skills directories, precedence order (ringko first). */
+export function skillsDirs(env: NodeJS.ProcessEnv = process.env): string[] {
+  const dirs: string[] = [];
+  for (const root of [ringkoRoot(env), agentsRoot(env)]) {
+    for (const name of SKILLS_DIR_NAMES) {
+      dirs.push(join(root, name));
+    }
+  }
+  return dirs;
+}
