@@ -1,0 +1,16 @@
+{
+  "name": "@ringko-ai/tui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ringko": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun src/cli.ts",
+    "build": "bun build src/cli.ts --compile --outfile ../../dist/ringko"
+  },
+  "dependencies": {
+    "@ringko-ai/harness": "workspace:*"
+  }
+}

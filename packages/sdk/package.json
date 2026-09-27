@@ -1,0 +1,15 @@
+{
+  "name": "@ringko-ai/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test src"
+  },
+  "dependencies": {
+    "@ringko-ai/harness": "workspace:*"
+  }
+}

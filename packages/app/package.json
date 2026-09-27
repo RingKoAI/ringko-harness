@@ -1,0 +1,16 @@
+{
+  "name": "@ringko-ai/app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "bun src/main.ts"
+  },
+  "dependencies": {
+    "@ringko-ai/sdk": "workspace:*",
+    "@ringko-ai/webui": "workspace:*"
+  }
+}

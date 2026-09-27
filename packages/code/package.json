@@ -1,0 +1,32 @@
+{
+  "name": "@ringko-ai/code",
+  "displayName": "RingKo Code",
+  "description": "RingKo agent harness inside VS Code.",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "publisher": "ringko-ai",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "ringko.status",
+        "title": "RingKo: Show Status"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "bun build src/extension.ts --target node --external vscode --outfile dist/extension.js",
+    "watch": "bun build src/extension.ts --target node --external vscode --outfile dist/extension.js --watch"
+  },
+  "dependencies": {
+    "@ringko-ai/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.100.0"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "ringko",
+    },
+    "packages/harness": {
+      "name": "@ringko-ai/harness",
+      "version": "0.1.0",
+    },
+    "packages/tui": {
+      "name": "@ringko-ai/tui",
+      "version": "0.1.0",
+      "bin": {
+        "ringko": "./src/cli.ts",
+      },
+      "dependencies": {
+        "@ringko-ai/harness": "workspace:*",
+      },
+    },
+    "packages/webui": {
+      "name": "@ringko-ai/webui",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ringko-ai/harness": "workspace:*",
+      },
+    },
+  },
+  "packages": {
+    "@ringko-ai/harness": ["@ringko-ai/harness@workspace:packages/harness"],
+
+    "@ringko-ai/tui": ["@ringko-ai/tui@workspace:packages/tui"],
+
+    "@ringko-ai/webui": ["@ringko-ai/webui@workspace:packages/webui"],
+  }
+}

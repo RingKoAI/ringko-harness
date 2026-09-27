@@ -1,0 +1,18 @@
+{
+  "name": "@ringko-ai/root",
+  "private": true,
+  "packageManager": "pnpm@10.33.4",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "pnpm --filter @ringko-ai/code build && pnpm --filter @ringko-ai/tui build && pnpm --filter @ringko-ai/webui build",
+    "dev:tui": "pnpm --filter @ringko-ai/tui start",
+    "dev:webui": "pnpm --filter @ringko-ai/webui dev",
+    "dev:app": "pnpm --filter @ringko-ai/app start",
+    "test": "pnpm --filter @ringko-ai/harness test && pnpm --filter @ringko-ai/sdk test"
+  },
+  "devDependencies": {
+    "bun-types": "^1.2.19"
+  }
+}
