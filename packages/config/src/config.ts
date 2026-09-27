@@ -1,10 +1,11 @@
-// The RingKo config file at `~/.ringko/config` (JSON).
+// RingKo configuration: provider definitions (`provider.json`) plus local
+// settings (`settings.local.json`), both under `~/.ringko`.
 //
-// Providers and capabilities are declared here and resolved at run time; keys
-// stay out of project trees, and the file is written 0600 on POSIX.
+// Providers and capabilities are resolved at run time; keys stay out of project
+// trees, and the files are written 0600 on POSIX.
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { configPath } from "./paths.ts";
+import { providerPath, settingsPath } from "./paths.ts";
 
 export interface ProviderConfig {
   /** Module to import at run time. Defaults to "@ringko-ai/providers". */
@@ -36,64 +37,84 @@ export interface RingkoConfig {
     network?: boolean;
     shell?: boolean;
   };
+  mode?: string;
 }
 
 export interface LoadConfigOptions {
-  /** Explicit config file; a missing one is an error. */
+  /** Explicit config file to read instead of the layered files. */
   path?: string;
   /** Environment (for `RINGKO_HOME`); defaults to `process.env`. */
   env?: NodeJS.ProcessEnv;
 }
 
-/** Load the config. A missing default file yields `{}`; a missing explicit file errors. */
-export function loadConfig(options: LoadConfigOptions = {}): RingkoConfig {
-  const target = options.path ?? configPath(options.env);
-  let text: string;
-  try {
-    text = readFileSync(target, "utf8");
-  } catch {
-    if (options.path) throw new Error(`Cannot read config "${target}".`);
-    return {};
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    throw new Error(`Config "${target}" is not valid JSON: ${(error as Error).message}`);
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`Config "${target}" must be a JSON object.`);
-  }
-  return parsed as RingkoConfig;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Write the config to `~/.ringko/config` (0600 on POSIX). Returns the path. */
-export function saveConfig(config: RingkoConfig, env: NodeJS.ProcessEnv = process.env): string {
-  const target = configPath(env);
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`);
+function readObject(path: string, required: boolean): Record<string, unknown> {
+  let text: string;
   try {
-    chmodSync(target, 0o600);
+    text = readFileSync(path, "utf8");
+  } catch {
+    if (required) throw new Error(`Cannot read config "${path}".`);
+    return {};
+  }
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return {}; // empty placeholder file
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (error) {
+    throw new Error(`Config "${path}" is not valid JSON: ${(error as Error).message}`);
+  }
+  if (!isRecord(parsed)) throw new Error(`Config "${path}" must be a JSON object.`);
+  return parsed;
+}
+
+const PROVIDER_KEYS = ["module", "name", "model", "file", "entry", "vendor", "baseURL", "url", "apiKey"];
+
+function extractProvider(file: Record<string, unknown>): ProviderConfig | undefined {
+  if (isRecord(file.provider)) return file.provider as ProviderConfig;
+  if (PROVIDER_KEYS.some((key) => key in file)) return file as ProviderConfig;
+  return undefined;
+}
+
+/** Load the merged configuration from `settings.local.json` and `provider.json`. */
+export function loadConfig(options: LoadConfigOptions = {}): RingkoConfig {
+  if (options.path) return readObject(options.path, true) as RingkoConfig;
+
+  const settings = readObject(settingsPath(options.env), false) as RingkoConfig;
+  const providerFile = readObject(providerPath(options.env), false);
+  const provider = extractProvider(providerFile);
+  return provider ? { ...settings, provider } : settings;
+}
+
+function writeJson(path: string, value: Record<string, unknown>): string {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+  try {
+    chmodSync(path, 0o600);
   } catch {
     // best effort (e.g. Windows)
   }
-  return target;
+  return path;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+/** Persist the config, splitting providers into `provider.json` and the rest into `settings.local.json`. */
+export function saveConfig(config: RingkoConfig, env: NodeJS.ProcessEnv = process.env): string[] {
+  const { provider, ...settings } = config;
+  return [
+    writeJson(settingsPath(env), settings as Record<string, unknown>),
+    writeJson(providerPath(env), provider ? { provider } : {}),
+  ];
 }
 
 /** Read a dotted key, e.g. "provider.model". */
 export function getConfigValue(config: RingkoConfig, dotted: string): unknown {
   let node: unknown = config;
   for (const key of dotted.split(".")) {
-    const record = asRecord(node);
-    if (!record) return undefined;
-    node = record[key];
+    if (!isRecord(node)) return undefined;
+    node = node[key];
   }
   return node;
 }
@@ -105,7 +126,7 @@ export function setConfigValue(config: RingkoConfig, dotted: string, value: unkn
   let node = clone;
   for (let i = 0; i < keys.length - 1; i += 1) {
     const key = keys[i];
-    if (!asRecord(node[key])) node[key] = {};
+    if (!isRecord(node[key])) node[key] = {};
     node = node[key] as Record<string, unknown>;
   }
   node[keys[keys.length - 1]] = value;
@@ -118,8 +139,8 @@ export function unsetConfigValue(config: RingkoConfig, dotted: string): RingkoCo
   const clone = structuredClone(config) as Record<string, unknown>;
   let node = clone;
   for (let i = 0; i < keys.length - 1; i += 1) {
-    const child = asRecord(node[keys[i]]);
-    if (!child) return config;
+    const child = node[keys[i]];
+    if (!isRecord(child)) return config;
     node = child;
   }
   delete node[keys[keys.length - 1]];
@@ -135,5 +156,3 @@ export function parseConfigValue(raw: string): unknown {
   }
 }
 
-/** Re-exported for callers that need the resolved path. */
-export { configPath };

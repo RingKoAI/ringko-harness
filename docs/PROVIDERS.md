@@ -10,9 +10,10 @@ placeholders only.
 
 ## Config file
 
-Configuration lives in the user's home directory at `~/.ringko/config` (JSON),
-so keys never sit in a project tree. `--config <path>` overrides the file and
-`RINGKO_HOME` overrides the home directory.
+Configuration lives in the user's home directory under `~/.ringko`, split into
+`provider.json` (providers/models) and `settings.local.json` (workspace,
+capabilities), so keys never sit in a project tree. `--config <path>` overrides
+the files and `RINGKO_HOME` overrides the home directory.
 
 ```json
 {
@@ -27,7 +28,8 @@ so keys never sit in a project tree. `--config <path>` overrides the file and
 }
 ```
 
-Manage it with the CLI (writes to `~/.ringko/config`):
+Manage it with the CLI (provider keys go to `provider.json`, the rest to
+`settings.local.json`):
 
 ```sh
 ringko config path

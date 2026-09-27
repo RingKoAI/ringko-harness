@@ -18,8 +18,8 @@ ringko run "list the files"  # run the agent (offline `echo` provider by default
 ringko tui                   # interactive terminal UI (Ink; requires a TTY)
 ```
 
-`run` reads `~/.ringko/config` (or `--config <path>`); `--provider`,
-`--model`, and `--workspace` override it. Manage the config with
+`run` reads `~/.ringko/settings.local.json` and `~/.ringko/provider.json` (or
+`--config <path>`); `--provider`, `--model`, and `--workspace` override them. Manage the config with
 `ringko config show|path|get|set|unset`. Providers are introduced through
 configuration and imported at run time — they are **not** compiled into the
 binary (only the offline `echo` provider is). See

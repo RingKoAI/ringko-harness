@@ -2,15 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  configPath,
-  getConfigValue,
-  loadConfig,
-  parseConfigValue,
-  saveConfig,
-  setConfigValue,
-  unsetConfigValue,
-} from "./config.ts";
+import { getConfigValue, loadConfig, parseConfigValue, saveConfig, setConfigValue, unsetConfigValue } from "./config.ts";
+import { providerPath, settingsPath } from "./paths.ts";
 
 let home: string;
 let env: NodeJS.ProcessEnv;
@@ -25,34 +18,57 @@ afterEach(() => {
 });
 
 describe("loadConfig", () => {
-  it("returns an empty config when missing", () => {
+  it("returns an empty config when the files are missing", () => {
     expect(loadConfig({ env })).toEqual({});
+  });
+
+  it("tolerates empty placeholder files", () => {
+    mkdirSync(join(home, ".ringko"), { recursive: true });
+    writeFileSync(settingsPath(env), "");
+    writeFileSync(providerPath(env), "");
+    expect(loadConfig({ env })).toEqual({});
+  });
+
+  it("merges settings and the provider file", () => {
+    mkdirSync(join(home, ".ringko"), { recursive: true });
+    writeFileSync(settingsPath(env), JSON.stringify({ workspace: ".", capabilities: { shell: true } }));
+    writeFileSync(providerPath(env), JSON.stringify({ provider: { name: "openai", model: "gpt-4o-mini" } }));
+
+    const config = loadConfig({ env });
+    expect(config.workspace).toBe(".");
+    expect(config.capabilities?.shell).toBe(true);
+    expect(config.provider?.model).toBe("gpt-4o-mini");
+  });
+
+  it("accepts a bare provider object", () => {
+    mkdirSync(join(home, ".ringko"), { recursive: true });
+    writeFileSync(providerPath(env), JSON.stringify({ file: "providers.json", entry: "x", model: "m" }));
+    expect(loadConfig({ env }).provider?.entry).toBe("x");
+  });
+
+  it("rejects invalid JSON and non-object roots", () => {
+    mkdirSync(join(home, ".ringko"), { recursive: true });
+    writeFileSync(settingsPath(env), "{");
+    expect(() => loadConfig({ env })).toThrow("not valid JSON");
+
+    writeFileSync(settingsPath(env), "[]");
+    expect(() => loadConfig({ env })).toThrow("must be a JSON object");
   });
 
   it("throws when an explicit file is missing", () => {
     expect(() => loadConfig({ path: join(home, "missing.json") })).toThrow("Cannot read config");
   });
-
-  it("parses a saved config", () => {
-    saveConfig({ provider: { name: "openai", model: "gpt-4o-mini" } }, env);
-    expect(loadConfig({ env }).provider?.name).toBe("openai");
-  });
-
-  it("rejects invalid JSON and non-object roots", () => {
-    mkdirSync(join(home, ".ringko"), { recursive: true });
-    writeFileSync(configPath(env), "{");
-    expect(() => loadConfig({ env })).toThrow("not valid JSON");
-
-    writeFileSync(configPath(env), "[]");
-    expect(() => loadConfig({ env })).toThrow("must be a JSON object");
-  });
 });
 
 describe("saveConfig", () => {
-  it("writes to ~/.ringko/config", () => {
-    const path = saveConfig({ workspace: "." }, env);
-    expect(path).toBe(configPath(env));
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ workspace: "." });
+  it("splits providers and settings into their files", () => {
+    const written = saveConfig({ workspace: ".", provider: { name: "openai", model: "gpt-4o-mini" } }, env);
+
+    expect(written).toEqual([settingsPath(env), providerPath(env)]);
+    expect(JSON.parse(readFileSync(settingsPath(env), "utf8"))).toEqual({ workspace: "." });
+    expect(JSON.parse(readFileSync(providerPath(env), "utf8"))).toEqual({
+      provider: { name: "openai", model: "gpt-4o-mini" },
+    });
   });
 });
 

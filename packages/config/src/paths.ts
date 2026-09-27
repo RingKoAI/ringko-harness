@@ -12,6 +12,11 @@ import { join } from "node:path";
 export const RINGKO_DIR_NAME = ".ringko";
 export const AGENTS_DIR_NAME = ".agents";
 
+/** Provider/model definitions. */
+export const PROVIDER_FILE_NAME = "provider.json";
+/** Local, non-shared settings (workspace, capabilities, mode, ...). */
+export const SETTINGS_FILE_NAME = "settings.local.json";
+/** Legacy single-file config (still read when present). */
 export const CONFIG_FILE_NAME = "config";
 export const MCP_FILE_NAME = ".mcp.json";
 
@@ -33,7 +38,17 @@ export function agentsRoot(env: NodeJS.ProcessEnv = process.env): string {
   return join(homeOf(env, "AGENTS_HOME"), AGENTS_DIR_NAME);
 }
 
-/** Config file: `~/.ringko/config`. */
+/** Provider file: `~/.ringko/provider.json`. */
+export function providerPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(ringkoRoot(env), PROVIDER_FILE_NAME);
+}
+
+/** Settings file: `~/.ringko/settings.local.json`. */
+export function settingsPath(env: NodeJS.ProcessEnv = process.env): string {
+  return join(ringkoRoot(env), SETTINGS_FILE_NAME);
+}
+
+/** Legacy config file: `~/.ringko/config`. */
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(ringkoRoot(env), CONFIG_FILE_NAME);
 }

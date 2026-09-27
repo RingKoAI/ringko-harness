@@ -84,10 +84,13 @@ describe("ringko cli", () => {
 });
 
 describe("ringko config", () => {
-  it("prints the home config path", async () => {
+  it("prints the config file paths", async () => {
     const { io, out } = collect();
     expect(await runCli(["config", "path"], io)).toBe(0);
-    expect(out[0]).toBe(join(home, ".ringko", "config"));
+    expect(out).toEqual([
+      join(home, ".ringko", "settings.local.json"),
+      join(home, ".ringko", "provider.json"),
+    ]);
   });
 
   it("sets, gets, and unsets keys", async () => {

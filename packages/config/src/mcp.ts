@@ -45,6 +45,7 @@ export function loadMcpServers(options: LoadMcpServersOptions = {}): McpServer[]
     } catch {
       return; // missing file: skip
     }
+    if (text.trim().length === 0) return; // empty placeholder file: skip
 
     let parsed: unknown;
     try {

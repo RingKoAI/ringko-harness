@@ -1,14 +1,15 @@
 import { createRingKo, access, type ApprovalHandler, type RingKo } from "@ringko-ai/sdk";
 import { registerNetworkTools, registerShellTools, registerWorkspaceTools } from "@ringko-ai/tools";
 import {
-  configPath,
   discoverSkills,
   getConfigValue,
   loadConfig,
   loadMcpServers,
   parseConfigValue,
+  providerPath,
   saveConfig,
   setConfigValue,
+  settingsPath,
   unsetConfigValue,
   type RingkoConfig,
 } from "@ringko-ai/config";
@@ -218,18 +219,19 @@ function mcpCommand(io: CliIo): number {
 
 function configCommand(parsed: ParsedArgs, io: CliIo): number {
   const [sub, key, value] = parsed.positionals;
-  const path = parsed.config ? parsed.config : configPath();
   const config = readConfig(parsed, io);
   if (!config) return 2;
 
   switch (sub) {
     case undefined:
     case "show":
-      io.out(path);
+      io.out(settingsPath());
+      io.out(providerPath());
       io.out(`${JSON.stringify(config, null, 2)}`);
       return 0;
     case "path":
-      io.out(path);
+      io.out(settingsPath());
+      io.out(providerPath());
       return 0;
     case "get": {
       if (!key) {
@@ -246,8 +248,7 @@ function configCommand(parsed: ParsedArgs, io: CliIo): number {
         return 2;
       }
       const updated = setConfigValue(config, key, parseConfigValue(value));
-      const saved = saveConfig(updated);
-      io.out(saved);
+      for (const path of saveConfig(updated)) io.out(path);
       return 0;
     }
     case "unset": {
@@ -255,8 +256,7 @@ function configCommand(parsed: ParsedArgs, io: CliIo): number {
         io.err("config unset requires a key.");
         return 2;
       }
-      const saved = saveConfig(unsetConfigValue(config, key));
-      io.out(saved);
+      for (const path of saveConfig(unsetConfigValue(config, key))) io.out(path);
       return 0;
     }
     default:

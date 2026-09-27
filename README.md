@@ -23,7 +23,7 @@ Configuration, skills, and MCP servers live outside the project, under two roots
 
 | Resource | Locations |
 | --- | --- |
-| Config | `~/.ringko/config` |
+| Config | `~/.ringko/provider.json`, `~/.ringko/settings.local.json` |
 | Skills | `~/.ringko/skills`, `~/.agents/skills` (and the `skill` alias) |
 | MCP servers | `~/.ringko/.mcp.json`, `~/.agents/.mcp.json` |
 | Sessions | `~/.ringko/sessions/**` (event-sourced JSONL) |
