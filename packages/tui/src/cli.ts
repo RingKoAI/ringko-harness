@@ -1,6 +1,15 @@
 import { createRingKo, access, type ApprovalHandler, type RingKo } from "@ringko-ai/sdk";
 import { registerNetworkTools, registerShellTools, registerWorkspaceTools } from "@ringko-ai/tools";
-import { loadConfig, type RingkoConfig } from "./config.ts";
+import {
+  defaultConfigPath,
+  getConfigValue,
+  loadConfig,
+  parseConfigValue,
+  saveConfig,
+  setConfigValue,
+  unsetConfigValue,
+  type RingkoConfig,
+} from "./config.ts";
 import { loadProviderModel } from "./provider.ts";
 
 export const VERSION = "0.1.0";
@@ -16,20 +25,24 @@ Usage:
   ringko <command> [options]
 
 Commands:
-  run <prompt>       Run the agent
-  tools              List the registered tools
-  info               Show the access mode
-  version            Print the version
-  help               Show this help
+  run <prompt>         Run the agent
+  tools                List the registered tools
+  info                 Show the access mode
+  config show          Print the config path and contents
+  config path          Print the config path
+  config set <k> <v>   Set a dotted config key (e.g. provider.model)
+  config unset <k>     Remove a dotted config key
+  version              Print the version
+  help                 Show this help
 
 Options:
-  --config <path>    Config file (default: ringko.config.json)
-  --provider <name>  Override the configured provider (default: echo)
-  --model <id>       Override the configured model id
-  --workspace <dir>  Workspace root for file tools (default: current directory)
+  --config <path>      Config file (default: ~/.ringko/config)
+  --provider <name>    Override the configured provider (default: echo)
+  --model <id>         Override the configured model id
+  --workspace <dir>    Workspace root for file tools (default: current directory)
 
 Providers are introduced through configuration; the config names a provider
-module that is imported at run time. See "provider" in ringko.config.json.
+module that is imported at run time. See docs/PROVIDERS.md.
 `;
 
 /** Non-interactive default: deny every approval request (fail closed). */
@@ -75,7 +88,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
 
 function readConfig(parsed: ParsedArgs, io: CliIo): RingkoConfig | undefined {
   try {
-    return loadConfig(parsed.config);
+    return loadConfig({ path: parsed.config });
   } catch (error) {
     io.err(error instanceof Error ? error.message : "Invalid config.");
     return undefined;
@@ -118,6 +131,55 @@ async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   return 0;
 }
 
+function configCommand(parsed: ParsedArgs, io: CliIo): number {
+  const [sub, key, value] = parsed.positionals;
+  const path = parsed.config ? parsed.config : defaultConfigPath();
+  const config = readConfig(parsed, io);
+  if (!config) return 2;
+
+  switch (sub) {
+    case undefined:
+    case "show":
+      io.out(path);
+      io.out(`${JSON.stringify(config, null, 2)}`);
+      return 0;
+    case "path":
+      io.out(path);
+      return 0;
+    case "get": {
+      if (!key) {
+        io.err("config get requires a key.");
+        return 2;
+      }
+      const found = getConfigValue(config, key);
+      io.out(found === undefined ? "" : JSON.stringify(found));
+      return 0;
+    }
+    case "set": {
+      if (!key || value === undefined) {
+        io.err("config set requires a key and a value.");
+        return 2;
+      }
+      const updated = setConfigValue(config, key, parseConfigValue(value));
+      const saved = saveConfig(updated);
+      io.out(saved);
+      return 0;
+    }
+    case "unset": {
+      if (!key) {
+        io.err("config unset requires a key.");
+        return 2;
+      }
+      const saved = saveConfig(unsetConfigValue(config, key));
+      io.out(saved);
+      return 0;
+    }
+    default:
+      io.err(`Unknown config subcommand: ${sub}`);
+      return 2;
+  }
+}
+
 /** Run the CLI and resolve with a process exit code. */
 export async function runCli(argv: readonly string[], io: CliIo): Promise<number> {
   let parsed: ParsedArgs;
@@ -155,6 +217,8 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       for (const tool of ringko.tools.list()) io.out(tool.name);
       return 0;
     }
+    case "config":
+      return configCommand(parsed, io);
     case "run":
       return runCommand(parsed, io);
     default:

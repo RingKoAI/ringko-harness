@@ -1,4 +1,7 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { VERSION, runCli, type CliIo } from "./cli.ts";
 
 function collect(): { io: CliIo; out: string[]; err: string[] } {
@@ -6,6 +9,21 @@ function collect(): { io: CliIo; out: string[]; err: string[] } {
   const err: string[] = [];
   return { io: { out: (line) => out.push(line), err: (line) => err.push(line) }, out, err };
 }
+
+let home: string;
+let previousHome: string | undefined;
+
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), "ringko-cli-home-"));
+  previousHome = process.env.RINGKO_HOME;
+  process.env.RINGKO_HOME = home;
+});
+
+afterEach(() => {
+  if (previousHome === undefined) delete process.env.RINGKO_HOME;
+  else process.env.RINGKO_HOME = previousHome;
+  rmSync(home, { recursive: true, force: true });
+});
 
 describe("ringko cli", () => {
   it("prints the version", async () => {
@@ -62,5 +80,29 @@ describe("ringko cli", () => {
     const { io, err } = collect();
     expect(await runCli(["run", "x", "--config", "definitely-missing.json"], io)).toBe(2);
     expect(err.join("\n")).toContain("Cannot read config");
+  });
+});
+
+describe("ringko config", () => {
+  it("prints the home config path", async () => {
+    const { io, out } = collect();
+    expect(await runCli(["config", "path"], io)).toBe(0);
+    expect(out[0]).toBe(join(home, ".ringko", "config"));
+  });
+
+  it("sets, gets, and unsets keys", async () => {
+    const set = collect();
+    expect(await runCli(["config", "set", "provider.name", "echo"], set.io)).toBe(0);
+
+    const get = collect();
+    expect(await runCli(["config", "get", "provider.name"], get.io)).toBe(0);
+    expect(get.out[0]).toBe('"echo"');
+
+    const unset = collect();
+    expect(await runCli(["config", "unset", "provider.name"], unset.io)).toBe(0);
+
+    const after = collect();
+    expect(await runCli(["config", "get", "provider.name"], after.io)).toBe(0);
+    expect(after.out[0]).toBe("");
   });
 });

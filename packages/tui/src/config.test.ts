@@ -1,45 +1,80 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaultConfigPath, loadConfig } from "./config.ts";
+import {
+  configDir,
+  defaultConfigPath,
+  getConfigValue,
+  loadConfig,
+  parseConfigValue,
+  saveConfig,
+  setConfigValue,
+  unsetConfigValue,
+} from "./config.ts";
 
-let dir: string;
+let home: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "ringko-config-"));
+  home = mkdtempSync(join(tmpdir(), "ringko-home-"));
 });
 
 afterEach(() => {
-  rmSync(dir, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+describe("config paths", () => {
+  it("stores under ~/.ringko/config", () => {
+    expect(configDir("/home/user")).toBe(join("/home/user", ".ringko"));
+    expect(defaultConfigPath("/home/user")).toBe(join("/home/user", ".ringko", "config"));
+  });
 });
 
 describe("loadConfig", () => {
   it("returns an empty config when the default file is missing", () => {
-    expect(loadConfig(undefined, dir)).toEqual({});
+    expect(loadConfig({ home })).toEqual({});
   });
 
   it("throws when an explicit file is missing", () => {
-    expect(() => loadConfig("missing.json", dir)).toThrow("Cannot read config");
+    expect(() => loadConfig({ path: "missing.json", cwd: home })).toThrow("Cannot read config");
   });
 
-  it("parses a provider config", () => {
-    writeFileSync(
-      defaultConfigPath(dir),
-      JSON.stringify({ provider: { name: "openai", model: "gpt-4o-mini" }, capabilities: { shell: true } }),
-    );
-
-    const config = loadConfig(undefined, dir);
-
+  it("parses the default config file", () => {
+    saveConfig({ provider: { name: "openai", model: "gpt-4o-mini" } }, home);
+    const config = loadConfig({ home });
     expect(config.provider?.name).toBe("openai");
-    expect(config.capabilities?.shell).toBe(true);
   });
 
   it("rejects invalid JSON and non-object roots", () => {
-    writeFileSync(defaultConfigPath(dir), "{");
-    expect(() => loadConfig(undefined, dir)).toThrow("not valid JSON");
+    mkdirSync(configDir(home), { recursive: true });
+    writeFileSync(defaultConfigPath(home), "{");
+    expect(() => loadConfig({ home })).toThrow("not valid JSON");
 
-    writeFileSync(defaultConfigPath(dir), "[]");
-    expect(() => loadConfig(undefined, dir)).toThrow("must be a JSON object");
+    writeFileSync(defaultConfigPath(home), "[]");
+    expect(() => loadConfig({ home })).toThrow("must be a JSON object");
+  });
+});
+
+describe("saveConfig", () => {
+  it("creates the directory and writes JSON", () => {
+    const path = saveConfig({ workspace: "." }, home);
+    expect(path).toBe(defaultConfigPath(home));
+    expect(existsSync(configDir(home))).toBe(true);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ workspace: "." });
+  });
+});
+
+describe("dotted access", () => {
+  it("sets, gets, and unsets nested keys", () => {
+    const withValue = setConfigValue({}, "provider.apiKey", "test-key");
+    expect(getConfigValue(withValue, "provider.apiKey")).toBe("test-key");
+    expect(getConfigValue(withValue, "provider.model")).toBeUndefined();
+    expect(getConfigValue(unsetConfigValue(withValue, "provider.apiKey"), "provider.apiKey")).toBeUndefined();
+  });
+
+  it("parses JSON values and falls back to strings", () => {
+    expect(parseConfigValue("true")).toBe(true);
+    expect(parseConfigValue("42")).toBe(42);
+    expect(parseConfigValue("plain")).toBe("plain");
   });
 });

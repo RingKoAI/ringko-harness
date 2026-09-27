@@ -15,8 +15,9 @@ ringko tools                # registered tool names
 ringko run "list the files"  # run the agent (offline `echo` provider by default)
 ```
 
-`run` reads `ringko.config.json` (or `--config <path>`); `--provider`,
-`--model`, and `--workspace` override it. Providers are introduced through
+`run` reads `~/.ringko/config` (or `--config <path>`); `--provider`,
+`--model`, and `--workspace` override it. Manage the config with
+`ringko config show|path|get|set|unset`. Providers are introduced through
 configuration and imported at run time — they are **not** compiled into the
 binary (only the offline `echo` provider is). See
 [docs/PROVIDERS.md](../../docs/PROVIDERS.md).

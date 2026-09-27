@@ -10,7 +10,9 @@ placeholders only.
 
 ## Config file
 
-`ringko.config.json` in the working directory (or `--config <path>`):
+Configuration lives in the user's home directory at `~/.ringko/config` (JSON),
+so keys never sit in a project tree. `--config <path>` overrides the file and
+`RINGKO_HOME` overrides the home directory.
 
 ```json
 {
@@ -24,6 +26,18 @@ placeholders only.
   }
 }
 ```
+
+Manage it with the CLI (writes to `~/.ringko/config`):
+
+```sh
+ringko config path
+ringko config set provider.name openai
+ringko config set provider.model gpt-4o-mini
+ringko config get provider.model
+ringko config unset provider.model
+```
+
+`~/.ringko/config` is written with `0600` permissions on POSIX.
 
 ## Hosted providers (`@ringko-ai/providers`)
 
