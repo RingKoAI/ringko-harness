@@ -1,38 +1,112 @@
-// Slash-command parsing for the REPL (pure, unit-testable).
+// Slash-command registry and input parsing for the REPL (pure, unit-testable).
+import { discoverSkills, loadMcpServers } from "@ringko-ai/config";
 
-export type ParsedCommand =
+export type ParsedInput =
   | { kind: "prompt"; value: string }
-  | { kind: "exit" }
-  | { kind: "help" }
-  | { kind: "clear" }
+  | { kind: "command"; name: string; arg: string }
   | { kind: "unknown"; name: string };
 
-export const HELP_TEXT = [
-  "Commands:",
-  "  /help      show this help",
-  "  /clear     clear the transcript",
-  "  /exit      quit (also ctrl+c)",
-  "",
-  "Type a message to run the agent. Risky tool calls ask for approval (y/n).",
-].join("\n");
+export interface SlashContext {
+  /** Append a notice line to the transcript. */
+  print(text: string): void;
+  clear(): void;
+  exit(): void;
+  modelLabel: string;
+  workspace: string;
+  sessionId?: string;
+  toolNames(): string[];
+}
 
-export function parseCommand(input: string): ParsedCommand {
+export interface SlashCommand {
+  name: string;
+  aliases?: string[];
+  description: string;
+  run(ctx: SlashContext, arg: string): void;
+}
+
+export function buildCommands(): SlashCommand[] {
+  return [
+    { name: "help", aliases: ["?"], description: "show this help", run: (ctx) => ctx.print(helpText()) },
+    { name: "clear", description: "clear the transcript", run: (ctx) => ctx.clear() },
+    { name: "exit", aliases: ["quit", "q"], description: "quit the REPL", run: (ctx) => ctx.exit() },
+    { name: "model", description: "show the current model", run: (ctx) => ctx.print(ctx.modelLabel) },
+    { name: "workspace", description: "show the workspace root", run: (ctx) => ctx.print(ctx.workspace) },
+    {
+      name: "session",
+      description: "show the current session id",
+      run: (ctx) => ctx.print(ctx.sessionId ?? "(no session)"),
+    },
+    {
+      name: "tools",
+      description: "list registered tools",
+      run: (ctx) => ctx.print(ctx.toolNames().join(", ") || "(no tools)"),
+    },
+    {
+      name: "skills",
+      description: "list installed skills",
+      run: (ctx) => {
+        const skills = discoverSkills();
+        ctx.print(skills.length ? skills.map((skill) => `${skill.name} (${skill.source})`).join(", ") : "(no skills)");
+      },
+    },
+    {
+      name: "mcp",
+      description: "list configured MCP servers",
+      run: (ctx) => {
+        try {
+          const servers = loadMcpServers();
+          ctx.print(servers.length ? servers.map((server) => server.name).join(", ") : "(no MCP servers)");
+        } catch (error) {
+          ctx.print((error as Error).message);
+        }
+      },
+    },
+  ];
+}
+
+const COMMANDS = buildCommands();
+
+export function findCommand(name: string): SlashCommand | undefined {
+  const lower = name.toLowerCase();
+  return COMMANDS.find((command) => command.name === lower || command.aliases?.includes(lower));
+}
+
+export function listCommands(): readonly SlashCommand[] {
+  return COMMANDS;
+}
+
+/** Commands whose name/alias/description matches `query` (no leading slash). */
+export function filterCommands(query: string): SlashCommand[] {
+  const trimmed = query.trim().toLowerCase();
+  if (trimmed.length === 0) return [...COMMANDS];
+  const prefix: SlashCommand[] = [];
+  const contains: SlashCommand[] = [];
+  for (const command of COMMANDS) {
+    const names = [command.name, ...(command.aliases ?? [])];
+    if (names.some((name) => name.startsWith(trimmed))) prefix.push(command);
+    else if (command.description.toLowerCase().includes(trimmed)) contains.push(command);
+  }
+  return [...prefix, ...contains];
+}
+
+export function parseInput(input: string): ParsedInput {
   const trimmed = input.trim();
   if (!trimmed.startsWith("/")) return { kind: "prompt", value: input };
-  const name = trimmed.slice(1).split(/\s+/, 1)[0]?.toLowerCase() ?? "";
-  switch (name) {
-    case "":
-      return { kind: "prompt", value: input };
-    case "exit":
-    case "quit":
-    case "q":
-      return { kind: "exit" };
-    case "help":
-    case "?":
-      return { kind: "help" };
-    case "clear":
-      return { kind: "clear" };
-    default:
-      return { kind: "unknown", name };
+  const rest = trimmed.slice(1);
+  const space = rest.search(/\s/);
+  const name = (space === -1 ? rest : rest.slice(0, space)).toLowerCase();
+  const arg = space === -1 ? "" : rest.slice(space + 1).trim();
+  if (name.length === 0) return { kind: "prompt", value: input };
+  return findCommand(name) ? { kind: "command", name, arg } : { kind: "unknown", name };
+}
+
+export function helpText(): string {
+  const lines = ["Commands:"];
+  const width = Math.max(...COMMANDS.map((command) => command.name.length));
+  for (const command of COMMANDS) {
+    const names = [command.name, ...(command.aliases ?? [])].join(", ");
+    lines.push(`  /${names.padEnd(width + 4)} ${command.description}`);
   }
+  lines.push("", "Type a message to run the agent; risky tools ask for approval (y/n).");
+  return lines.join("\n");
 }

@@ -25,7 +25,9 @@ bordered input bar, and a status line.
 - Risky tool calls block on the approval dialog (`y`/`n`) — the harness stays the
   only execution boundary.
 - The conversation is recorded to `~/.ringko/sessions`.
-- Commands: `/help`, `/clear`, `/exit`.
+- Slash commands: type `/` to see hints (filtered as you type). Built-ins:
+  `/help`, `/clear`, `/exit`, `/model`, `/workspace`, `/session`, `/tools`,
+  `/skills`, `/mcp`.
 
 Launch it with `ringko tui` (the CLI resolves the provider and passes the model
 in), or `launchRepl({ model, modelLabel, config, workspace })` from a host.

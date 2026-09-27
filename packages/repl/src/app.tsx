@@ -10,7 +10,7 @@ import { Spinner } from "./components/Spinner.tsx";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { StatusBar } from "./components/StatusBar.tsx";
 import { ApprovalDialog } from "./components/ApprovalDialog.tsx";
-import { HELP_TEXT, parseCommand } from "./commands.ts";
+import { findCommand, parseInput, type SlashContext } from "./commands.ts";
 import { agentEventToItems, nextId, noticeItem, userItem, type ReplItem } from "./state.ts";
 
 export interface ReplProps {
@@ -60,22 +60,29 @@ export function Repl({ model, modelLabel, config, workspace }: ReplProps) {
     };
   }, [model, workspace, config]);
 
+  const slash: SlashContext = {
+    print: (text) => setItems((previous) => [...previous, noticeItem(text)]),
+    clear: () => setItems([]),
+    exit: () => exit(),
+    modelLabel,
+    workspace,
+    ...(sessionId ? { sessionId } : {}),
+    toolNames: () => ringkoRef.current?.tools.list().map((tool) => tool.name) ?? [],
+  };
+
   async function submit(input: string): Promise<void> {
-    const parsed = parseCommand(input);
-    if (parsed.kind === "exit") {
-      exit();
-      return;
-    }
-    if (parsed.kind === "clear") {
-      setItems([]);
-      return;
-    }
-    if (parsed.kind === "help") {
-      setItems((previous) => [...previous, noticeItem(HELP_TEXT)]);
-      return;
-    }
+    const parsed = parseInput(input);
     if (parsed.kind === "unknown") {
       setItems((previous) => [...previous, noticeItem(`Unknown command: /${parsed.name} (try /help)`)]);
+      return;
+    }
+    if (parsed.kind === "command") {
+      const command = findCommand(parsed.name);
+      if (!command) {
+        setItems((previous) => [...previous, noticeItem(`Unknown command: /${parsed.name} (try /help)`)]);
+        return;
+      }
+      command.run(slash, parsed.arg);
       return;
     }
 
