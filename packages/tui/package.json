@@ -21,6 +21,7 @@
   "dependencies": {
     "@ringko-ai/config": "workspace:*",
     "@ringko-ai/providers": "workspace:*",
+    "@ringko-ai/repl": "workspace:*",
     "@ringko-ai/sdk": "workspace:*",
     "@ringko-ai/session": "workspace:*",
     "@ringko-ai/tools": "workspace:*"

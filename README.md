@@ -10,6 +10,7 @@ Code extension, desktop app).
 - **`packages/sdk`** — stable public facade (`createRingKo`) for hosts.
 - **`packages/session`** — event-sourced session storage (`~/.ringko/sessions`).
 - **`packages/providers`** — AI SDK-backed model providers (OpenAI, Anthropic).
+- **`packages/repl`** — interactive Ink terminal UI (`ringko tui`).
 - **`packages/tui` / `webui` / `app` / `code`** — the user-facing surfaces.
 
 Every tool invocation passes through the harness approval gate; hosts supply the

@@ -15,6 +15,7 @@ ringko tools                # registered tool names
 ringko skills               # installed skills (~/.ringko/skills, ~/.agents/skills)
 ringko mcp                  # configured MCP servers (~/.ringko/.mcp.json)
 ringko run "list the files"  # run the agent (offline `echo` provider by default)
+ringko tui                   # interactive terminal UI (Ink; requires a TTY)
 ```
 
 `run` reads `~/.ringko/config` (or `--config <path>`); `--provider`,

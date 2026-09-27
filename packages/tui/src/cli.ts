@@ -29,6 +29,7 @@ Usage:
 
 Commands:
   run <prompt>         Run the agent
+  tui                  Interactive terminal UI
   tools                List the registered tools
   skills               List installed skills (~/.ringko/skills, ~/.agents/skills)
   mcp                  List configured MCP servers (~/.ringko/.mcp.json)
@@ -57,6 +58,15 @@ function denyApprovals(io: CliIo): ApprovalHandler {
     io.err(`approval required for "${request.toolName}" (${request.riskLevel}); denied (non-interactive)`);
     return false;
   };
+}
+
+interface ReplModule {
+  launchRepl(options: {
+    model: import("@ringko-ai/sdk").ModelClient;
+    modelLabel: string;
+    config: RingkoConfig;
+    workspace: string;
+  }): Promise<void>;
 }
 
 interface ParsedArgs {
@@ -141,6 +151,39 @@ async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   } finally {
     session.close();
   }
+}
+
+async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
+  if (!process.stdout.isTTY) {
+    io.err("ringko tui requires an interactive terminal.");
+    return 1;
+  }
+  const config = readConfig(parsed, io);
+  if (!config) return 2;
+  const provider = {
+    ...config.provider,
+    ...(parsed.provider ? { name: parsed.provider } : {}),
+    ...(parsed.model ? { model: parsed.model } : {}),
+  };
+  const model = await loadProviderModel(provider);
+  if (typeof model === "string") {
+    io.err(model);
+    return 1;
+  }
+  const workspace = parsed.workspace ?? config.workspace ?? process.cwd();
+  const modelLabel = provider.model ? `${provider.name ?? "echo"}/${provider.model}` : (provider.name ?? "echo");
+
+  // Non-literal specifier: loaded at run time and kept external to the binary.
+  const replSpecifier = "@ringko-ai/repl";
+  let repl: ReplModule;
+  try {
+    repl = (await import(replSpecifier)) as ReplModule;
+  } catch (error) {
+    io.err(`Cannot load @ringko-ai/repl: ${(error as Error).message}`);
+    return 1;
+  }
+  await repl.launchRepl({ model, modelLabel, config, workspace });
+  return 0;
 }
 
 function sessionCommand(io: CliIo): number {
@@ -265,6 +308,8 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       return mcpCommand(io);
     case "session":
       return sessionCommand(io);
+    case "tui":
+      return tuiCommand(parsed, io);
     case "config":
       return configCommand(parsed, io);
     case "run":
