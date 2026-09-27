@@ -1,100 +1,125 @@
 # Providers
 
-Providers are **introduced through configuration**, not compiled into the
-`ringko` binary. The binary only ships the offline `echo` provider; the config
-names a provider module that is imported at run time (and marked external at
-build time), so provider code and the AI SDK never end up inside the binary.
+Providers are introduced **through configuration** and built at run time, so
+provider code (and the AI SDK) is never compiled into the `ringko` binary. Only
+the offline `echo` provider ships in the binary.
 
-Never commit real API keys or endpoint URLs. The examples below use
-placeholders only.
+`provider.json` **defines** the provider by type plus its fields — it does not
+reference an external file.
 
-## Config file
+Credentials live in `~/.ringko/auth/auth.json` (mode `0600`), one entry per
+provider. There are two credential types: `oauth` (OAuth2 login) and `apikey`
+(a preset provider's API key). An `apiKey` may still be set inline in
+`provider.json`, but `auth.json` wins when both are present. Never commit either
+file.
 
-Configuration lives in the user's home directory under `~/.ringko`, split into
-`provider.json` (providers/models) and `settings.local.json` (workspace,
-capabilities), so keys never sit in a project tree. `--config <path>` overrides
-the files and `RINGKO_HOME` overrides the home directory.
-
-```json
+```jsonc
 {
-  "workspace": ".",
-  "provider": {
-    "name": "echo"
-  },
-  "capabilities": {
-    "network": false,
-    "shell": false
-  }
+  "openai":   { "type": "oauth",  "refresh": "…", "access": "…", "expires": 0, "accountId": "…" },
+  "gateway":  { "type": "apikey", "key": "…" }
 }
 ```
 
-Manage it with the CLI (provider keys go to `provider.json`, the rest to
-`settings.local.json`):
+## Files (under `~/.ringko`)
 
-```sh
-ringko config path
-ringko config set provider.name openai
-ringko config set provider.model gpt-4o-mini
-ringko config get provider.model
-ringko config unset provider.model
-```
+| File | Contents |
+| --- | --- |
+| `provider.json` | the provider definition (`{ "provider": { ... } }`) |
+| `settings.local.json` | workspace, capabilities |
+| `.mcp.json` | MCP servers |
+| `skills/`, `sessions/` | skills and session logs |
 
-`~/.ringko/config` is written with `0600` permissions on POSIX.
+`RINGKO_HOME` overrides the home directory; `--config <path>` overrides the file.
 
-## Hosted providers (`@ringko-ai/providers`)
+## Defining a provider
 
-`name` selects a provider kind handled by the configured module
-(`@ringko-ai/providers` by default): `openai`, `anthropic`, or
-`openai-compatible`.
+`type` selects the provider; the remaining fields complete it.
 
 ```json
 {
   "provider": {
-    "name": "openai",
-    "model": "gpt-4o-mini"
-  }
-}
-```
-
-Credentials come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`).
-
-## Custom OpenAI-compatible endpoint
-
-```json
-{
-  "provider": {
-    "name": "openai-compatible",
+    "type": "openai-compatible",
     "baseURL": "https://<your-gateway>/v1",
-    "apiKey": "<your-key>",
+    "apiKey": "<key>",
     "model": "<model-id>"
   }
 }
 ```
 
-## Reusing a VS Code providers file
+Supported types (aliases in parentheses):
 
-A VS Code-style providers file (an array of
-`{ name, vendor, apiKey, models: [{ id, url }] }` entries, e.g.
-`chatLanguageModels.json`) can be read directly; `entry` selects an entry and
-its `url` is turned into a base URL:
+| type | fields | credential |
+| --- | --- | --- |
+| `openai` | `model` | `OPENAI_API_KEY` |
+| `openai-oauth` (`oauth`, `chatgpt`) | `model` | ChatGPT OAuth (`~/.ringko/auth/auth.json`) |
+| `github-copilot` (`copilot`) | `model` | GitHub Copilot device login (`~/.ringko/auth/auth.json`) |
+| `anthropic` | `model` | `ANTHROPIC_API_KEY` |
+| `google` (`gemini`) | `model` | `GOOGLE_GENERATIVE_AI_API_KEY` |
+| `openai-compatible` (`customendpoint`, `compatible`) | `baseURL`, `model`, `apiKey?` | `apiKey` |
 
-```json
-{
-  "provider": {
-    "file": "/path/to/chatLanguageModels.json",
-    "entry": "<provider-name>",
-    "model": "<model-id>"
-  }
-}
-```
+`url` (a full `.../chat/completions` URL) is accepted and converted to `baseURL`.
 
-## CLI overrides
+## OAuth (ChatGPT)
+
+`openai-oauth` reuses the Codex backend with a token-injecting fetch, so no API
+key is needed. Tokens live in `~/.ringko/auth/auth.json` (mode `0600`) and are
+refreshed automatically before they expire.
 
 ```sh
-ringko run "list the files" --provider openai --model gpt-4o-mini
+ringko auth login openai            # browser loopback on localhost:1455 (PKCE)
+ringko auth login openai --device   # headless device-code flow
+ringko auth status                  # list stored credentials (never prints tokens)
+ringko auth set gateway <api-key>   # store an API key for a preset provider
+ringko auth logout openai
 ```
 
-`--provider`/`--model` override the config. The provider module
-(`provider.module`) defaults to `@ringko-ai/providers`; point it at another
-module (or a path) to use a different integration. If the module cannot be
-loaded, the CLI reports it and fails closed.
+In the REPL: `/login` opens a provider/method menu (OpenAI browser/headless, GitHub
+Copilot device). While signing in, a dialog shows the URL and device code — press
+`c` to copy it to the clipboard.
+
+`github-copilot` uses the GitHub device flow (`ringko auth login github-copilot`);
+its long-lived token is sent to `https://api.githubcopilot.com`.
+
+If OpenAI/`auth.openai.com` is blocked in your region, set `RINGKO_PROXY`
+(e.g. `http://127.0.0.1:7890`) before running; it is propagated to all requests.
+
+## Model catalog
+
+After `ringko auth login`, models are discovered live (`/models`) when the
+provider exposes them, and written to `provider.json`. For providers without a
+models endpoint (e.g. ChatGPT OAuth), the bundled catalog is used.
+
+The catalog is data, not code:
+
+| File | Role |
+| --- | --- |
+| `packages/config/models.json` | hand-curated overrides (win when non-empty) |
+| `packages/config/models.dev.json` | generated snapshot, refreshed daily by CI |
+
+```sh
+RINGKO_MODELS_URL=https://models.ringkoai.com/catalog.json \
+  pnpm --filter @ringko-ai/config refresh:models
+```
+
+`RINGKO_MODELS_URL` sets the source (defaults to models.dev); point it at our own
+mirror endpoint once it is live.
+
+## CLI
+
+```sh
+ringko config set provider.type openai-compatible
+ringko config set provider.baseURL https://<your-gateway>/v1
+ringko config set provider.apiKey <key>
+ringko config set provider.model <model-id>
+```
+
+## In the REPL
+
+```
+/connect base <baseURL> <apiKey> <model>   # openai-compatible endpoint
+/connect openai <model>
+/connect anthropic <model>
+```
+
+`/connect` rebuilds the model live and persists the provider to
+`~/.ringko/provider.json`.

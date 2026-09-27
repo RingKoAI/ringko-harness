@@ -7,6 +7,7 @@ import {
   generateText,
   jsonSchema,
   tool,
+  type JSONValue,
   type LanguageModel,
   type ModelMessage,
   type ToolCallPart,
@@ -19,6 +20,12 @@ export interface AiSdkModelOptions {
   system?: string;
   temperature?: number;
   maxOutputTokens?: number;
+  /** Provider name; used as the `providerOptions` key. */
+  name?: string;
+  /** Provider kind (e.g. "google"), for provider-specific options. */
+  provider?: string;
+  /** Reasoning/thinking depth: "off" | "low" | "high" | "max". */
+  thinking?: string;
 }
 
 interface TextPart {
@@ -94,24 +101,133 @@ export function toToolSet(metadata: readonly ToolMetadata[]): Record<string, Ret
   return set;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** Pull `code`/`param`/`type` out of a provider error body, if present. */
+function providerErrorFields(body: string): string[] {
+  const fields: string[] = [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return fields;
+  }
+  const outer = asRecord(parsed);
+  const error = asRecord(outer?.error) ?? outer;
+  if (!error) return fields;
+  for (const key of ["code", "param", "type"] as const) {
+    const value = error[key];
+    if (typeof value === "string" && value.length > 0) fields.push(`${key}=${value}`);
+  }
+  return fields;
+}
+
+/** Turn an AI SDK error into a message that includes the error code and HTTP details. */
+function describeModelError(error: unknown): Error {
+  const record = asRecord(error);
+  if (record) {
+    const parts: string[] = [];
+    if (typeof record.message === "string" && record.message.length > 0) parts.push(record.message);
+    if (typeof record.statusCode === "number") parts.push(`status=${record.statusCode}`);
+    if (typeof record.responseBody === "string") parts.push(...providerErrorFields(record.responseBody));
+    if (typeof record.url === "string") parts.push(`url=${record.url}`);
+    if (typeof record.responseBody === "string") parts.push(`body=${record.responseBody.slice(0, 500)}`);
+    if (parts.length > 0) return new Error(parts.join(" | "));
+  }
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function isInvalidParameter(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const record = error as { statusCode?: unknown; responseBody?: unknown; message?: unknown };
+  if (record.statusCode !== 400) return false;
+  const body = typeof record.responseBody === "string" ? record.responseBody : "";
+  const message = typeof record.message === "string" ? record.message : "";
+  return body.includes("invalid_parameter") || message.includes("invalid_parameter");
+}
+
+/** AI SDK expects the provider-options key to be the camelCased provider name. */
+function providerOptionsKey(name: string): string {
+  const parts = name.split(/[^A-Za-z0-9]+/).filter((part) => part.length > 0);
+  if (parts.length === 0) return name;
+  const [first, ...rest] = parts;
+  const head = first.charAt(0).toLowerCase() + first.slice(1);
+  return head + rest.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
+}
+
+type ProviderOptions = Record<string, Record<string, JSONValue>>;
+
+/** Map the thinking depth onto Google's `thinkingConfig`. */
+function googleThinking(level: string): Record<string, JSONValue> {
+  if (level === "off") return { thinkingBudget: 0, includeThoughts: true };
+  if (level === "max") return { thinkingLevel: "high", includeThoughts: true };
+  return { thinkingLevel: level, includeThoughts: true };
+}
+
+/** Map the thinking depth onto provider options (reasoning effort). */
+function reasoningOptions(options: AiSdkModelOptions): { providerOptions?: ProviderOptions } {
+  const level = options.thinking;
+  if (options.provider === "google") {
+    if (!level) return {};
+    return { providerOptions: { google: { thinkingConfig: googleThinking(level) } } };
+  }
+  if (!level || level === "off") return {};
+  const key = providerOptionsKey(options.name ?? "openaiCompatible");
+  return { providerOptions: { [key]: { reasoningEffort: level } } };
+}
+
 /** Adapt any AI SDK language model into a harness model client. */
 export function createAiSdkModelClient(model: LanguageModel, options: AiSdkModelOptions = {}): ModelClient {
   return async (request) => {
-    const result = await generateText({
-      model,
-      messages: toModelMessages(request.messages),
-      ...(request.tools.length > 0 ? { tools: toToolSet(request.tools) } : {}),
-      ...(options.system !== undefined ? { system: options.system } : {}),
-      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-      ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
-    });
+    let result;
+    try {
+      result = await generateText({
+        model,
+        messages: toModelMessages(request.messages),
+        ...(request.tools.length > 0 ? { tools: toToolSet(request.tools) } : {}),
+        ...(options.system !== undefined ? { system: options.system } : {}),
+        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+        ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
+        ...(request.signal ? { abortSignal: request.signal } : {}),
+        ...reasoningOptions(options),
+      });
+    } catch (error) {
+      // Some compatible gateways reject an explicit max output token value;
+      // retry once without it so the request still succeeds.
+      if (options.maxOutputTokens !== undefined && isInvalidParameter(error)) {
+        try {
+          result = await generateText({
+            model,
+            messages: toModelMessages(request.messages),
+            ...(request.tools.length > 0 ? { tools: toToolSet(request.tools) } : {}),
+            ...(options.system !== undefined ? { system: options.system } : {}),
+            ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+            ...(request.signal ? { abortSignal: request.signal } : {}),
+            ...reasoningOptions(options),
+          });
+        } catch (retryError) {
+          throw describeModelError(retryError);
+        }
+      } else {
+        throw describeModelError(error);
+      }
+    }
 
     const toolCalls: ModelToolCall[] = result.toolCalls.map((call) => ({
       id: call.toolCallId,
       name: call.toolName,
       arguments: call.input,
     }));
-    const turn: ModelTurn = { content: result.text, toolCalls };
+    const reasoning = result.reasoningText ?? "";
+    const turn: ModelTurn = {
+      content: result.text,
+      toolCalls,
+      ...(reasoning.length > 0 ? { reasoning } : {}),
+    };
     return turn;
   };
 }

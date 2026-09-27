@@ -24,12 +24,6 @@ const args = [
   resolve(packageRoot, "src/cli.ts"),
   "--compile",
   `--outfile=${outfile}`,
-  // Providers are introduced at run time (see src/provider.ts); keep them out of
-  // the binary so the core stays provider-neutral and lean.
-  "--external",
-  "@ringko-ai/providers",
-  "--external",
-  "@ringko-ai/repl",
 ];
 if (target) {
   args.push(`--target=${target}`);

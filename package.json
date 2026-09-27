@@ -10,13 +10,16 @@
     "build": "pnpm --filter @ringko-ai/code build && pnpm --filter @ringko-ai/tui build && pnpm --filter @ringko-ai/webui build",
     "build:bin": "pnpm --filter @ringko-ai/tui build",
     "build:all-bin": "pnpm --filter @ringko-ai/tui run build:all",
+    "dev": "concurrently -k -n api,webui -c blue,magenta \"pnpm --filter @ringko-ai/app run serve -- --dev\" \"pnpm --filter @ringko-ai/webui dev\"",
     "dev:tui": "pnpm --filter @ringko-ai/tui start",
     "dev:webui": "pnpm --filter @ringko-ai/webui dev",
     "dev:app": "pnpm --filter @ringko-ai/app start",
-    "test": "pnpm --filter @ringko-ai/config test && pnpm --filter @ringko-ai/session test && pnpm --filter @ringko-ai/harness test && pnpm --filter @ringko-ai/tools test && pnpm --filter @ringko-ai/sdk test && pnpm --filter @ringko-ai/providers test && pnpm --filter @ringko-ai/repl test && pnpm --filter @ringko-ai/tui test",
-    "typecheck": "bunx tsc -p packages/config/tsconfig.json && bunx tsc -p packages/session/tsconfig.json && bunx tsc -p packages/harness/tsconfig.json && bunx tsc -p packages/tools/tsconfig.json && bunx tsc -p packages/sdk/tsconfig.json && bunx tsc -p packages/providers/tsconfig.json && bunx tsc -p packages/repl/tsconfig.json && bunx tsc -p packages/tui/tsconfig.json"
+    "test": "pnpm --filter @ringko-ai/config test && pnpm --filter @ringko-ai/auth test && pnpm --filter @ringko-ai/session test && pnpm --filter @ringko-ai/harness test && pnpm --filter @ringko-ai/tools test && pnpm --filter @ringko-ai/sdk test && pnpm --filter @ringko-ai/providers test && pnpm --filter @ringko-ai/repl test && pnpm --filter @ringko-ai/tui test",
+    "typecheck": "bunx tsc -p packages/config/tsconfig.json && bunx tsc -p packages/auth/tsconfig.json && bunx tsc -p packages/session/tsconfig.json && bunx tsc -p packages/harness/tsconfig.json && bunx tsc -p packages/tools/tsconfig.json && bunx tsc -p packages/sdk/tsconfig.json && bunx tsc -p packages/providers/tsconfig.json && bunx tsc -p packages/repl/tsconfig.json && bunx tsc -p packages/tui/tsconfig.json"
   },
   "devDependencies": {
-    "bun-types": "^1.2.19"
+    "bun-types": "^1.2.19",
+    "concurrently": "^10.0.5",
+    "react-devtools-core": "^8.0.0"
   }
 }

@@ -8,6 +8,7 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "test": "bun test src"
+    "test": "bun test tests",
+    "refresh:models": "bun script/refresh-models.ts"
   }
 }

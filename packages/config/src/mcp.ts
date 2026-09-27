@@ -3,7 +3,8 @@
 // Files are read from `~/.ringko/.mcp.json` and `~/.agents/.mcp.json` (ringko
 // first). Each is an object with an `mcpServers` map. A missing file is skipped;
 // a present but invalid file is a hard error so misconfiguration is not hidden.
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { agentsRoot, mcpPaths, ringkoRoot } from "./paths.ts";
 
 export interface McpServerConfig {
@@ -74,4 +75,43 @@ export function loadMcpServers(options: LoadMcpServersOptions = {}): McpServer[]
   });
 
   return [...found.values()];
+}
+
+export type McpServerMap = Record<string, McpServerConfig>;
+
+/** Read the ringko-level `.mcp.json` server map alone (no merge). */
+export function loadMcpServerMap(env: NodeJS.ProcessEnv = process.env): McpServerMap {
+  let text: string;
+  try {
+    text = readFileSync(mcpPaths(env)[0], "utf8");
+  } catch {
+    return {};
+  }
+  if (text.trim().length === 0) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`MCP file is not valid JSON: ${(error as Error).message}`);
+  }
+  if (!isRecord(parsed) || parsed.mcpServers === undefined) return {};
+  if (!isRecord(parsed.mcpServers)) throw new Error('MCP field "mcpServers" must be an object.');
+  const out: McpServerMap = {};
+  for (const [name, config] of Object.entries(parsed.mcpServers)) {
+    if (isRecord(config)) out[name] = config as McpServerConfig;
+  }
+  return out;
+}
+
+/** Overwrite the ringko-level `.mcp.json` server map (written 0600). */
+export function saveMcpServers(servers: McpServerMap, env: NodeJS.ProcessEnv = process.env): string {
+  const path = mcpPaths(env)[0];
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`);
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // best effort (e.g. Windows)
+  }
+  return path;
 }

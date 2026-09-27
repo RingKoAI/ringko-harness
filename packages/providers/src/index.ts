@@ -1,18 +1,30 @@
 import { anthropic } from "@ai-sdk/anthropic";
+import { createGoogleGenerativeAI, google } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModel } from "ai";
 import type { ModelClient } from "@ringko-ai/harness";
 import { createAiSdkModelClient, type AiSdkModelOptions } from "./ai-sdk.ts";
+import { resolveGitHubCopilotModel } from "./github-copilot/index.ts";
+import { resolveOpenAiOauthModel } from "./openai/index.ts";
 
 export * from "./ai-sdk.ts";
+export * from "./openai/index.ts";
+export * from "./github-copilot/index.ts";
+export * from "./models.ts";
 
 /**
  * Providers wired through the AI SDK. `openai-compatible` targets any
  * OpenAI-compatible chat-completions endpoint (a self-hosted or proxy gateway),
  * which is how custom endpoints are configured.
  */
-export type ProviderName = "openai" | "anthropic" | "openai-compatible";
+export type ProviderName =
+  | "openai"
+  | "openai-oauth"
+  | "github-copilot"
+  | "anthropic"
+  | "google"
+  | "openai-compatible";
 
 export interface ProviderClientOptions extends AiSdkModelOptions {
   /** Provider kind, or a vendor id mapped by the caller. */
@@ -32,8 +44,22 @@ export function resolveProviderModel(options: ProviderClientOptions): LanguageMo
   switch (options.provider) {
     case "openai":
       return openai(options.model);
+    case "openai-oauth":
+      return resolveOpenAiOauthModel(options.model, options.name);
+    case "github-copilot":
+      return resolveGitHubCopilotModel(options.model, options.name);
     case "anthropic":
       return anthropic(options.model);
+    case "google": {
+      if (options.apiKey || options.baseURL) {
+        const provider = createGoogleGenerativeAI({
+          ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+          ...(options.baseURL ? { baseURL: options.baseURL } : {}),
+        });
+        return provider(options.model);
+      }
+      return google(options.model);
+    }
     case "openai-compatible": {
       if (!options.baseURL) {
         throw new TypeError('Provider "openai-compatible" requires a baseURL.');

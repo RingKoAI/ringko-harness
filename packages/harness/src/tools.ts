@@ -1,4 +1,11 @@
-import { gate, type GateDecision, type RiskKind, type RiskLevel } from "./access.ts";
+import {
+  DEFAULT_ACCESS_MODE,
+  gate,
+  type AccessMode,
+  type GateDecision,
+  type RiskKind,
+  type RiskLevel,
+} from "./access.ts";
 
 export interface ToolRiskAssessment {
   kind: RiskKind;
@@ -17,6 +24,9 @@ export interface ToolApprovalRequest {
 
 export type ApprovalHandler = (request: ToolApprovalRequest) => Promise<boolean>;
 
+/** How a tool participates in same-turn scheduling. */
+export type ToolConcurrency = "parallel" | "exclusive";
+
 export interface ToolDefinition<Input, Output> {
   name: string;
   description: string;
@@ -24,12 +34,21 @@ export interface ToolDefinition<Input, Output> {
   parseInput(value: unknown): Input;
   assessRisk(input: Input): ToolRiskAssessment | Promise<ToolRiskAssessment>;
   execute(input: Input): Output | Promise<Output>;
+  /**
+   * `"exclusive"` tools run alone as a barrier: the scheduler drains every
+   * earlier call, runs this one by itself, then continues. Defaults to
+   * `"parallel"` (batched with neighbouring parallel calls, bounded by the
+   * agent's concurrency limit).
+   */
+  concurrency?: ToolConcurrency;
 }
 
 export interface ToolMetadata {
   name: string;
   description: string;
   inputSchema: Readonly<Record<string, unknown>>;
+  /** Set by the registry; absent means the default `"parallel"` schedule. */
+  concurrency?: ToolConcurrency;
 }
 
 /**
@@ -42,7 +61,7 @@ export type AnyToolDefinition = ToolDefinition<any, any>;
 
 type RegisteredTool = {
   metadata: ToolMetadata;
-  invoke(input: unknown, requestApproval?: ApprovalHandler): Promise<unknown>;
+  invoke(input: unknown, requestApproval?: ApprovalHandler, mode?: AccessMode): Promise<unknown>;
 };
 
 const RISK_KINDS = new Set<RiskKind>([
@@ -85,7 +104,13 @@ const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
  * (no parser, no risk assessor, no executor, or a non-object schema) is
  * rejected before it can reach the registry.
  */
+const CONCURRENCY = new Set<ToolConcurrency>(["parallel", "exclusive"]);
+
 export function validateToolDefinition(tool: ToolDefinition<unknown, unknown>): void {
+  if (tool.concurrency !== undefined && !CONCURRENCY.has(tool.concurrency)) {
+    throw new TypeError(`Tool "${tool.name}" has an invalid concurrency "${String(tool.concurrency)}".`);
+  }
+
   if (!tool || typeof tool !== "object") {
     throw new TypeError("A tool definition is required.");
   }
@@ -124,6 +149,7 @@ export async function executeTool<Input, Output>(
   tool: ToolDefinition<Input, Output>,
   rawInput: unknown,
   requestApproval?: ApprovalHandler,
+  mode: AccessMode = DEFAULT_ACCESS_MODE,
 ): Promise<Output> {
   const input = tool.parseInput(rawInput);
   const risk = await tool.assessRisk(input);
@@ -137,13 +163,16 @@ export async function executeTool<Input, Output>(
   ) {
     throw new TypeError(`Tool "${tool.name}" returned an invalid risk assessment.`);
   }
-  const decision = gate({
-    kind: risk.kind,
-    riskLevel: risk.level,
-    description: risk.reason,
-    path: risk.target,
-    isExternal: risk.kind === "external_file",
-  });
+  const decision = gate(
+    {
+      kind: risk.kind,
+      riskLevel: risk.level,
+      description: risk.reason,
+      path: risk.target,
+      isExternal: risk.kind === "external_file",
+    },
+    mode,
+  );
 
   if (decision.approvalRequired) {
     if (!requestApproval) {
@@ -185,10 +214,11 @@ export class ToolRegistry {
       name: definition.name,
       description: definition.description,
       inputSchema: definition.inputSchema,
+      concurrency: definition.concurrency ?? "parallel",
     });
     this.tools.set(definition.name, {
       metadata,
-      invoke: (input, requestApproval) => executeTool(definition, input, requestApproval),
+      invoke: (input, requestApproval, mode) => executeTool(definition, input, requestApproval, mode),
     });
   }
 
@@ -235,11 +265,16 @@ export class ToolRegistry {
     return Array.from(this.tools.values(), ({ metadata }) => metadata);
   }
 
-  async call(toolName: string, input: unknown, requestApproval?: ApprovalHandler): Promise<unknown> {
+  async call(
+    toolName: string,
+    input: unknown,
+    requestApproval?: ApprovalHandler,
+    mode: AccessMode = DEFAULT_ACCESS_MODE,
+  ): Promise<unknown> {
     const tool = this.tools.get(toolName);
     if (!tool) {
       throw new UnknownToolError(toolName);
     }
-    return tool.invoke(input, requestApproval);
+    return tool.invoke(input, requestApproval, mode);
   }
 }

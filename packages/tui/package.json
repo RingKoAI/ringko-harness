@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "bun src/cli.ts",
-    "test": "bun test src",
+    "test": "bun test tests",
     "build": "bun scripts/compile.mjs ../../dist/ringko",
     "build:linux-x64": "bun scripts/compile.mjs ../../dist/ringko-linux-x64 bun-linux-x64",
     "build:linux-arm64": "bun scripts/compile.mjs ../../dist/ringko-linux-arm64 bun-linux-arm64",
@@ -19,6 +19,7 @@
     "build:all": "pnpm run build:linux-x64 && pnpm run build:linux-arm64 && pnpm run build:macos-x64 && pnpm run build:macos-arm64 && pnpm run build:windows-x64"
   },
   "dependencies": {
+    "@ringko-ai/auth": "workspace:*",
     "@ringko-ai/config": "workspace:*",
     "@ringko-ai/providers": "workspace:*",
     "@ringko-ai/repl": "workspace:*",

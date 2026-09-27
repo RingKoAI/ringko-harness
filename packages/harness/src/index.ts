@@ -1,5 +1,13 @@
-export { ACCESS, access, gate } from "./access.ts";
-export type { Access, GateDecision, GateRequest, RiskKind, RiskLevel } from "./access.ts";
+export { ACCESS, ACCESS_MODES, DEFAULT_ACCESS_MODE, access, gate, isAccessMode } from "./access.ts";
+export type {
+  Access,
+  AccessMode,
+  AccessPermissions,
+  GateDecision,
+  GateRequest,
+  RiskKind,
+  RiskLevel,
+} from "./access.ts";
 export {
   ApprovalHandlerUnavailableError,
   ToolApprovalRejectedError,

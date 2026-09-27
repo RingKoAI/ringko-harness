@@ -8,10 +8,15 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "start": "bun src/main.ts"
+    "start": "bun src/main.ts",
+    "serve": "bun src/main.ts"
   },
   "dependencies": {
+    "@ringko-ai/config": "workspace:*",
+    "@ringko-ai/providers": "workspace:*",
     "@ringko-ai/sdk": "workspace:*",
+    "@ringko-ai/session": "workspace:*",
+    "@ringko-ai/tools": "workspace:*",
     "@ringko-ai/webui": "workspace:*"
   }
 }

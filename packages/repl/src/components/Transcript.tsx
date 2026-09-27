@@ -6,14 +6,15 @@ export interface TranscriptProps {
   items: readonly ReplItem[];
   /** Maximum number of recent items rendered. */
   limit?: number;
+  expandThinking?: boolean;
 }
 
-export function Transcript({ items, limit = 40 }: TranscriptProps) {
+export function Transcript({ items, limit = 40, expandThinking = false }: TranscriptProps) {
   const visible = items.length > limit ? items.slice(items.length - limit) : items;
   return (
     <Box flexDirection="column">
       {visible.map((item) => (
-        <MessageRow key={item.id} item={item} />
+        <MessageRow key={item.id} item={item} expandThinking={expandThinking} />
       ))}
     </Box>
   );

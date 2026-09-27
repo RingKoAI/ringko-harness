@@ -1,0 +1,46 @@
+name: models-snapshot
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 12 * * *"
+
+concurrency:
+  group: models-snapshot
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Push as the RingKoDev bot when its fine-grained PAT is configured;
+          # otherwise fall back to the default workflow token.
+          token: ${{ secrets.RINGKO_BOT_TOKEN || github.token }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Refresh snapshot
+        run: bun packages/config/script/refresh-models.ts
+        env:
+          RINGKO_MODELS_URL: ${{ vars.RINGKO_MODELS_URL }}
+
+      - name: Commit changes
+        run: |
+          set -euo pipefail
+          FILE="packages/config/models.dev.json"
+          if [ -z "$(git status --short -- "$FILE")" ]; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git config user.name "RingKoDev"
+          git config user.email "ringko@ringkoai.com"
+          git add "$FILE"
+          git commit -m "chore(config): refresh model catalog snapshot"
+          git push

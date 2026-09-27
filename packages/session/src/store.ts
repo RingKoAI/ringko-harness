@@ -10,6 +10,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeSync,
 } from "node:fs";
@@ -19,6 +20,7 @@ import { serializeEvent, serializeHeader } from "./format.ts";
 import { acquireLock, type SessionLock } from "./lock.ts";
 import {
   NO_CWD_DIR_NAME,
+  projectDirName,
   sessionDir,
   sessionLockPath,
   sessionLogPath,
@@ -110,6 +112,14 @@ export class SessionStore {
     return undefined;
   }
 
+  /** Delete a session's directory. Returns false when the id is unknown. */
+  delete(id: string): boolean {
+    const dir = this.findDir(id);
+    if (!dir) return false;
+    rmSync(dir, { recursive: true, force: true });
+    return true;
+  }
+
   /** List every session (header only). */
   list(): SessionMeta[] {
     const metas: SessionMeta[] = [];
@@ -137,8 +147,11 @@ export class SessionStore {
     } catch {
       return dirs;
     }
+    // A cwd-scoped store only lists the sessions grouped under its workspace.
+    const target = this.cwd !== undefined ? projectDirName(this.cwd) : undefined;
     for (const project of projects) {
       if (!project.startsWith("--") && project !== NO_CWD_DIR_NAME) continue;
+      if (target !== undefined && project !== target) continue;
       const base = join(this.root, project);
       let sessions: string[];
       try {

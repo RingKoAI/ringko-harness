@@ -1,24 +1,29 @@
 import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
 
-export interface RunShellInput {
+export interface ShellInput {
   command: string;
-  args: string[];
+  timeout?: number;
+  description?: string;
 }
 
-export interface RunShellOutput {
+export interface ShellOutput {
   command: string;
-  args: string[];
   exitCode: number;
   stdout: string;
   stderr: string;
+  timedOut?: boolean;
 }
 
-export interface RunShellOptions {
+export interface ShellOptions {
   /** Directory the command runs in. */
   cwd: string;
+  /** Default timeout in milliseconds when the input omits one. */
+  defaultTimeoutMs?: number;
 }
 
-function parseShellInput(value: unknown): RunShellInput {
+const MAX_TIMEOUT_MS = 600_000;
+
+function parseShell(value: unknown): ShellInput {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError("Expected an object input.");
   }
@@ -26,53 +31,70 @@ function parseShellInput(value: unknown): RunShellInput {
   if (typeof record.command !== "string" || record.command.trim().length === 0) {
     throw new TypeError("Expected a non-empty string 'command'.");
   }
-  let args: string[] = [];
-  if (record.args !== undefined) {
-    if (!Array.isArray(record.args) || record.args.some((arg) => typeof arg !== "string")) {
-      throw new TypeError("'args' must be an array of strings.");
+  const input: ShellInput = { command: record.command };
+  if (record.timeout !== undefined) {
+    if (typeof record.timeout !== "number" || !Number.isFinite(record.timeout) || record.timeout <= 0) {
+      throw new TypeError("'timeout' must be a positive number of milliseconds.");
     }
-    args = record.args as string[];
+    input.timeout = Math.min(record.timeout, MAX_TIMEOUT_MS);
   }
-  return { command: record.command, args };
+  if (record.description !== undefined) {
+    if (typeof record.description !== "string") throw new TypeError("'description' must be a string.");
+    input.description = record.description;
+  }
+  return input;
 }
 
 /**
- * Run an external command; classified as high risk (approval). The command is
- * executed directly (no shell interpolation) so arguments cannot be injected.
+ * Execute a shell command. Classified as high risk (approval required). The
+ * command runs through the platform shell; keep the working directory bounded.
  */
-export function createRunShellTool(options: RunShellOptions): ToolDefinition<RunShellInput, RunShellOutput> {
+export function createShellTool(options: ShellOptions): ToolDefinition<ShellInput, ShellOutput> {
   if (typeof options?.cwd !== "string" || options.cwd.trim().length === 0) {
-    throw new TypeError("run_shell requires a non-empty cwd.");
+    throw new TypeError("shell requires a non-empty cwd.");
   }
-  return defineTool({
-    name: "run_shell",
-    description: "Run an external command. Requires approval.",
+  const defaultTimeout = options.defaultTimeoutMs ?? 120_000;
+  return defineTool<ShellInput, ShellOutput>({
+    name: "shell",
+    concurrency: "exclusive",
+    description: "Execute a shell command in the workspace. Requires approval.",
     inputSchema: {
       type: "object",
-      properties: { command: { type: "string" }, args: { type: "array", items: { type: "string" } } },
+      properties: {
+        command: { type: "string" },
+        timeout: { type: "number" },
+        description: { type: "string" },
+      },
       required: ["command"],
       additionalProperties: false,
     },
-    parseInput: parseShellInput,
-    assessRisk({ command, args }) {
+    parseInput: parseShell,
+    assessRisk({ command, description }) {
       return {
         kind: "shell",
-        reason: `Run command: ${[command, ...args].join(" ")}`,
+        reason: description ?? `Run shell command: ${command}`,
         target: command,
       };
     },
-    async execute({ command, args }) {
-      const proc = Bun.spawn([command, ...args], {
-        cwd: options.cwd,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+    async execute({ command, timeout }) {
+      const shell = process.platform === "win32" ? ["cmd.exe", "/d", "/s", "/c", command] : ["/bin/sh", "-c", command];
+      const proc = Bun.spawn(shell, { cwd: options.cwd, stdout: "pipe", stderr: "pipe" });
+      const limit = timeout ?? defaultTimeout;
+
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        proc.kill();
+      }, limit);
+
       const [stdout, stderr] = await Promise.all([
         new Response(proc.stdout).text(),
         new Response(proc.stderr).text(),
       ]);
       const exitCode = await proc.exited;
-      return { command, args, exitCode, stdout, stderr };
+      clearTimeout(timer);
+
+      return { command, exitCode, stdout, stderr, ...(timedOut ? { timedOut } : {}) };
     },
   });
 }

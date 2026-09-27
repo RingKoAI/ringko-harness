@@ -15,6 +15,18 @@ export interface SlashContext {
   workspace: string;
   sessionId?: string;
   toolNames(): string[];
+  /** Connect to / list providers. */
+  connect(arg: string): void | Promise<void>;
+  /** Sign in to a provider via OAuth (default: openai). */
+  login(provider: string): void | Promise<void>;
+  /** Select the active model; no argument opens the model selector. */
+  pickModel(arg: string): void | Promise<void>;
+  /** Open the session picker (resume). */
+  pickSession(): void | Promise<void>;
+  /** Set the reasoning depth (effort); no argument opens a selector. */
+  pickThinking(arg: string): void | Promise<void>;
+  /** Toggle whether model reasoning is shown (arg: on|off). */
+  toggleThinking(arg: string): void | Promise<void>;
 }
 
 export interface SlashCommand {
@@ -29,7 +41,48 @@ export function buildCommands(): SlashCommand[] {
     { name: "help", aliases: ["?"], description: "show this help", run: (ctx) => ctx.print(helpText()) },
     { name: "clear", description: "clear the transcript", run: (ctx) => ctx.clear() },
     { name: "exit", aliases: ["quit", "q"], description: "quit the REPL", run: (ctx) => ctx.exit() },
-    { name: "model", description: "show the current model", run: (ctx) => ctx.print(ctx.modelLabel) },
+    {
+      name: "connect",
+      description: "list providers / connection info",
+      run: (ctx, arg) => {
+        void ctx.connect(arg);
+      },
+    },
+    {
+      name: "login",
+      description: "sign in to a provider via OAuth (default: openai)",
+      run: (ctx, arg) => {
+        void ctx.login(arg);
+      },
+    },
+    {
+      name: "resume",
+      description: "resume a previous session",
+      run: (ctx) => {
+        void ctx.pickSession();
+      },
+    },
+    {
+      name: "effort",
+      description: "set the reasoning depth (off|low|high|max)",
+      run: (ctx, arg) => {
+        void ctx.pickThinking(arg);
+      },
+    },
+    {
+      name: "thinking",
+      description: "toggle showing model reasoning (on|off)",
+      run: (ctx, arg) => {
+        void ctx.toggleThinking(arg);
+      },
+    },
+    {
+      name: "model",
+      description: "select the active model",
+      run: (ctx, arg) => {
+        void ctx.pickModel(arg);
+      },
+    },
     { name: "workspace", description: "show the workspace root", run: (ctx) => ctx.print(ctx.workspace) },
     {
       name: "session",

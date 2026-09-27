@@ -4,9 +4,9 @@
 // at least a `name` (and usually a `description`). RingKo scans
 // `~/.ringko/skills` and `~/.agents/skills` (and the singular `skill` alias);
 // ringko-specific skills take precedence over shared ones with the same name.
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { agentsRoot, ringkoRoot, SKILLS_DIR_NAMES } from "./paths.ts";
+import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { agentsRoot, ringkoRoot, SKILLS_DIR_NAMES, skillsDirs } from "./paths.ts";
 
 export const SKILL_FILE_NAME = "SKILL.md";
 
@@ -96,4 +96,42 @@ export function discoverSkills(options: DiscoverSkillsOptions = {}): Skill[] {
     }
   }
   return [...found.values()];
+}
+
+const SINGLE_SEGMENT = /^[A-Za-z0-9._-]+$/;
+
+/** Create a ringko skill directory with a `SKILL.md`. */
+export function createSkill(
+  input: { name: string; description?: string; body?: string },
+  env: NodeJS.ProcessEnv = process.env,
+): Skill {
+  const name = input.name.trim();
+  if (!SINGLE_SEGMENT.test(name) || name === "." || name === "..") {
+    throw new Error("Skill name must be a single path segment.");
+  }
+  const dir = join(ringkoRoot(env), "skills", name);
+  mkdirSync(dir, { recursive: true });
+  const lines = ["---", `name: ${name}`];
+  if (input.description && input.description.trim().length > 0) lines.push(`description: ${input.description.trim()}`);
+  lines.push("---", "");
+  if (input.body && input.body.length > 0) lines.push(input.body);
+  writeFileSync(join(dir, SKILL_FILE_NAME), `${lines.join("\n")}\n`);
+  return { name, ...(input.description ? { description: input.description } : {}), dir, source: "ringko" };
+}
+
+/** Delete a skill directory; refuses paths outside the managed skills roots. */
+export function removeSkill(dir: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const target = resolve(dir);
+  const inside = skillsDirs(env).some((root) => {
+    const rel = relative(resolve(root), target);
+    return rel.length > 0 && !rel.startsWith("..") && !isAbsolute(rel);
+  });
+  if (!inside) throw new Error("Refusing to delete a directory outside the skills roots.");
+  try {
+    if (!statSync(target).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  rmSync(target, { recursive: true, force: true });
+  return true;
 }

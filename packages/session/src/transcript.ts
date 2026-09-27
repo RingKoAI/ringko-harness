@@ -7,6 +7,11 @@ export const TRANSCRIPT_EVENT = {
   user: "user/message",
   assistant: "assistant/message",
   tool: "tool/result",
+  model: "session/model",
+  modelCall: "model/call",
+  title: "session/title",
+  thinking: "session/thinking",
+  archive: "session/archived",
 } as const;
 
 interface HandleLike {
@@ -39,6 +44,68 @@ export function recordToolResult(
   failed: boolean,
 ): SessionEvent {
   return handle.appendEvent(TRANSCRIPT_EVENT.tool, { turn, toolCallId, name, content, failed });
+}
+
+/** Record the session's selected model (`"<provider>/<model>"`). */
+export function recordSessionModel(handle: HandleLike, model: string): SessionEvent {
+  return handle.appendEvent(TRANSCRIPT_EVENT.model, { model });
+}
+
+/** Record one model invocation (the model id sent in the request). */
+export function recordModelCall(handle: HandleLike, modelId: string): SessionEvent {
+  return handle.appendEvent(TRANSCRIPT_EVENT.modelCall, { model: modelId });
+}
+
+/** Record a generated session title. */
+export function recordSessionTitle(handle: HandleLike, title: string): SessionEvent {
+  return handle.appendEvent(TRANSCRIPT_EVENT.title, { title });
+}
+
+/** Record the session's reasoning/thinking depth. */
+export function recordSessionThinking(handle: HandleLike, level: string): SessionEvent {
+  return handle.appendEvent(TRANSCRIPT_EVENT.thinking, { level });
+}
+
+/** Record whether the session is archived. */
+export function recordSessionArchived(handle: HandleLike, archived: boolean): SessionEvent {
+  return handle.appendEvent(TRANSCRIPT_EVENT.archive, { archived });
+}
+
+function lastString(events: readonly SessionEvent[], type: string, key: string): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type !== type) continue;
+    const data = asRecord(event.data);
+    const value = data?.[key];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+/** The session's selected model, if recorded. */
+export function sessionModel(events: readonly SessionEvent[]): string | undefined {
+  return lastString(events, TRANSCRIPT_EVENT.model, "model");
+}
+
+/** The session's generated title, if any. */
+export function sessionTitle(events: readonly SessionEvent[]): string | undefined {
+  return lastString(events, TRANSCRIPT_EVENT.title, "title");
+}
+
+/** Whether the session is archived (the latest archive event wins). */
+export function sessionArchived(events: readonly SessionEvent[]): boolean {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type !== TRANSCRIPT_EVENT.archive) continue;
+    const data = asRecord(event.data);
+    if (typeof data?.archived === "boolean") return data.archived;
+  }
+  return false;
+}
+
+/** The session's reasoning/thinking depth, if recorded. */
+export function sessionThinking(events: readonly SessionEvent[]): string | undefined {
+  return lastString(events, TRANSCRIPT_EVENT.thinking, "level");
 }
 
 /** Record one harness agent event into the session log. */

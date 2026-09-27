@@ -1,20 +1,48 @@
-import { createRingKo, access, type ApprovalHandler, type RingKo } from "@ringko-ai/sdk";
-import { registerNetworkTools, registerShellTools, registerWorkspaceTools } from "@ringko-ai/tools";
+import { createRingKo, access, type ApprovalHandler, type ChatMessage, type RingKo } from "@ringko-ai/sdk";
 import {
+  createTodoStore,
+  createTodoTool,
+  registerNetworkTools,
+  registerShellTools,
+  registerWorkspaceTools,
+} from "@ringko-ai/tools";
+import {
+  applyProxyEnv,
+  createSkill,
   discoverSkills,
+  getApiKey,
+  getAuth,
   getConfigValue,
+  loadAuth,
   loadConfig,
+  loadMcpServerMap,
   loadMcpServers,
+  removeSkill,
+  saveMcpServers,
+  type McpServerConfig,
+  modelLabel as selectionLabel,
   parseConfigValue,
   providerPath,
+  removeAuth,
   saveConfig,
+  selectModel,
+  setAuth,
   setConfigValue,
   settingsPath,
   unsetConfigValue,
+  upsertProviderModels,
   type RingkoConfig,
 } from "@ringko-ai/config";
-import { SessionStore } from "@ringko-ai/session";
-import { loadProviderModel } from "./provider.ts";
+import { loginGitHubCopilot, loginOpenAiBrowser, loginOpenAiDevice, openBrowser } from "@ringko-ai/auth";
+import {
+  SessionStore,
+  latestSessionModel,
+  recordSessionModel,
+  sessionModel,
+  toChatMessages,
+  type SessionHandle,
+} from "@ringko-ai/session";
+import { discoverProviderModels, loadProviderModel } from "./provider.ts";
 
 export const VERSION = "0.1.0";
 
@@ -33,8 +61,17 @@ Commands:
   tui                  Interactive terminal UI
   tools                List the registered tools
   skills               List installed skills (~/.ringko/skills, ~/.agents/skills)
+  skills create <name> [description]  Create a skill
+  skills remove <name> Remove a skill
   mcp                  List configured MCP servers (~/.ringko/.mcp.json)
+  mcp set <name> <json>  Set an MCP server from a JSON config
+  mcp remove <name>    Remove an MCP server
   session list         List stored sessions (~/.ringko/sessions)
+  models [provider]    Discover a provider's models and save them
+  auth login [provider]  Sign in via OAuth (openai | github-copilot; --device for headless)
+  auth status          List stored credentials (~/.ringko/auth/auth.json)
+  auth set <prov> <key>  Store an API key for a provider
+  auth logout <prov>   Remove stored credentials
   info                 Show the access mode
   config show          Print the config path and contents
   config path          Print the config path
@@ -47,6 +84,8 @@ Options:
   --config <path>      Config file (default: ~/.ringko/config)
   --provider <name>    Override the configured provider (default: echo)
   --model <id>         Override the configured model id
+  --resume, -c         Continue the most recent session
+  -s, --session [id]   Continue a session; omit the id for a session picker (TUI)
   --workspace <dir>    Workspace root for file tools (default: current directory)
 
 Providers are introduced through configuration; the config names a provider
@@ -67,7 +106,12 @@ interface ReplModule {
     modelLabel: string;
     config: RingkoConfig;
     workspace: string;
-  }): Promise<void>;
+    createModel?: (config: RingkoConfig) => Promise<import("@ringko-ai/sdk").ModelClient | string>;
+    resumeSessionId?: string;
+    modelId?: string;
+    pickSession?: boolean;
+    smallModel?: import("@ringko-ai/sdk").ModelClient;
+  }): Promise<string | undefined>;
 }
 
 interface ParsedArgs {
@@ -77,6 +121,9 @@ interface ParsedArgs {
   provider?: string;
   model?: string;
   workspace?: string;
+  resume?: boolean;
+  session?: string;
+  sessionPicker?: boolean;
 }
 
 function parseArgs(argv: readonly string[]): ParsedArgs {
@@ -86,8 +133,25 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let provider: string | undefined;
   let model: string | undefined;
   let workspace: string | undefined;
+  let resume: boolean | undefined;
+  let session: string | undefined;
+  let sessionPicker: boolean | undefined;
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
+    if (arg === "--resume" || arg === "-c" || arg === "--continue") {
+      resume = true;
+      continue;
+    }
+    if (arg === "-s" || arg === "--session") {
+      const value = rest[i + 1];
+      if (value !== undefined && !value.startsWith("-")) {
+        session = value;
+        i += 1;
+      } else {
+        sessionPicker = true;
+      }
+      continue;
+    }
     if (arg === "--config" || arg === "--provider" || arg === "--model" || arg === "--workspace") {
       const value = rest[i + 1];
       if (value === undefined) throw new TypeError(`Missing value for ${arg}.`);
@@ -100,7 +164,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       positionals.push(arg);
     }
   }
-  return { command, positionals, config, provider, model, workspace };
+  return { command, positionals, config, provider, model, workspace, resume, session, sessionPicker };
 }
 
 function readConfig(parsed: ParsedArgs, io: CliIo): RingkoConfig | undefined {
@@ -114,6 +178,7 @@ function readConfig(parsed: ParsedArgs, io: CliIo): RingkoConfig | undefined {
 
 function registerTools(ringko: RingKo, config: RingkoConfig, workspace: string): void {
   registerWorkspaceTools(ringko.tools, { workspace });
+  ringko.tools.register(createTodoTool(createTodoStore()));
   if (config.capabilities?.network) registerNetworkTools(ringko.tools);
   if (config.capabilities?.shell) registerShellTools(ringko.tools, { cwd: workspace });
 }
@@ -128,20 +193,53 @@ async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   const config = readConfig(parsed, io);
   if (!config) return 2;
 
-  const provider = {
-    ...config.provider,
-    ...(parsed.provider ? { name: parsed.provider } : {}),
+  const workspace = parsed.workspace ?? config.workspace ?? process.cwd();
+  const store = new SessionStore({ cwd: workspace });
+  const override = {
+    ...(parsed.provider ? { provider: parsed.provider } : {}),
     ...(parsed.model ? { model: parsed.model } : {}),
   };
-  const model = await loadProviderModel(provider);
-  if (typeof model === "string") {
-    io.err(model);
+  const hasOverride = Boolean(parsed.provider || parsed.model);
+  if (parsed.sessionPicker && !parsed.session) {
+    io.err("`-s` with no id needs the interactive picker; use `ringko tui -s`.");
     return 1;
   }
 
-  const workspace = parsed.workspace ?? config.workspace ?? process.cwd();
-  const session = new SessionStore({ cwd: workspace }).create();
-  const ringko = createRingKo({ model, requestApproval: denyApprovals(io), session });
+  let session: SessionHandle;
+  let history: ChatMessage[] = [];
+  let resumedModel: string | undefined;
+  if (parsed.session || parsed.resume) {
+    const id = parsed.session ?? store.list()[0]?.id;
+    if (!id) {
+      io.err("no session to resume.");
+      return 1;
+    }
+    const events = store.open(id, "read").all();
+    history = toChatMessages(events);
+    resumedModel = sessionModel(events);
+    session = store.open(id, "write");
+  } else {
+    session = store.create();
+  }
+
+  const chosen = hasOverride ? undefined : resumedModel ?? latestSessionModel(store) ?? config.model;
+  const prioritized: RingkoConfig = chosen ? { ...config, model: chosen } : config;
+  const model = await loadProviderModel(prioritized, override);
+  if (typeof model === "string") {
+    session.close();
+    io.err(model);
+    return 1;
+  }
+  const selection = selectModel(prioritized, override);
+  recordSessionModel(session, selectionLabel(selection));
+
+  const ringko = createRingKo({
+    model,
+    requestApproval: denyApprovals(io),
+    session,
+    history,
+    ...(selection ? { modelId: selection.model.id } : {}),
+  });
   registerTools(ringko, config, workspace);
 
   try {
@@ -161,30 +259,193 @@ async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   }
   const config = readConfig(parsed, io);
   if (!config) return 2;
-  const provider = {
-    ...config.provider,
-    ...(parsed.provider ? { name: parsed.provider } : {}),
+  const workspace = parsed.workspace ?? config.workspace ?? process.cwd();
+  const store = new SessionStore({ cwd: workspace });
+  const override = {
+    ...(parsed.provider ? { provider: parsed.provider } : {}),
     ...(parsed.model ? { model: parsed.model } : {}),
   };
-  const model = await loadProviderModel(provider);
+  const hasOverride = Boolean(parsed.provider || parsed.model);
+  const resumeSessionId = parsed.session ?? (parsed.resume ? store.list()[0]?.id : undefined);
+  const resumedModel = resumeSessionId ? sessionModel(store.open(resumeSessionId, "read").all()) : undefined;
+  const chosen = hasOverride ? undefined : resumedModel ?? latestSessionModel(store) ?? config.model;
+  const prioritized: RingkoConfig = chosen ? { ...config, model: chosen } : config;
+
+  const model = await loadProviderModel(prioritized, override);
   if (typeof model === "string") {
     io.err(model);
     return 1;
   }
-  const workspace = parsed.workspace ?? config.workspace ?? process.cwd();
-  const modelLabel = provider.model ? `${provider.name ?? "echo"}/${provider.model}` : (provider.name ?? "echo");
+  const selection = selectModel(prioritized, override);
+  const modelLabel = selectionLabel(selection);
 
-  // Non-literal specifier: loaded at run time and kept external to the binary.
-  const replSpecifier = "@ringko-ai/repl";
+  let smallModel: import("@ringko-ai/sdk").ModelClient | undefined;
+  if (config.small_model) {
+    const built = await loadProviderModel({ ...config, model: config.small_model });
+    if (typeof built === "function") smallModel = built;
+  }
+
   let repl: ReplModule;
   try {
-    repl = (await import(replSpecifier)) as ReplModule;
+    repl = (await import("@ringko-ai/repl")) as ReplModule;
   } catch (error) {
     io.err(`Cannot load @ringko-ai/repl: ${(error as Error).message}`);
     return 1;
   }
-  await repl.launchRepl({ model, modelLabel, config, workspace });
+  const sessionId = await repl.launchRepl({
+    model,
+    modelLabel,
+    config,
+    workspace,
+    createModel: (nextConfig) => loadProviderModel(nextConfig),
+    ...(resumeSessionId ? { resumeSessionId } : {}),
+    ...(parsed.sessionPicker ? { pickSession: true } : {}),
+    ...(selection ? { modelId: selection.model.id } : {}),
+    ...(smallModel ? { smallModel } : {}),
+  });
+  if (sessionId) io.err(`session ${sessionId}`);
   return 0;
+}
+
+const KNOWN_PROVIDER_TYPES = new Set(["openai", "openai-oauth", "anthropic", "google", "github-copilot", "openai-compatible"]);
+
+/** Discover a provider's models (live or catalog) and persist them to provider.json. */
+async function syncModels(providerName: string, fallbackType: string, io: CliIo): Promise<number> {
+  let config: RingkoConfig;
+  try {
+    config = loadConfig({});
+  } catch (error) {
+    io.err(error instanceof Error ? error.message : "Invalid config.");
+    return 2;
+  }
+  const provider = (config.providers ?? []).find((entry) => entry.name === providerName);
+  // Infer an OAuth provider type when the provider is not yet in provider.json.
+  const oauthType =
+    getAuth(providerName)?.type === "oauth"
+      ? providerName === "openai"
+        ? "openai-oauth"
+        : providerName === "github-copilot"
+          ? "github-copilot"
+          : providerName
+      : undefined;
+  const knownType = KNOWN_PROVIDER_TYPES.has(providerName) ? providerName : undefined;
+  const type = provider?.type ?? provider?.vendor ?? oauthType ?? knownType ?? fallbackType;
+  const apiKey = provider?.apiKey ?? getApiKey(providerName);
+  const discovered = await discoverProviderModels({
+    type,
+    ...(provider?.baseURL ? { baseURL: provider.baseURL } : {}),
+    ...(apiKey ? { apiKey } : {}),
+    providerId: providerName,
+  });
+  if (typeof discovered === "string") {
+    io.err(discovered);
+    return 1;
+  }
+  const models = discovered;
+  if (models.length === 0) {
+    io.out(`no models found for ${providerName}.`);
+    return 0;
+  }
+  saveConfig(upsertProviderModels(config, providerName, type, models));
+  for (const model of models) io.out(model.id);
+  io.out(`${models.length} model(s) added for ${providerName}.`);
+  return 0;
+}
+
+async function modelsCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
+  const requested: string | undefined = parsed.positionals[0];
+  let name: string | undefined = requested;
+  if (!name) {
+    try {
+      const config = loadConfig({});
+      const selected = config.model ?? "";
+      const slash = selected.indexOf("/");
+      name = slash > 0 ? selected.slice(0, slash) : config.providers?.[0]?.name;
+    } catch (error) {
+      io.err(error instanceof Error ? error.message : "Invalid config.");
+      return 2;
+    }
+  }
+  if (!name) {
+    io.err("models requires a provider name; none configured.");
+    return 2;
+  }
+  return syncModels(name, "openai-compatible", io);
+}
+
+async function authCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
+  const [sub, providerArg, ...flags] = parsed.positionals;
+  switch (sub) {
+    case undefined:
+    case "list":
+    case "status": {
+      const entries = Object.entries(loadAuth());
+      if (entries.length === 0) {
+        io.out("no credentials stored.");
+        return 0;
+      }
+      for (const [id, info] of entries) {
+        if (info.type === "oauth") {
+          const expires = new Date(info.expires).toISOString();
+          io.out(`${id}\toauth\taccount=${info.accountId ?? "-"}\texpires=${expires}`);
+        } else {
+          io.out(`${id}\tapikey\tkey=***`);
+        }
+      }
+      return 0;
+    }
+    case "set": {
+      const id = providerArg;
+      const key = flags[0];
+      if (!id || !key) {
+        io.err("auth set requires <provider> <api-key>.");
+        return 2;
+      }
+      setAuth(id, { type: "apikey", key });
+      io.out(`stored API key for ${id}.`);
+      return 0;
+    }
+    case "logout": {
+      const id = providerArg ?? "openai";
+      removeAuth(id);
+      io.out(`removed credentials for ${id}.`);
+      return 0;
+    }
+    case "login": {
+      const id = providerArg ?? "openai";
+      if (id !== "openai" && id !== "github-copilot") {
+        io.err(`Unsupported OAuth provider "${id}" (supported: openai, github-copilot).`);
+        return 2;
+      }
+      try {
+        const credential =
+          id === "github-copilot"
+            ? await loginGitHubCopilot((url, code) => {
+                io.out(`open ${url} and enter code ${code}`);
+              })
+            : flags.includes("--device")
+              ? await loginOpenAiDevice((url, code) => {
+                  io.out(`open ${url} and enter code ${code}`);
+                })
+              : await loginOpenAiBrowser((url) => {
+                  io.out("open this URL to sign in:");
+                  io.out(url);
+                  openBrowser(url);
+                });
+        setAuth(id, credential);
+        const account = credential.accountId ? ` (account ${credential.accountId})` : "";
+        io.out(`signed in to ${id}${account}.`);
+        await syncModels(id, id === "github-copilot" ? "github-copilot" : "openai-oauth", io);
+        return 0;
+      } catch (error) {
+        io.err(error instanceof Error ? error.message : "login failed.");
+        return 1;
+      }
+    }
+    default:
+      io.err(`Unknown auth subcommand: ${sub}`);
+      return 2;
+  }
 }
 
 function sessionCommand(io: CliIo): number {
@@ -194,7 +455,41 @@ function sessionCommand(io: CliIo): number {
   return 0;
 }
 
-function skillsCommand(io: CliIo): number {
+function skillsCommand(parsed: ParsedArgs, io: CliIo): number {
+  const [sub, name, ...rest] = parsed.positionals;
+  if (sub === "create") {
+    if (!name) {
+      io.err("skills create requires <name> [description].");
+      return 2;
+    }
+    try {
+      createSkill({ name, ...(rest.length > 0 ? { description: rest.join(" ") } : {}) });
+    } catch (error) {
+      io.err(error instanceof Error ? error.message : "Cannot create skill.");
+      return 1;
+    }
+    io.out(`created skill ${name}.`);
+    return 0;
+  }
+  if (sub === "remove") {
+    if (!name) {
+      io.err("skills remove requires <name>.");
+      return 2;
+    }
+    const skill = discoverSkills().find((entry) => entry.name === name);
+    if (!skill) {
+      io.err(`unknown skill "${name}".`);
+      return 1;
+    }
+    try {
+      removeSkill(skill.dir);
+    } catch (error) {
+      io.err(error instanceof Error ? error.message : "Cannot remove skill.");
+      return 1;
+    }
+    io.out(`removed skill ${name}.`);
+    return 0;
+  }
   for (const skill of discoverSkills()) {
     const description = skill.description ? `\t${skill.description}` : "";
     io.out(`${skill.name}\t${skill.source}\t${skill.dir}${description}`);
@@ -202,7 +497,55 @@ function skillsCommand(io: CliIo): number {
   return 0;
 }
 
-function mcpCommand(io: CliIo): number {
+function mcpCommand(parsed: ParsedArgs, io: CliIo): number {
+  const [sub, name, ...rest] = parsed.positionals;
+  if (sub === "set") {
+    if (!name || rest.length === 0) {
+      io.err("mcp set requires <name> <json-config>.");
+      return 2;
+    }
+    let config: unknown;
+    try {
+      config = JSON.parse(rest.join(" "));
+    } catch {
+      io.err("MCP config must be valid JSON.");
+      return 2;
+    }
+    if (typeof config !== "object" || config === null || Array.isArray(config)) {
+      io.err("MCP config must be a JSON object.");
+      return 2;
+    }
+    try {
+      const map = loadMcpServerMap();
+      map[name] = config as McpServerConfig;
+      saveMcpServers(map);
+    } catch (error) {
+      io.err(error instanceof Error ? error.message : "Cannot save MCP configuration.");
+      return 1;
+    }
+    io.out(`saved MCP server ${name}.`);
+    return 0;
+  }
+  if (sub === "remove") {
+    if (!name) {
+      io.err("mcp remove requires <name>.");
+      return 2;
+    }
+    try {
+      const map = loadMcpServerMap();
+      if (!(name in map)) {
+        io.err(`unknown MCP server "${name}".`);
+        return 1;
+      }
+      delete map[name];
+      saveMcpServers(map);
+    } catch (error) {
+      io.err(error instanceof Error ? error.message : "Cannot save MCP configuration.");
+      return 1;
+    }
+    io.out(`removed MCP server ${name}.`);
+    return 0;
+  }
   let servers;
   try {
     servers = loadMcpServers();
@@ -267,6 +610,7 @@ function configCommand(parsed: ParsedArgs, io: CliIo): number {
 
 /** Run the CLI and resolve with a process exit code. */
 export async function runCli(argv: readonly string[], io: CliIo): Promise<number> {
+  applyProxyEnv();
   let parsed: ParsedArgs;
   try {
     parsed = parseArgs(argv);
@@ -303,11 +647,15 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       return 0;
     }
     case "skills":
-      return skillsCommand(io);
+      return skillsCommand(parsed, io);
     case "mcp":
-      return mcpCommand(io);
+      return mcpCommand(parsed, io);
     case "session":
       return sessionCommand(io);
+    case "models":
+      return modelsCommand(parsed, io);
+    case "auth":
+      return authCommand(parsed, io);
     case "tui":
       return tuiCommand(parsed, io);
     case "config":
