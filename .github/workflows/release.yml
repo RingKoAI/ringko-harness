@@ -41,7 +41,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Compile ${{ matrix.target }}
-        run: bun build packages/tui/src/cli.ts --compile --target=${{ matrix.target }} --outfile dist/${{ matrix.artifact }}
+        run: bun packages/tui/scripts/compile.mjs dist/${{ matrix.artifact }} ${{ matrix.target }}
 
       - uses: actions/upload-artifact@v4
         with:

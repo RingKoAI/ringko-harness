@@ -10,12 +10,12 @@
   "scripts": {
     "start": "bun src/cli.ts",
     "test": "bun test src",
-    "build": "bun build src/cli.ts --compile --outfile ../../dist/ringko",
-    "build:linux-x64": "bun build src/cli.ts --compile --target=bun-linux-x64 --outfile ../../dist/ringko-linux-x64",
-    "build:linux-arm64": "bun build src/cli.ts --compile --target=bun-linux-arm64 --outfile ../../dist/ringko-linux-arm64",
-    "build:macos-x64": "bun build src/cli.ts --compile --target=bun-darwin-x64 --outfile ../../dist/ringko-darwin-x64",
-    "build:macos-arm64": "bun build src/cli.ts --compile --target=bun-darwin-arm64 --outfile ../../dist/ringko-darwin-arm64",
-    "build:windows-x64": "bun build src/cli.ts --compile --target=bun-windows-x64 --outfile ../../dist/ringko-windows-x64.exe",
+    "build": "bun scripts/compile.mjs ../../dist/ringko",
+    "build:linux-x64": "bun scripts/compile.mjs ../../dist/ringko-linux-x64 bun-linux-x64",
+    "build:linux-arm64": "bun scripts/compile.mjs ../../dist/ringko-linux-arm64 bun-linux-arm64",
+    "build:macos-x64": "bun scripts/compile.mjs ../../dist/ringko-darwin-x64 bun-darwin-x64",
+    "build:macos-arm64": "bun scripts/compile.mjs ../../dist/ringko-darwin-arm64 bun-darwin-arm64",
+    "build:windows-x64": "bun scripts/compile.mjs ../../dist/ringko-windows-x64.exe bun-windows-x64",
     "build:all": "pnpm run build:linux-x64 && pnpm run build:linux-arm64 && pnpm run build:macos-x64 && pnpm run build:macos-arm64 && pnpm run build:windows-x64"
   },
   "dependencies": {
