@@ -1,0 +1,52 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  binaries:
+    name: ${{ matrix.artifact }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            artifact: ringko-linux-x64
+          - os: ubuntu-latest
+            target: bun-linux-arm64
+            artifact: ringko-linux-arm64
+          - os: macos-latest
+            target: bun-darwin-arm64
+            artifact: ringko-darwin-arm64
+          - os: macos-latest
+            target: bun-darwin-x64
+            artifact: ringko-darwin-x64
+          - os: windows-latest
+            target: bun-windows-x64
+            artifact: ringko-windows-x64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Compile ${{ matrix.target }}
+        run: bun build packages/tui/src/cli.ts --compile --target=${{ matrix.target }} --outfile dist/${{ matrix.artifact }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error

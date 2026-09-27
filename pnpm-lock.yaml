@@ -47,9 +47,12 @@ importers:
 
   packages/tui:
     dependencies:
-      '@ringko-ai/harness':
+      '@ringko-ai/sdk':
         specifier: workspace:*
-        version: link:../harness
+        version: link:../sdk
+      '@ringko-ai/tools':
+        specifier: workspace:*
+        version: link:../tools
 
   packages/webui:
     dependencies:
