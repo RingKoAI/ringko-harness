@@ -89,9 +89,10 @@ export function createTodoTool(store: TodoStore): ToolDefinition<TodoInput, Todo
       return { kind: "safe", reason: "Update the in-memory task list." };
     },
     execute({ todos }) {
-      store.todos = todos;
-      store.onChange?.(todos);
-      return { todos };
+      const next = todos.map((todo) => ({ ...todo }));
+      store.todos = next;
+      store.onChange?.(store.todos);
+      return { todos: store.todos.map((todo) => ({ ...todo })) };
     },
   });
 }

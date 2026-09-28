@@ -1,4 +1,5 @@
 import type { ToolRegistry } from "@ringko-ai/harness";
+import { createAskTool, type AskAnswer, type AskHandler, type AskInput, type AskOption, type AskOutput, type AskQuestion } from "./ask.ts";
 import { createEditTool, type EditInput, type EditOutput } from "./edit.ts";
 import { FileTracker, type FileVersion } from "./file-tracker.ts";
 import { createGlobTool, type GlobInput, type GlobOutput } from "./glob.ts";
@@ -13,6 +14,7 @@ import { createWorkspace, type ResolvedTarget, type Workspace } from "./workspac
 export { createWorkspace, FileTracker };
 export type { FileVersion, ResolvedTarget, Workspace };
 export {
+  createAskTool,
   createEditTool,
   createGlobTool,
   createGrepTool,
@@ -24,6 +26,12 @@ export {
   createWriteTool,
 };
 export type {
+  AskAnswer,
+  AskHandler,
+  AskInput,
+  AskOption,
+  AskOutput,
+  AskQuestion,
   EditInput,
   EditOutput,
   GlobInput,
@@ -77,4 +85,29 @@ export function registerNetworkTools(registry: ToolRegistry, options: WebFetchOp
 /** Register `shell` (command execution; approval-required). */
 export function registerShellTools(registry: ToolRegistry, options: ShellOptions): void {
   registry.register(createShellTool(options));
+}
+
+export interface SessionToolsOptions {
+  /** Shared list the `todowrite` tool replaces. Created when omitted. */
+  todos?: TodoStore;
+  /** Notified whenever the todo list changes. Ignored when `todos` is set. */
+  onTodosChange?: (todos: TodoItem[]) => void;
+  /**
+   * Answers `ask`. Omit it and the tool is not registered, so a host with no
+   * question UI never exposes a call that would only fail.
+   */
+  ask?: AskHandler;
+}
+
+/**
+ * Register the in-session tools: `todowrite`, and `ask` when an answerer is
+ * supplied. Returns the store the host UI can read.
+ */
+export function registerSessionTools(registry: ToolRegistry, options: SessionToolsOptions = {}): TodoStore {
+  const store = options.todos ?? createTodoStore(options.onTodosChange);
+  registry.register(createTodoTool(store));
+  if (options.ask) {
+    registry.register(createAskTool(options.ask));
+  }
+  return store;
 }
