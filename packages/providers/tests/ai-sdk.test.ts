@@ -17,6 +17,26 @@ const echoMetadata: ToolMetadata[] = [
 ];
 
 describe("AI SDK model client", () => {
+  it("retries a rejected stream token limit before delivering any output", async () => {
+    let attempts = 0;
+    const model = new MockLanguageModelV4({ doStream: async options => {
+      attempts++;
+      if (options.maxOutputTokens !== undefined) throw Object.assign(new Error("invalid_parameter"), { statusCode: 400 });
+      return { stream: new ReadableStream({ start(controller) {
+        controller.enqueue({ type: "stream-start", warnings: [] });
+        controller.enqueue({ type: "text-start", id: "t" });
+        controller.enqueue({ type: "text-delta", id: "t", delta: "recovered" });
+        controller.enqueue({ type: "text-end", id: "t" });
+        controller.enqueue({ type: "finish", finishReason: { unified: "stop", raw: undefined }, usage });
+        controller.close();
+      } }) };
+    } });
+    const chunks: string[] = [];
+    const turn = await createAiSdkModelClient(model, { maxOutputTokens: 100 })({ messages: [{ role: "user", content: "hi" }], tools: [], onDelta: delta => chunks.push(delta.text) });
+    expect(attempts).toBe(2);
+    expect(chunks).toEqual(["recovered"]);
+    expect(turn.content).toBe("recovered");
+  });
   it("delivers reasoning and text chunks before returning one completed turn", async () => {
     const model = new MockLanguageModelV4({ doStream: async () => ({ stream: new ReadableStream({ start(controller) {
       controller.enqueue({ type: "stream-start", warnings: [] });

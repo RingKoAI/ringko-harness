@@ -318,7 +318,7 @@ async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   return 0;
 }
 
-const KNOWN_PROVIDER_TYPES = new Set(["openai", "openai-oauth", "anthropic", "google", "github-copilot", "xai-oauth", "openai-compatible"]);
+const KNOWN_PROVIDER_TYPES = new Set(["openai", "openai-oauth", "anthropic", "google", "google-gemini-cli", "github-copilot", "xai-oauth", "openai-compatible"]);
 
 /** Discover a provider's models (live or catalog) and persist them to provider.json. */
 async function syncModels(providerName: string, fallbackType: string, io: CliIo): Promise<number> {

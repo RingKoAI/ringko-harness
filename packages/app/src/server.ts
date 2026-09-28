@@ -524,6 +524,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         resetMcp();
         return undefined;
       },
+    ).catch(
       (error: unknown) => {
         const message = error instanceof Error ? error.message : "MCP authorization failed.";
         oauthFlows.set(id, { status: "error", error: message, createdAt: now });
@@ -722,6 +723,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         oauthFlows.set(id, { status: "success", createdAt: now });
         return undefined;
       },
+    ).catch(
       (error: unknown) => {
         const message = error instanceof Error ? error.message : "OAuth login failed.";
         oauthFlows.set(id, { status: "error", error: message, createdAt: now });

@@ -323,21 +323,29 @@ export function createAiSdkModelClient(model: LanguageModel, options: AiSdkModel
 
     // Streaming transport: the Codex `/responses` backend rejects `stream: false`.
     if (options.stream || request.onDelta) {
-      try {
-        const result = streamText(base);
+      let delivered = false;
+      const consume = async (input: typeof base) => {
+        // Errors are propagated below; avoid the SDK logging raw provider bodies.
+        const result = streamText({ ...input, onError: () => {} });
         for await (const part of result.fullStream) {
           request.signal?.throwIfAborted();
-          if (part.type === "text-delta") request.onDelta?.({ kind: "text", text: part.text });
-          else if (part.type === "reasoning-delta") request.onDelta?.({ kind: "reasoning", text: part.text });
-          else if (part.type === "error") throw part.error;
+          if (part.type === "text-delta" || part.type === "reasoning-delta") {
+            delivered = true;
+            request.onDelta?.({ kind: part.type === "text-delta" ? "text" : "reasoning", text: part.text });
+          } else if (part.type === "error") throw part.error;
         }
-        const text = await result.text;
-        const calls = await result.toolCalls;
-        const usage = await result.usage;
-        const reasoning = (await result.reasoningText) ?? "";
-        const reasoningDetails = toReasoningDetails(await result.reasoning);
-        return toTurn(text, calls as readonly RawToolCall[], usage, reasoning, reasoningDetails);
+        return toTurn(await result.text, await result.toolCalls as readonly RawToolCall[], await result.usage, (await result.reasoningText) ?? "", toReasoningDetails(await result.reasoning));
+      };
+      try {
+        return await consume(base);
       } catch (error) {
+        if (!delivered && !request.signal?.aborted && options.maxOutputTokens !== undefined && isInvalidParameter(error)) {
+          try {
+            return await consume({ ...base, maxOutputTokens: undefined });
+          } catch (retryError) {
+            throw describeModelError(retryError);
+          }
+        }
         throw describeModelError(error);
       }
     }
