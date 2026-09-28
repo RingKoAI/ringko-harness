@@ -4,6 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { applyProxyEnv, type OAuthCredential } from "@ringko-ai/config";
 import { CODEX_ORIGINATOR, codexUserAgent } from "./codex.ts";
+import { OAUTH_CALLBACK_HEADERS, renderOAuthCallbackPage, type OAuthFailure } from "./callback-page.ts";
 
 export const OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 export const OPENAI_ISSUER = "https://auth.openai.com";
@@ -14,9 +15,6 @@ export const OPENAI_REDIRECT_URI = `http://localhost:${OPENAI_OAUTH_PORT}/auth/c
 export const OPENAI_SCOPES = "openid profile email offline_access api.connectors.read api.connectors.invoke";
 
 const VERIFIER_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
-const SUCCESS_HTML =
-  "<!doctype html><meta charset=utf-8><title>RingKo</title><body style='font-family:sans-serif;padding:2rem'><h2>Signed in</h2><p>You can close this tab and return to RingKo.</p></body>";
-
 export interface Pkce {
   verifier: string;
   challenge: string;
@@ -161,6 +159,22 @@ export async function loginOpenAiBrowser(onUrl: (url: string) => void): Promise<
   const authorizeUrl = buildAuthorizeUrl(pkce.challenge, state);
 
   return new Promise<OAuthCredential>((resolve, reject) => {
+    let settled = false;
+    let exchanging = false;
+    let exchangeResponse: import("node:http").ServerResponse | undefined;
+    const finish = (error?: Error, credential?: OAuthCredential): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (server.listening) server.close();
+      if (error) reject(error);
+      else if (credential) resolve(credential);
+    };
+    const fail = (response: import("node:http").ServerResponse, status: number, reason: OAuthFailure, error: Error): void => {
+      response.writeHead(status, OAUTH_CALLBACK_HEADERS);
+      response.end(renderOAuthCallbackPage("OpenAI", { status: "error", reason }));
+      finish(error);
+    };
     const server = createServer((request, response) => {
       const url = new URL(request.url ?? "/", `http://localhost:${OPENAI_OAUTH_PORT}`);
       if (url.pathname !== "/auth/callback") {
@@ -168,40 +182,49 @@ export async function loginOpenAiBrowser(onUrl: (url: string) => void): Promise<
         response.end();
         return;
       }
+      if (settled || exchanging) {
+        response.writeHead(409, OAUTH_CALLBACK_HEADERS);
+        response.end(renderOAuthCallbackPage("OpenAI", { status: "error", reason: "invalid-state" }));
+        return;
+      }
       if (url.searchParams.get("state") !== state) {
-        response.writeHead(400);
-        response.end("state mismatch");
+        fail(response, 400, "invalid-state", new Error("OAuth state mismatch."));
+        return;
+      }
+      if (url.searchParams.has("error")) {
+        fail(response, 400, "denied", new Error("OAuth authorization was denied or cancelled."));
         return;
       }
       const code = url.searchParams.get("code");
       if (!code) {
-        response.writeHead(400);
-        response.end("missing code");
+        fail(response, 400, "missing-code", new Error("OAuth authorization code is missing."));
         return;
       }
+      exchanging = true;
+      exchangeResponse = response;
       exchangeCode(code, pkce.verifier)
         .then((credential) => {
-          response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-          response.end(SUCCESS_HTML);
-          server.close();
-          resolve(credential);
+          if (settled) return;
+          response.writeHead(200, OAUTH_CALLBACK_HEADERS);
+          response.end(renderOAuthCallbackPage("OpenAI", { status: "success" }));
+          finish(undefined, credential);
         })
         .catch((error: unknown) => {
-          response.writeHead(500);
-          response.end("token exchange failed");
-          server.close();
-          reject(error instanceof Error ? error : new Error(String(error)));
+          if (settled) return;
+          fail(response, 502, "token-exchange", error instanceof Error ? error : new Error(String(error)));
         });
     });
-    server.on("error", reject);
-    server.listen(OPENAI_OAUTH_PORT, () => onUrl(authorizeUrl));
-    setTimeout(
+    server.on("error", (error) => finish(error));
+    server.listen(OPENAI_OAUTH_PORT, "localhost", () => onUrl(authorizeUrl));
+    const timeout = setTimeout(
       () => {
-        server.close();
-        reject(new Error("OAuth login timed out."));
+        const error = new Error("OAuth login timed out.");
+        if (exchangeResponse && !exchangeResponse.headersSent) fail(exchangeResponse, 504, "timed-out", error);
+        else finish(error);
       },
       5 * 60 * 1000,
-    ).unref?.();
+    );
+    timeout.unref?.();
   });
 }
 
