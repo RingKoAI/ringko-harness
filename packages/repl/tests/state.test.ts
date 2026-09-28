@@ -2,6 +2,13 @@ import { describe, expect, it } from "bun:test";
 import { agentEventToItems, truncate } from "../src/state.ts";
 
 describe("agentEventToItems", () => {
+  it("does not display the pre-execution audit event as a result", () => {
+    expect(agentEventToItems({
+      type: "tool_call",
+      turn: 1,
+      message: { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", arguments: {} }] },
+    })).toEqual([]);
+  });
   it("emits assistant text", () => {
     const items = agentEventToItems({ type: "model", turn: 1, message: { role: "assistant", content: "hi" } });
     expect(items).toHaveLength(1);

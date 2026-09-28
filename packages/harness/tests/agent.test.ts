@@ -112,4 +112,37 @@ describe("agent harness", () => {
     );
     await expect(new Agent({ model, tools }).run("   ")).rejects.toThrow("must not be empty");
   });
+
+  it("rejects duplicate tool call ids before any tool executes", async () => {
+    let executed = false;
+    const tools = new ToolRegistry();
+    tools.register({ ...echoTool("safe"), execute: () => { executed = true; return "ok"; } });
+    const model: ModelClient = async () => ({
+      content: "",
+      toolCalls: [
+        { id: "same", name: "echo", arguments: { text: "a" } },
+        { id: "same", name: "echo", arguments: { text: "b" } },
+      ],
+    });
+    await expect(new Agent({ model, tools }).run("go")).rejects.toThrow("invalid tool call");
+    expect(executed).toBe(false);
+  });
+
+  it("does not enter a tool when its pre-execution event fails", async () => {
+    let executed = false;
+    const tools = new ToolRegistry();
+    tools.register({ ...echoTool("safe"), execute: () => { executed = true; return "ok"; } });
+    const model: ModelClient = async () => ({
+      content: "",
+      toolCalls: [{ id: "c1", name: "echo", arguments: { text: "x" } }],
+    });
+    await expect(new Agent({
+      model,
+      tools,
+      onEvent(event) {
+        if (event.type === "tool_call") throw new Error("checkpoint failed");
+      },
+    }).run("go")).rejects.toThrow("checkpoint failed");
+    expect(executed).toBe(false);
+  });
 });

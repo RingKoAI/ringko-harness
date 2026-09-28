@@ -42,7 +42,7 @@ export interface ModelRequest {
 export type ModelClient = (request: ModelRequest) => Promise<ModelTurn>;
 
 export interface AgentEvent {
-  type: "model" | "tool" | "tool_error";
+  type: "model" | "tool_call" | "tool" | "tool_error";
   turn: number;
   message: ChatMessage;
   toolName?: string;
@@ -160,6 +160,14 @@ export class Agent {
         throw new TypeError("Model client returned an invalid turn.");
       }
 
+      const callIds = new Set<string>();
+      for (const call of response.toolCalls) {
+        if (!call || typeof call.id !== "string" || call.id.length === 0 || typeof call.name !== "string" || call.name.length === 0 || callIds.has(call.id)) {
+          throw new TypeError("Model client returned an invalid tool call.");
+        }
+        callIds.add(call.id);
+      }
+
       const assistant: ChatMessage = {
         role: "assistant",
         content: response.content,
@@ -174,15 +182,10 @@ export class Agent {
         return { messages, content: response.content, turns: turn, ...(lastUsage ? { usage: lastUsage } : {}) };
       }
 
-      for (const call of response.toolCalls) {
-        if (!call || typeof call.id !== "string" || typeof call.name !== "string") {
-          throw new TypeError("Model client returned an invalid tool call.");
-        }
-      }
       // Schedule the turn's calls: parallel calls batch up to the concurrency
       // limit, exclusive calls run alone as a barrier. Results stay in call
       // order regardless of completion order.
-      const results = await this.runToolCalls(response.toolCalls);
+      const results = await this.runToolCalls(response.toolCalls, turn);
       response.toolCalls.forEach((call, index) => {
         const { output, failed } = results[index];
         const toolMessage: ChatMessage = {
@@ -208,12 +211,13 @@ export class Agent {
   /** Execute one turn's tool calls under the concurrency/fence schedule. */
   private async runToolCalls(
     calls: readonly ModelToolCall[],
+    turn: number,
   ): Promise<Array<{ output: unknown; failed: boolean }>> {
     const results: Array<{ output: unknown; failed: boolean }> = new Array(calls.length);
     let index = 0;
     while (index < calls.length) {
       if (this.tools.get(calls[index].name)?.concurrency === "exclusive") {
-        results[index] = await this.invokeTool(calls[index]);
+        results[index] = await this.invokeTool(calls[index], turn);
         index += 1;
         continue;
       }
@@ -228,7 +232,7 @@ export class Agent {
           const at = cursor;
           cursor += 1;
           if (at >= batch.length) return;
-          results[batch[at]] = await this.invokeTool(calls[batch[at]]);
+          results[batch[at]] = await this.invokeTool(calls[batch[at]], turn);
         }
       });
       await Promise.all(workers);
@@ -236,7 +240,13 @@ export class Agent {
     return results;
   }
 
-  private async invokeTool(call: ModelToolCall): Promise<{ output: unknown; failed: boolean }> {
+  private async invokeTool(call: ModelToolCall, turn: number): Promise<{ output: unknown; failed: boolean }> {
+    this.onEvent?.({
+      type: "tool_call",
+      turn,
+      message: { role: "assistant", content: "", toolCalls: [call] },
+      toolName: call.name,
+    });
     try {
       const output = await this.tools.call(call.name, call.arguments, this.approvalHandler(), this.accessMode);
       return { output, failed: false };

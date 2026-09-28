@@ -19,8 +19,10 @@ import {
 import {
   recordAgentEvent,
   recordModelCall,
+  repairInterruptedToolCalls,
   recordSessionCompaction,
   recordUserMessage,
+  toChatMessages,
   type SessionHandle,
 } from "@ringko-ai/session";
 import type {
@@ -56,6 +58,9 @@ export {
   UnknownToolError,
   access,
   defineTool,
+  estimateMessagesTokens,
+  estimateTokens,
+  estimateToolsTokens,
   executeTool,
   gate,
   isAccessMode,
@@ -148,6 +153,10 @@ export function createRingKo(config: RingKoConfig): RingKo {
   const session = config.session;
   const baseOnEvent = config.onEvent;
   let history: ChatMessage[] = [...(config.history ?? [])];
+  if (session && repairInterruptedToolCalls(session) > 0) {
+    session.flush();
+    history = toChatMessages(session.all());
+  }
   let lastInputTokens: number | undefined;
 
   const compaction = {
@@ -200,11 +209,11 @@ export function createRingKo(config: RingKoConfig): RingKo {
   const onEvent =
     baseOnEvent || session
       ? (event: AgentEvent): void => {
-          baseOnEvent?.(event);
           if (session) {
             recordAgentEvent(session, event);
             session.flush();
           }
+          baseOnEvent?.(event);
         }
       : undefined;
 

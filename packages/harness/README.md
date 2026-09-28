@@ -17,6 +17,11 @@ Missing approval handlers and rejected requests fail closed. Tool code is regist
 by the host application; model-generated tool input cannot choose its own risk
 classification or call an implementation outside the registry.
 
+`Agent.onEvent` emits `model` after a valid model response, `tool_call` just
+before each requested tool enters the registry, and `tool` or `tool_error` after it
+settles. A host that persists events can use `tool_call` as a write barrier:
+if its handler fails, that tool body is not entered.
+
 ## Risk policy
 
 | Operation | Default classification | Approval |

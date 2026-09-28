@@ -43,3 +43,20 @@ for (const meta of store.list()) console.log(meta.id, meta.header.createdAt);
 
 `@ringko-ai/sdk` records a conversation to a session when one is passed to
 `createRingKo({ session })`; `ringko session list` shows stored sessions.
+
+## Tool call recovery
+
+The SDK flushes `assistant/message` after a model response, then flushes a
+separate `tool/call` immediately before each tool can execute. It flushes
+`tool/result` after the tool settles. The assistant event retains the model's
+complete call list for conversation replay; `tool/call` is an audit event and
+does not add a second assistant message.
+
+When a write session is resumed, the SDK appends a failed `tool/result` for
+each assistant call without a recorded result, including calls in older logs
+without `tool/call`. The result says the outcome is unknown: a prior process
+may have completed an external side effect before it stopped. Recovery never
+reruns the tool. The repair is flushed before the next user prompt or tool run.
+
+This log does not yet retain complete model request snapshots, streamed model
+attempts, or explicit turn and step boundaries.

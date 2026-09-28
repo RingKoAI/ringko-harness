@@ -99,9 +99,13 @@ export class SessionStore {
     return SessionHandle.open(this, header, dir, path, events, mode);
   }
 
-  /** Absolute directory of a session, if it exists. */
+  /**
+   * Absolute directory of a session, if it exists. Unlike {@link list}, this
+   * searches every project so a session id remains openable (deep links,
+   * resume) regardless of the store's current `cwd`.
+   */
   findDir(id: string): string | undefined {
-    for (const dir of this.sessionDirs()) {
+    for (const dir of this.collectDirs(false)) {
       try {
         const header = parseHeaderOnly(readFileSync(sessionLogPath(dir), "utf8"));
         if (header?.id === id) return dir;
@@ -120,10 +124,10 @@ export class SessionStore {
     return true;
   }
 
-  /** List every session (header only). */
+  /** List the sessions of this store's workspace (all projects when no `cwd`). */
   list(): SessionMeta[] {
     const metas: SessionMeta[] = [];
-    for (const dir of this.sessionDirs()) {
+    for (const dir of this.collectDirs(true)) {
       const path = sessionLogPath(dir);
       try {
         const text = readFileSync(path, "utf8");
@@ -137,7 +141,7 @@ export class SessionStore {
     return metas.sort((a, b) => b.header.createdAt - a.header.createdAt);
   }
 
-  private sessionDirs(): string[] {
+  private collectDirs(scoped: boolean): string[] {
     const dirs: string[] = [];
     let projects: string[];
     try {
@@ -147,8 +151,9 @@ export class SessionStore {
     } catch {
       return dirs;
     }
-    // A cwd-scoped store only lists the sessions grouped under its workspace.
-    const target = this.cwd !== undefined ? projectDirName(this.cwd) : undefined;
+    // Scoped listings (list) stay within the workspace; unscoped flips (open by
+    // id) search every project so deep links resolve across workspaces.
+    const target = scoped && this.cwd !== undefined ? projectDirName(this.cwd) : undefined;
     for (const project of projects) {
       if (!project.startsWith("--") && project !== NO_CWD_DIR_NAME) continue;
       if (target !== undefined && project !== target) continue;
@@ -251,22 +256,24 @@ export class SessionHandle {
     this.assertOpen();
     if (this.mode !== "write") throw new Error("Session handle is read-only.");
     const appended: SessionEvent[] = [];
+    const lines: string[] = [];
     for (const input of inputs) {
       if (typeof input.type !== "string" || input.type.length === 0) {
         throw new TypeError("Session event type must be a non-empty string.");
       }
       const event: SessionEvent = {
         type: input.type,
-        seq: this.seq,
+        seq: this.seq + appended.length,
         time: input.time ?? Date.now(),
         ...(input.data !== undefined ? { data: input.data } : {}),
         ...(input.ignorable ? { ignorable: true } : {}),
       };
-      this.seq += 1;
-      this.events.push(event);
-      this.buffer.push(serializeEvent(event));
+      lines.push(serializeEvent(event));
       appended.push(event);
     }
+    this.seq += appended.length;
+    this.events.push(...appended);
+    this.buffer.push(...lines);
     return appended;
   }
 

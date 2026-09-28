@@ -79,6 +79,22 @@ describe("SessionStore", () => {
     reader.close();
   });
 
+  it("does not advance sequence when a batch cannot be serialized", () => {
+    const session = store().create({ id: "invalid-batch" });
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(() => session.append([
+      { type: "valid", data: { value: 1 } },
+      { type: "invalid", data: circular },
+    ])).toThrow();
+    expect(session.all()).toHaveLength(0);
+    session.appendEvent("valid", { value: 2 });
+    session.close();
+    expect(store().open("invalid-batch", "read").all()).toMatchObject([
+      { type: "valid", seq: 0, data: { value: 2 } },
+    ]);
+  });
+
   it("ignores a torn trailing write", () => {
     const session = store().create({ id: "s5" });
     session.appendEvent("user/message", { text: "ok" });

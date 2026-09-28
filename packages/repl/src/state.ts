@@ -25,6 +25,7 @@ export function noticeItem(text: string): ReplItem {
 
 /** Map one harness agent event to zero or more display items. */
 export function agentEventToItems(event: AgentEvent): ReplItem[] {
+  if (event.type === "tool_call") return [];
   if (event.type === "model") {
     const items: ReplItem[] = [];
     if (event.message.reasoning) items.push({ id: nextId(), kind: "thinking", text: event.message.reasoning });

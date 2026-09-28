@@ -6,6 +6,7 @@ import type { SessionEvent } from "./types.ts";
 export const TRANSCRIPT_EVENT = {
   user: "user/message",
   assistant: "assistant/message",
+  toolCall: "tool/call",
   tool: "tool/result",
   model: "session/model",
   modelCall: "model/call",
@@ -45,6 +46,16 @@ export function recordToolResult(
   failed: boolean,
 ): SessionEvent {
   return handle.appendEvent(TRANSCRIPT_EVENT.tool, { turn, toolCallId, name, content, failed });
+}
+
+/** Record the call immediately before the tool can execute. */
+export function recordToolCall(handle: HandleLike, turn: number, call: ModelToolCall): SessionEvent {
+  return handle.appendEvent(TRANSCRIPT_EVENT.toolCall, {
+    turn,
+    toolCallId: call.id,
+    name: call.name,
+    arguments: call.arguments,
+  });
 }
 
 /** Record the session's selected model (`"<provider>/<model>"`). */
@@ -122,6 +133,11 @@ export function recordAgentEvent(handle: HandleLike, event: AgentEvent): Session
   if (event.type === "model") {
     return recordAssistantMessage(handle, event.turn, event.message.content, event.message.toolCalls ?? []);
   }
+  if (event.type === "tool_call") {
+    const call = event.message.toolCalls?.[0];
+    if (!call) throw new TypeError("Tool call event is missing its call.");
+    return recordToolCall(handle, event.turn, call);
+  }
   return recordToolResult(
     handle,
     event.turn,
@@ -130,6 +146,33 @@ export function recordAgentEvent(handle: HandleLike, event: AgentEvent): Session
     event.message.content,
     event.type === "tool_error",
   );
+}
+
+/** Mark calls left without a result by an interrupted process as unknown. */
+export function repairInterruptedToolCalls(handle: HandleLike & { all(): readonly SessionEvent[] }): number {
+  const pending = new Map<string, { turn: number; name: string }>();
+  for (const event of handle.all()) {
+    const data = asRecord(event.data);
+    if (!data) continue;
+    if (event.type === TRANSCRIPT_EVENT.assistant) {
+      for (const call of parseToolCalls(data.toolCalls)) {
+        pending.set(call.id, { turn: typeof data.turn === "number" ? data.turn : 0, name: call.name });
+      }
+    } else if (event.type === TRANSCRIPT_EVENT.tool) {
+      if (typeof data.toolCallId === "string") pending.delete(data.toolCallId);
+    }
+  }
+  for (const [id, call] of pending) {
+    recordToolResult(
+      handle,
+      call.turn,
+      id,
+      call.name,
+      "Tool outcome unknown after interruption. Check the external state before retrying an operation with side effects.",
+      true,
+    );
+  }
+  return pending.size;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
