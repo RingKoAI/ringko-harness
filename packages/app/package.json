@@ -9,7 +9,8 @@
   },
   "scripts": {
     "start": "bun src/main.ts",
-    "serve": "bun src/main.ts"
+    "serve": "bun src/main.ts",
+    "test": "bun test tests"
   },
   "dependencies": {
     "@ringko-ai/auth": "workspace:*",
