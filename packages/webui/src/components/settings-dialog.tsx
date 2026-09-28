@@ -10,7 +10,7 @@ export function SettingsDialog({ children }: { children: ReactNode }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="h-[min(34rem,calc(100vh-6rem))] w-[46rem] max-w-[calc(100vw-1.5rem)] gap-0 overflow-hidden p-0 sm:max-w-[46rem]">
+      <DialogContent className="h-[min(52rem,calc(100dvh-2rem))] w-[calc(100vw-2rem)]! max-w-[72rem]! gap-0 overflow-hidden p-0 sm:max-w-[72rem]!">
         <DialogTitle className="sr-only">{t('settings.title')}</DialogTitle>
         <SettingsPanel page={page} onNavigate={setPage} />
       </DialogContent>

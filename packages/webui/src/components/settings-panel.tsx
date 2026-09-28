@@ -197,26 +197,27 @@ export function SettingsPanel({
     )
 
   return (
-    <div className="flex h-full min-h-0">
-      <nav className="flex w-40 shrink-0 flex-col gap-1 overflow-y-auto border-r p-2">
+    <div className="flex h-full min-h-0 min-w-0 flex-col sm:flex-row">
+      <nav aria-label={t('settings.title')} className="flex shrink-0 gap-1 overflow-x-auto border-b p-2 pr-12 sm:w-44 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:border-r sm:border-b-0 sm:pr-2">
         {PAGES.map((entry) => (
           <Button
             key={entry.slug}
             variant="ghost"
             size="sm"
-            className={cn('justify-start', active === entry.slug && 'bg-accent text-accent-foreground')}
+            aria-current={active === entry.slug ? 'page' : undefined}
+            className={cn('shrink-0 justify-start', active === entry.slug && 'bg-accent text-accent-foreground')}
             onClick={() => onNavigate(entry.slug)}
           >
             {t(entry.label)}
           </Button>
         ))}
       </nav>
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex h-10 shrink-0 items-center border-b px-4 text-sm font-medium">
           {t('settings.title')}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <div className="mx-auto max-w-2xl">{content}</div>
+          <div className="mx-auto w-full max-w-4xl">{content}</div>
         </div>
       </div>
     </div>
