@@ -59,6 +59,7 @@ function parseGrep(value: unknown): GrepInput {
 export function createGrepTool(workspace: Workspace): ToolDefinition<GrepInput, GrepOutput> {
   return defineTool<GrepInput, GrepOutput>({
     name: "grep",
+    taskAccess: "read",
     description:
       "Search file contents with a JavaScript regular expression. Optionally restrict files with `glob`. External targets require approval.",
     inputSchema: {
@@ -80,9 +81,9 @@ export function createGrepTool(workspace: Workspace): ToolDefinition<GrepInput, 
         ? { kind: "workspace_file", reason: `Grep ${target.relative}.`, target: target.absolute }
         : { kind: "external_file", reason: `Grep outside the workspace: ${target.absolute}.`, target: target.absolute };
     },
-    async execute({ pattern, path, glob, case_insensitive, head_limit }) {
+    async execute({ pattern, path, glob, case_insensitive, head_limit }, context) {
       const target = workspace.resolve(path ?? ".");
-      const limit = head_limit ?? MAX_MATCHES;
+      const limit = Math.min(head_limit ?? MAX_MATCHES, MAX_MATCHES);
       let regex: RegExp;
       try {
         regex = new RegExp(pattern, case_insensitive ? "i" : "");
@@ -93,6 +94,7 @@ export function createGrepTool(workspace: Workspace): ToolDefinition<GrepInput, 
       const matches: GrepMatch[] = [];
       let truncated = false;
       for await (const file of new Bun.Glob(glob ?? "**/*").scan({ cwd: target.absolute, dot: false })) {
+        context?.signal?.throwIfAborted();
         if (matches.length >= limit) {
           truncated = true;
           break;
@@ -100,11 +102,12 @@ export function createGrepTool(workspace: Workspace): ToolDefinition<GrepInput, 
         const absolute = `${target.absolute}/${file}`;
         let text: string;
         try {
-          const raw = await readFile(absolute, "utf8");
+          const raw = await readFile(absolute, { encoding: "utf8", signal: context?.signal });
           if (raw.length > MAX_FILE_BYTES) continue;
           if (raw.includes("\u0000")) continue; // skip binary
           text = raw;
         } catch {
+          context?.signal?.throwIfAborted();
           continue;
         }
         const lines = text.split("\n");

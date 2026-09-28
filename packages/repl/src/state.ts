@@ -1,5 +1,6 @@
 // Pure REPL state helpers (no terminal dependency, unit-testable).
-import type { AgentEvent } from "@ringko-ai/sdk";
+import type { AgentEvent, ChatMessage } from "@ringko-ai/sdk";
+import type { SessionEvent } from "@ringko-ai/session";
 
 export interface ReplItem {
   id: number;
@@ -21,6 +22,21 @@ export function userItem(text: string): ReplItem {
 
 export function noticeItem(text: string): ReplItem {
   return { id: nextId(), kind: "notice", text };
+}
+
+/** Restore visible messages as well as the model's context on session resume. */
+export function messagesToItems(messages: readonly ChatMessage[], events: readonly SessionEvent[] = []): ReplItem[] {
+  const failedCalls = new Set(events.filter(event => event.type === "tool/result")
+    .flatMap(event => {
+      const data = event.data as { failed?: unknown; toolCallId?: unknown } | null;
+      return data?.failed === true && typeof data.toolCallId === "string" ? [data.toolCallId] : [];
+    }));
+  return messages.flatMap(message => {
+    if (message.role === "user") return [userItem(message.content)];
+    if (message.role === "assistant") return [{ id: nextId(), kind: "assistant" as const, text: message.content }];
+    if (message.role === "tool") return [{ id: nextId(), kind: "tool" as const, text: message.content, toolName: message.name, failed: message.toolCallId ? failedCalls.has(message.toolCallId) : false }];
+    return [];
+  });
 }
 
 /** Map one harness agent event to zero or more display items. */

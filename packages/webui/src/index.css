@@ -141,3 +141,20 @@ body {
     @apply font-sans;
   }
 }
+
+/* Shiki dual-theme code (defaultColor: false -> --shiki-light/--shiki-dark). */
+.shiki-host .shiki,
+.shiki-host pre.shiki {
+  color: var(--shiki-light);
+  background-color: transparent;
+}
+.shiki-host .shiki span {
+  color: var(--shiki-light);
+}
+.dark .shiki-host .shiki,
+.dark .shiki-host pre.shiki {
+  color: var(--shiki-dark);
+}
+.dark .shiki-host .shiki span {
+  color: var(--shiki-dark);
+}

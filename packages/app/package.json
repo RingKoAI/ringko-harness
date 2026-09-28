@@ -12,11 +12,15 @@
     "serve": "bun src/main.ts"
   },
   "dependencies": {
+    "@ringko-ai/auth": "workspace:*",
     "@ringko-ai/config": "workspace:*",
+    "@ringko-ai/mcp": "workspace:*",
     "@ringko-ai/providers": "workspace:*",
+    "@ringko-ai/runtime": "workspace:*",
     "@ringko-ai/sdk": "workspace:*",
     "@ringko-ai/session": "workspace:*",
     "@ringko-ai/tools": "workspace:*",
-    "@ringko-ai/webui": "workspace:*"
+    "@ringko-ai/webui": "workspace:*",
+    "@ringko-ai/workflow": "workspace:*"
   }
 }

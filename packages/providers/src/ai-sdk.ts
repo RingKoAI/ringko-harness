@@ -6,6 +6,7 @@
 import {
   generateText,
   jsonSchema,
+  streamText,
   tool,
   type JSONValue,
   type LanguageModel,
@@ -13,7 +14,7 @@ import {
   type ToolCallPart,
   type ToolResultPart,
 } from "ai";
-import type { ChatMessage, ModelClient, ModelToolCall, ModelTurn, ToolMetadata } from "@ringko-ai/harness";
+import type { ChatMessage, ModelClient, ModelToolCall, ModelTurn, ReasoningDetail, ToolMetadata } from "@ringko-ai/harness";
 
 export interface AiSdkModelOptions {
   /** System instruction applied to every request. */
@@ -26,11 +27,46 @@ export interface AiSdkModelOptions {
   provider?: string;
   /** Reasoning/thinking depth: "off" | "low" | "high" | "max". */
   thinking?: string;
+  /** Stable cache key for provider-side prompt caching (OpenAI family). */
+  cacheKey?: string;
+  /**
+   * Use the streaming transport. Required by backends that only accept
+   * `stream: true` (e.g. the Codex `/responses` endpoint); the client still
+   * resolves to a single completion.
+   */
+  stream?: boolean;
 }
 
 interface TextPart {
   type: "text";
   text: string;
+}
+
+interface ReasoningPart {
+  type: "reasoning";
+  text: string;
+  providerOptions?: Record<string, Record<string, JSONValue>>;
+}
+
+/** Narrow an unknown value to the provider-options record carried by a reasoning block. */
+function isProviderOptions(value: unknown): value is Record<string, Record<string, JSONValue>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Keep the provider reasoning blocks (text + provider options) for verbatim replay. */
+function toReasoningDetails(value: unknown): ReasoningDetail[] {
+  if (!Array.isArray(value)) return [];
+  const out: ReasoningDetail[] = [];
+  for (const part of value) {
+    if (typeof part !== "object" || part === null) continue;
+    const record = part as { type?: unknown; text?: unknown; providerOptions?: unknown };
+    if (record.type !== "reasoning" || typeof record.text !== "string") continue;
+    out.push({
+      text: record.text,
+      ...(isProviderOptions(record.providerOptions) ? { providerOptions: record.providerOptions } : {}),
+    });
+  }
+  return out;
 }
 
 function toolResult(toolCallId: string, toolName: string, value: string): ToolResultPart {
@@ -55,7 +91,18 @@ export function toModelMessages(messages: readonly ChatMessage[]): ModelMessage[
         out.push({ role: "user", content: message.content });
         break;
       case "assistant": {
-        const parts: Array<TextPart | ToolCallPart> = [];
+        const parts: Array<TextPart | ReasoningPart | ToolCallPart> = [];
+        if (message.reasoningDetails && message.reasoningDetails.length > 0) {
+          for (const detail of message.reasoningDetails) {
+            parts.push({
+              type: "reasoning",
+              text: detail.text,
+              ...(detail.providerOptions ? { providerOptions: detail.providerOptions as Record<string, Record<string, JSONValue>> } : {}),
+            });
+          }
+        } else if (message.reasoning && message.reasoning.length > 0) {
+          parts.push({ type: "reasoning", text: message.reasoning });
+        }
         if (message.content.length > 0) {
           parts.push({ type: "text", text: message.content });
         }
@@ -181,7 +228,7 @@ function googleThinking(level: string): Record<string, JSONValue> {
 /** Map the thinking depth onto provider options (reasoning effort). */
 function reasoningOptions(options: AiSdkModelOptions): { providerOptions?: ProviderOptions } {
   const level = options.thinking;
-  if (options.provider === "google") {
+  if (options.provider === "google" || options.provider === "google-gemini-cli") {
     if (!level) return {};
     return { providerOptions: { google: { thinkingConfig: googleThinking(level) } } };
   }
@@ -190,21 +237,114 @@ function reasoningOptions(options: AiSdkModelOptions): { providerOptions?: Provi
   return { providerOptions: { [key]: { reasoningEffort: level } } };
 }
 
+/** Provider-side prompt caching: Anthropic `cache_control`, OpenAI `prompt_cache_key`. */
+function cacheOptions(options: AiSdkModelOptions): { providerOptions?: ProviderOptions } {
+  if (options.provider === "anthropic" || options.provider === "anthropic-oauth") {
+    return { providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } } };
+  }
+  if ((options.provider === "openai" || options.provider === "openai-oauth") && options.cacheKey) {
+    return { providerOptions: { openai: { promptCacheKey: options.cacheKey } } };
+  }
+  return {};
+}
+
+/** Merge reasoning + caching options (the same provider key is deep-merged). */
+function providerOptionsFor(options: AiSdkModelOptions): { providerOptions?: ProviderOptions } {
+  const merged: ProviderOptions = {};
+  for (const source of [reasoningOptions(options).providerOptions, cacheOptions(options).providerOptions]) {
+    if (!source) continue;
+    for (const [provider, values] of Object.entries(source)) merged[provider] = { ...(merged[provider] ?? {}), ...values };
+  }
+  return Object.keys(merged).length > 0 ? { providerOptions: merged } : {};
+}
+
+/** Shape both `generateText` and `streamText` expose for one completed call. */
+interface RawToolCall {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+}
+
+/** Normalize a completed call into a harness turn. */
+function toTurn(
+  text: string,
+  calls: readonly RawToolCall[],
+  usage: unknown,
+  reasoning: string,
+  reasoningDetails: readonly ReasoningDetail[],
+): ModelTurn {
+  const toolCalls: ModelToolCall[] = calls.map((call) => ({
+    id: call.toolCallId,
+    name: call.toolName,
+    arguments: call.input,
+  }));
+  const counts = usage as { inputTokens?: unknown; outputTokens?: unknown; inputTokenDetails?: unknown } | undefined;
+  const details = (counts?.inputTokenDetails ?? undefined) as
+    | { cacheReadTokens?: unknown; cacheWriteTokens?: unknown }
+    | undefined;
+  const inputTokens = tokenCount(counts?.inputTokens);
+  const outputTokens = tokenCount(counts?.outputTokens);
+  const cacheReadTokens = tokenCount(details?.cacheReadTokens);
+  const cacheWriteTokens = tokenCount(details?.cacheWriteTokens);
+  return {
+    content: text,
+    toolCalls,
+    ...(reasoning.length > 0 ? { reasoning } : {}),
+    ...(reasoningDetails.length > 0 ? { reasoningDetails } : {}),
+    ...(inputTokens !== undefined || outputTokens !== undefined || cacheReadTokens !== undefined || cacheWriteTokens !== undefined
+      ? {
+          usage: {
+            ...(inputTokens !== undefined ? { inputTokens } : {}),
+            ...(outputTokens !== undefined ? { outputTokens } : {}),
+            ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+            ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 /** Adapt any AI SDK language model into a harness model client. */
 export function createAiSdkModelClient(model: LanguageModel, options: AiSdkModelOptions = {}): ModelClient {
   return async (request) => {
+    // AI SDK v7 accepts system messages through instructions, not the messages array.
+    const instructions = [options.system, ...request.messages.filter(message => message.role === "system").map(message => message.content)].filter((value): value is string => typeof value === "string" && value.length > 0).join("\n\n");
+    const messages = toModelMessages(request.messages.filter(message => message.role !== "system"));
+    const base = {
+      model,
+      messages,
+      ...(request.tools.length > 0 ? { tools: toToolSet(request.tools) } : {}),
+      ...(instructions ? { instructions } : {}),
+      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+      ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
+      ...(request.signal ? { abortSignal: request.signal } : {}),
+      ...providerOptionsFor(options),
+    };
+
+    // Streaming transport: the Codex `/responses` backend rejects `stream: false`.
+    if (options.stream || request.onDelta) {
+      try {
+        const result = streamText(base);
+        for await (const part of result.fullStream) {
+          request.signal?.throwIfAborted();
+          if (part.type === "text-delta") request.onDelta?.({ kind: "text", text: part.text });
+          else if (part.type === "reasoning-delta") request.onDelta?.({ kind: "reasoning", text: part.text });
+          else if (part.type === "error") throw part.error;
+        }
+        const text = await result.text;
+        const calls = await result.toolCalls;
+        const usage = await result.usage;
+        const reasoning = (await result.reasoningText) ?? "";
+        const reasoningDetails = toReasoningDetails(await result.reasoning);
+        return toTurn(text, calls as readonly RawToolCall[], usage, reasoning, reasoningDetails);
+      } catch (error) {
+        throw describeModelError(error);
+      }
+    }
+
     let result;
     try {
-      result = await generateText({
-        model,
-        messages: toModelMessages(request.messages),
-        ...(request.tools.length > 0 ? { tools: toToolSet(request.tools) } : {}),
-        ...(options.system !== undefined ? { system: options.system } : {}),
-        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-        ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
-        ...(request.signal ? { abortSignal: request.signal } : {}),
-        ...reasoningOptions(options),
-      });
+      result = await generateText(base);
     } catch (error) {
       // Some compatible gateways reject an explicit max output token value;
       // retry once without it so the request still succeeds.
@@ -212,12 +352,12 @@ export function createAiSdkModelClient(model: LanguageModel, options: AiSdkModel
         try {
           result = await generateText({
             model,
-            messages: toModelMessages(request.messages),
+            messages,
             ...(request.tools.length > 0 ? { tools: toToolSet(request.tools) } : {}),
-            ...(options.system !== undefined ? { system: options.system } : {}),
+            ...(instructions ? { instructions } : {}),
             ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
             ...(request.signal ? { abortSignal: request.signal } : {}),
-            ...reasoningOptions(options),
+            ...providerOptionsFor(options),
           });
         } catch (retryError) {
           throw describeModelError(retryError);
@@ -227,23 +367,6 @@ export function createAiSdkModelClient(model: LanguageModel, options: AiSdkModel
       }
     }
 
-    const toolCalls: ModelToolCall[] = result.toolCalls.map((call) => ({
-      id: call.toolCallId,
-      name: call.toolName,
-      arguments: call.input,
-    }));
-    const reasoning = result.reasoningText ?? "";
-    const usage = result.usage;
-    const inputTokens = tokenCount(usage?.inputTokens);
-    const outputTokens = tokenCount(usage?.outputTokens);
-    const turn: ModelTurn = {
-      content: result.text,
-      toolCalls,
-      ...(reasoning.length > 0 ? { reasoning } : {}),
-      ...(inputTokens !== undefined || outputTokens !== undefined
-        ? { usage: { ...(inputTokens !== undefined ? { inputTokens } : {}), ...(outputTokens !== undefined ? { outputTokens } : {}) } }
-        : {}),
-    };
-    return turn;
+    return toTurn(result.text, result.toolCalls as readonly RawToolCall[], result.usage, result.reasoningText ?? "", toReasoningDetails(result.reasoning));
   };
 }

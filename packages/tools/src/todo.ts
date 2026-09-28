@@ -29,13 +29,14 @@ export interface TodoOutput {
 }
 
 const STATUSES = new Set<TodoStatus>(["pending", "in_progress", "completed"]);
+export const TODO_LIMITS = Object.freeze({ items: 100, characters: 2048 });
 
 function parseTodos(value: unknown): TodoInput {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError("Expected an object input.");
   }
   const list = (value as Record<string, unknown>).todos;
-  if (!Array.isArray(list)) {
+  if (!Array.isArray(list) || list.length > TODO_LIMITS.items) {
     throw new TypeError("Expected an array 'todos'.");
   }
   const todos: TodoItem[] = list.map((entry, index) => {
@@ -43,9 +44,10 @@ function parseTodos(value: unknown): TodoInput {
       throw new TypeError(`Todo ${index} must be an object.`);
     }
     const record = entry as Record<string, unknown>;
-    if (typeof record.content !== "string" || record.content.trim().length === 0) {
+    if (typeof record.content !== "string" || record.content.trim().length === 0 || record.content.length > TODO_LIMITS.characters) {
       throw new TypeError(`Todo ${index} requires a non-empty 'content'.`);
     }
+    if (record.activeForm !== undefined && (typeof record.activeForm !== "string" || record.activeForm.length > TODO_LIMITS.characters)) throw new TypeError("Invalid todo activeForm.");
     if (typeof record.status !== "string" || !STATUSES.has(record.status as TodoStatus)) {
       throw new TypeError(`Todo ${index} requires a status of pending|in_progress|completed.`);
     }
@@ -59,6 +61,12 @@ function parseTodos(value: unknown): TodoInput {
 }
 
 /** Replace the session todo list. Safe: local state only. */
+export function createTodoReadTool(store: TodoStore): ToolDefinition<Record<string, never>, TodoOutput> {
+  return defineTool({ name: "todoread", taskAccess: "read", description: "Read the current session todo list, including pending, in_progress and completed items.", inputSchema: { type: "object", properties: {}, additionalProperties: false }, parseInput: value => {
+    if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length) throw new TypeError("todoread expects an empty object.");
+    return {};
+  }, assessRisk: () => ({ kind: "safe", reason: "Read session todos." }), execute: () => ({ todos: store.todos.map(todo => ({ ...todo })) }) });
+}
 export function createTodoTool(store: TodoStore): ToolDefinition<TodoInput, TodoOutput> {
   return defineTool<TodoInput, TodoOutput>({
     name: "todowrite",
@@ -90,8 +98,8 @@ export function createTodoTool(store: TodoStore): ToolDefinition<TodoInput, Todo
     },
     execute({ todos }) {
       const next = todos.map((todo) => ({ ...todo }));
+      store.onChange?.(next.map(todo => ({ ...todo })));
       store.todos = next;
-      store.onChange?.(store.todos);
       return { todos: store.todos.map((todo) => ({ ...todo })) };
     },
   });

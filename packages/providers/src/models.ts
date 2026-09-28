@@ -1,7 +1,10 @@
 // Model discovery: query a provider's `/models` endpoint when it has one, and
 // fall back to the maintained catalog (`@ringko-ai/config` `models.json`).
-import { applyProxyEnv, getAuth, knownModels } from "@ringko-ai/config";
-import { CODEX_ORIGINATOR, OPENAI_CODEX_ENDPOINT, codexUserAgent, codexVersion } from "@ringko-ai/auth";
+import { applyProxyEnv, getOAuthAccount, knownModels } from "@ringko-ai/config";
+import { CODEX_ORIGINATOR, OPENAI_CODEX_ENDPOINT, XAI_CLI_CHAT_PROXY_BASE_URL, codexUserAgent, codexVersion } from "@ringko-ai/auth";
+import { COPILOT_AUTH_DOMAIN, COPILOT_CLIENT_HEADERS, GITHUB_API_VERSION } from "./github-copilot/index.ts";
+import { OPENAI_OAUTH_DOMAIN } from "./openai/index.ts";
+import { XAI_OAUTH_DOMAIN } from "./xai/index.ts";
 
 export interface DiscoveredModel {
   id: string;
@@ -9,7 +12,6 @@ export interface DiscoveredModel {
 }
 
 export const COPILOT_MODELS_URL = "https://api.githubcopilot.com/models";
-const GITHUB_API_VERSION = "2026-06-01";
 
 /** Build the Codex model discovery request using the same client identity as inference. */
 export function codexModelsRequest(access: string, accountId?: string): {
@@ -81,7 +83,6 @@ export async function discoverModels(input: {
   providerId?: string;
 }): Promise<DiscoveredModel[]> {
   applyProxyEnv();
-  const auth = (providerId: string) => getAuth(input.providerId ?? providerId);
   try {
     if (input.type === "openai") {
       const base = (input.baseURL ?? "https://api.openai.com/v1").replace(/\/+$/, "");
@@ -93,20 +94,35 @@ export async function discoverModels(input: {
       return await fetchModels(`${base}/models`, input.apiKey ? { authorization: `Bearer ${input.apiKey}` } : {});
     }
     if (input.type === "github-copilot") {
-      const credential = auth("github-copilot");
-      if (credential?.type === "oauth") {
+      const account = getOAuthAccount(COPILOT_AUTH_DOMAIN);
+      if (account) {
         return await fetchModels(COPILOT_MODELS_URL, {
-          authorization: `Bearer ${credential.access}`,
+          authorization: `Bearer ${account.credential.access}`,
           "x-github-api-version": GITHUB_API_VERSION,
+          ...COPILOT_CLIENT_HEADERS,
         });
       }
       return knownModels(input.type);
     }
-    if (input.type === "openai-oauth") {
-      const credential = auth("openai");
-      if (credential?.type === "oauth") {
+    if (input.type === "xai-oauth") {
+      const account = getOAuthAccount(XAI_OAUTH_DOMAIN);
+      if (account) {
         try {
-          const request = codexModelsRequest(credential.access, credential.accountId);
+          return await fetchModels(`${XAI_CLI_CHAT_PROXY_BASE_URL}/models`, {
+            authorization: `Bearer ${account.credential.access}`,
+            "x-xai-token-auth": "xai-grok-cli",
+          });
+        } catch {
+          // fall through to the catalog
+        }
+      }
+      return knownModels(input.type);
+    }
+    if (input.type === "openai-oauth") {
+      const account = getOAuthAccount(OPENAI_OAUTH_DOMAIN);
+      if (account) {
+        try {
+          const request = codexModelsRequest(account.credential.access, account.credential.accountId);
           const live = await fetchModels(request.url, request.headers);
           if (live.length > 0) return live;
         } catch {

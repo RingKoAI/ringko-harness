@@ -32,6 +32,7 @@ export interface ProviderFactoryOptions {
   temperature?: number;
   maxOutputTokens?: number;
   thinking?: string;
+  cacheKey?: string;
 }
 
 export type ProviderFactory = (options: ProviderFactoryOptions) => ModelClient;
@@ -53,6 +54,8 @@ const TYPE_ALIASES: Record<string, string> = {
   copilot: "github-copilot",
   anthropic: "anthropic",
   google: "google",
+  "google-gemini-cli": "google-gemini-cli",
+  "google-oauth": "google-gemini-cli",
   gemini: "google",
   "google-generative-ai": "google",
   "openai-compatible": "openai-compatible",
@@ -79,6 +82,7 @@ export function resolveProviderConfig(selection: ModelSelection | undefined): Pr
   return {
     provider: type,
     model: model.id,
+    cacheKey: `${type}:${model.id}`,
     name: provider.name,
     baseURL,
     // Credentials live in auth.json; provider.json may still carry a key.

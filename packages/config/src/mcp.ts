@@ -3,9 +3,9 @@
 // Files are read from `~/.ringko/.mcp.json` and `~/.agents/.mcp.json` (ringko
 // first). Each is an object with an `mcpServers` map. A missing file is skipped;
 // a present but invalid file is a hard error so misconfiguration is not hidden.
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-import { agentsRoot, mcpPaths, ringkoRoot } from "./paths.ts";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { agentsRoot, findProjectRoot, mcpPaths, projectMcpPaths, ringkoRoot } from "./paths.ts";
 
 export interface McpServerConfig {
   /** stdio transport command. */
@@ -18,10 +18,15 @@ export interface McpServerConfig {
   [key: string]: unknown;
 }
 
+export type McpScope = "project" | "global";
+
 export interface McpServer {
   name: string;
   config: McpServerConfig;
-  source: "ringko" | "agents";
+  /** File the entry came from. */
+  source: "project" | "ringko" | "agents";
+  /** Project-level vs user-level. */
+  scope: McpScope;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -30,49 +35,60 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export interface LoadMcpServersOptions {
   env?: NodeJS.ProcessEnv;
+  /** Workspace used to locate a project root. */
+  cwd?: string;
 }
 
-/** Load and merge MCP servers (ringko-specific entries win on name). */
+/**
+ * Load and merge MCP servers. Project-level entries (`<root>/.mcp.json`,
+ * `<root>/ringko.json`) win, then the user-level `~/.ringko` then `~/.agents`.
+ */
 export function loadMcpServers(options: LoadMcpServersOptions = {}): McpServer[] {
   const env = options.env ?? process.env;
-  const paths = mcpPaths(env);
-  const sources = [ringkoRoot(env), agentsRoot(env)];
+  const cwd = options.cwd ?? process.cwd();
+  const entries: { path: string; source: McpServer["source"]; scope: McpScope }[] = [
+    ...projectMcpPaths(cwd, env).map((path) => ({ path, source: "project" as const, scope: "project" as const })),
+    ...mcpPaths(env).map((path, index) => ({
+      path,
+      source: index === 0 ? ("ringko" as const) : ("agents" as const),
+      scope: "global" as const,
+    })),
+  ];
 
   const found = new Map<string, McpServer>();
-  paths.forEach((path, index) => {
+  for (const entry of entries) {
     let text: string;
     try {
-      text = readFileSync(path, "utf8");
+      text = readFileSync(entry.path, "utf8");
     } catch {
-      return; // missing file: skip
+      continue; // missing file: skip
     }
-    if (text.trim().length === 0) return; // empty placeholder file: skip
+    if (text.trim().length === 0) continue; // empty placeholder file: skip
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
     } catch (error) {
-      throw new Error(`MCP file "${path}" is not valid JSON: ${(error as Error).message}`);
+      throw new Error(`MCP file "${entry.path}" is not valid JSON: ${(error as Error).message}`);
     }
     if (!isRecord(parsed)) {
-      throw new Error(`MCP file "${path}" must be a JSON object.`);
+      throw new Error(`MCP file "${entry.path}" must be a JSON object.`);
     }
     const servers = parsed.mcpServers;
-    if (servers === undefined) return;
+    if (servers === undefined) continue;
     if (!isRecord(servers)) {
-      throw new Error(`MCP file "${path}" field "mcpServers" must be an object.`);
+      throw new Error(`MCP file "${entry.path}" field "mcpServers" must be an object.`);
     }
 
-    const source: McpServer["source"] = path.startsWith(sources[0]) ? "ringko" : "agents";
     for (const [name, config] of Object.entries(servers)) {
       if (!isRecord(config)) {
-        throw new Error(`MCP server "${name}" in "${path}" must be an object.`);
+        throw new Error(`MCP server "${name}" in "${entry.path}" must be an object.`);
       }
       if (!found.has(name)) {
-        found.set(name, { name, config: config as McpServerConfig, source });
+        found.set(name, { name, config: config as McpServerConfig, source: entry.source, scope: entry.scope });
       }
     }
-  });
+  }
 
   return [...found.values()];
 }
@@ -114,4 +130,34 @@ export function saveMcpServers(servers: McpServerMap, env: NodeJS.ProcessEnv = p
     // best effort (e.g. Windows)
   }
   return path;
+}
+
+/**
+ * Write a project's MCP server map. Updates the project's existing `.mcp.json`
+ * when present, otherwise merges `mcpServers` into `<root>/ringko.json`.
+ */
+export function saveProjectMcpServers(
+  cwd: string,
+  servers: McpServerMap,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const root = findProjectRoot(cwd, env);
+  if (!root) throw new Error("No project root found; cannot save project MCP configuration.");
+  const dotMcp = join(root, ".mcp.json");
+  const ringkoJson = join(root, "ringko.json");
+  const useRingkoJson = !existsSync(dotMcp);
+  const target = useRingkoJson ? ringkoJson : dotMcp;
+
+  let existing: Record<string, unknown> = {};
+  if (useRingkoJson) {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(target, "utf8"));
+      if (isRecord(parsed)) existing = parsed;
+    } catch {
+      // new or invalid file: start fresh
+    }
+  }
+  const payload = useRingkoJson ? { ...existing, mcpServers: servers } : { mcpServers: servers };
+  writeFileSync(target, `${JSON.stringify(payload, null, 2)}\n`);
+  return target;
 }

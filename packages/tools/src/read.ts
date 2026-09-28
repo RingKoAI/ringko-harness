@@ -58,6 +58,7 @@ function addLineNumbers(lines: readonly string[], start: number): string {
 export function createReadTool(workspace: Workspace, tracker: FileTracker = new FileTracker()): ToolDefinition<ReadInput, ReadOutput> {
   return defineTool<ReadInput, ReadOutput>({
     name: "read",
+    taskAccess: "read",
     description:
       "Read a UTF-8 text file with line numbers, or list a directory. Targets outside the workspace require approval.",
     inputSchema: {
@@ -77,13 +78,15 @@ export function createReadTool(workspace: Workspace, tracker: FileTracker = new 
         ? { kind: "workspace_file", reason: `Read workspace path ${target.relative}.`, target: target.absolute }
         : { kind: "external_file", reason: `Read outside the workspace: ${target.absolute}.`, target: target.absolute };
     },
-    async execute({ path, offset, limit }) {
+    async execute({ path, offset, limit }, context) {
       const target = workspace.resolve(path);
       const shown = target.insideWorkspace ? target.relative : target.absolute;
       const info = await stat(target.absolute);
+      context?.signal?.throwIfAborted();
 
       if (info.isDirectory()) {
         const all = (await readdir(target.absolute)).sort();
+        context?.signal?.throwIfAborted();
         return {
           path: shown,
           entries: all.slice(0, MAX_ENTRIES),
@@ -92,7 +95,7 @@ export function createReadTool(workspace: Workspace, tracker: FileTracker = new 
       }
 
       const changed = tracker.changedSinceLastRead(target.absolute, info);
-      const raw = await readFile(target.absolute, "utf8");
+      const raw = await readFile(target.absolute, { encoding: "utf8", signal: context?.signal });
       const truncatedByBytes = raw.length > MAX_BYTES;
       const text = truncatedByBytes ? raw.slice(0, MAX_BYTES) : raw;
       const lines = text.split("\n");

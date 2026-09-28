@@ -6,6 +6,19 @@ import {
   type RiskKind,
   type RiskLevel,
 } from "./access.ts";
+import { abortable } from "./cancellation.ts";
+import type { JobManager } from "./jobs.ts";
+
+export interface ToolExecutionContext {
+  signal?: AbortSignal;
+  callId?: string;
+  /** Supplied by the harness, never parsed from model arguments. */
+  requestApproval?: ApprovalHandler;
+  accessMode?: AccessMode;
+  jobs?: JobManager;
+  /** Exact target assessed by the approval gate, for dispatch-time revalidation. */
+  approvedTarget?: string;
+}
 
 export interface ToolRiskAssessment {
   kind: RiskKind;
@@ -20,6 +33,8 @@ export interface ToolApprovalRequest {
   reason: string;
   riskLevel: Exclude<RiskLevel, "none">;
   target?: string;
+  /** Lifetime of this approval (including a delegated task deadline). */
+  signal?: AbortSignal;
 }
 
 export type ApprovalHandler = (request: ToolApprovalRequest) => Promise<boolean>;
@@ -28,12 +43,16 @@ export type ApprovalHandler = (request: ToolApprovalRequest) => Promise<boolean>
 export type ToolConcurrency = "parallel" | "exclusive";
 
 export interface ToolDefinition<Input, Output> {
+  /** Host-owned mutex group spanning approval and execution across background agents. */
+  serialGroup?: string;
   name: string;
   description: string;
   inputSchema: Readonly<Record<string, unknown>>;
   parseInput(value: unknown): Input;
   assessRisk(input: Input): ToolRiskAssessment | Promise<ToolRiskAssessment>;
-  execute(input: Input): Output | Promise<Output>;
+  execute(input: Input, context?: ToolExecutionContext): Output | Promise<Output>;
+  /** Host assertion that the capability may be delegated to file-scoped tasks. */
+  taskAccess?: "read" | "write";
   /**
    * `"exclusive"` tools run alone as a barrier: the scheduler drains every
    * earlier call, runs this one by itself, then continues. Defaults to
@@ -49,6 +68,7 @@ export interface ToolMetadata {
   inputSchema: Readonly<Record<string, unknown>>;
   /** Set by the registry; absent means the default `"parallel"` schedule. */
   concurrency?: ToolConcurrency;
+  taskAccess?: "read" | "write";
 }
 
 /**
@@ -61,7 +81,7 @@ export type AnyToolDefinition = ToolDefinition<any, any>;
 
 type RegisteredTool = {
   metadata: ToolMetadata;
-  invoke(input: unknown, requestApproval?: ApprovalHandler, mode?: AccessMode): Promise<unknown>;
+  invoke(input: unknown, requestApproval?: ApprovalHandler, mode?: AccessMode, context?: ToolExecutionContext): Promise<unknown>;
 };
 
 const RISK_KINDS = new Set<RiskKind>([
@@ -107,13 +127,15 @@ const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/;
 const CONCURRENCY = new Set<ToolConcurrency>(["parallel", "exclusive"]);
 
 export function validateToolDefinition(tool: ToolDefinition<unknown, unknown>): void {
+  if (!tool || typeof tool !== "object") throw new TypeError("A tool definition is required.");
+  if (tool.serialGroup !== undefined && (typeof tool.serialGroup !== "string" || !tool.serialGroup)) throw new TypeError("Invalid tool serial group.");
+  if (tool.taskAccess !== undefined && tool.taskAccess !== "read" && tool.taskAccess !== "write") {
+    throw new TypeError(`Tool "${tool.name}" has invalid task access.`);
+  }
   if (tool.concurrency !== undefined && !CONCURRENCY.has(tool.concurrency)) {
     throw new TypeError(`Tool "${tool.name}" has an invalid concurrency "${String(tool.concurrency)}".`);
   }
 
-  if (!tool || typeof tool !== "object") {
-    throw new TypeError("A tool definition is required.");
-  }
   if (typeof tool.name !== "string" || !TOOL_NAME_PATTERN.test(tool.name)) {
     throw new TypeError(`Invalid tool name "${String(tool.name)}".`);
   }
@@ -145,14 +167,30 @@ export function defineTool<Input, Output>(tool: ToolDefinition<Input, Output>): 
   });
 }
 
+const serialExecutions = new Map<string, Promise<unknown>>();
 export async function executeTool<Input, Output>(
+  tool: ToolDefinition<Input, Output>, rawInput: unknown, requestApproval?: ApprovalHandler,
+  mode: AccessMode = DEFAULT_ACCESS_MODE, context?: ToolExecutionContext,
+): Promise<Output> {
+  if (!tool?.serialGroup) return executeToolUnlocked(tool, rawInput, requestApproval, mode, context);
+  const key = tool.serialGroup;
+  const pending = (serialExecutions.get(key) ?? Promise.resolve()).then(() => executeToolUnlocked(tool, rawInput, requestApproval, mode, context));
+  const tail = pending.then(() => {}, () => {});
+  serialExecutions.set(key, tail);
+  try { return await abortable(pending, context?.signal); }
+  finally { void tail.then(() => { if (serialExecutions.get(key) === tail) serialExecutions.delete(key); }); }
+}
+async function executeToolUnlocked<Input, Output>(
   tool: ToolDefinition<Input, Output>,
   rawInput: unknown,
   requestApproval?: ApprovalHandler,
   mode: AccessMode = DEFAULT_ACCESS_MODE,
+  context?: ToolExecutionContext,
 ): Promise<Output> {
+  context?.signal?.throwIfAborted();
   const input = tool.parseInput(rawInput);
   const risk = await tool.assessRisk(input);
+  context?.signal?.throwIfAborted();
   if (
     !risk ||
     !RISK_KINDS.has(risk.kind) ||
@@ -179,20 +217,22 @@ export async function executeTool<Input, Output>(
       throw new ApprovalHandlerUnavailableError(tool.name, decision);
     }
 
-    const approved = await requestApproval({
+    const approved = await abortable(requestApproval({
       toolName: tool.name,
       riskKind: risk.kind,
       reason: decision.reason ?? risk.reason,
       riskLevel: decision.riskLevel,
       target: risk.target,
-    });
+      signal: context?.signal,
+    }), context?.signal);
 
     if (approved !== true) {
       throw new ToolApprovalRejectedError(tool.name);
     }
   }
 
-  return tool.execute(input);
+  context?.signal?.throwIfAborted();
+  return tool.execute(input, { ...context, requestApproval, accessMode: mode, approvedTarget: risk.target });
 }
 
 /**
@@ -215,10 +255,11 @@ export class ToolRegistry {
       description: definition.description,
       inputSchema: definition.inputSchema,
       concurrency: definition.concurrency ?? "parallel",
+      ...(definition.taskAccess ? { taskAccess: definition.taskAccess } : {}),
     });
     this.tools.set(definition.name, {
       metadata,
-      invoke: (input, requestApproval, mode) => executeTool(definition, input, requestApproval, mode),
+      invoke: (input, requestApproval, mode, context) => executeTool(definition, input, requestApproval, mode, context),
     });
   }
 
@@ -251,6 +292,11 @@ export class ToolRegistry {
     return this.tools.get(name)?.metadata;
   }
 
+  /** Remove a registered tool (e.g. because a workflow denies it). */
+  unregister(name: string): boolean {
+    return this.tools.delete(name);
+  }
+
   /** Number of registered tools. */
   size(): number {
     return this.tools.size;
@@ -270,11 +316,12 @@ export class ToolRegistry {
     input: unknown,
     requestApproval?: ApprovalHandler,
     mode: AccessMode = DEFAULT_ACCESS_MODE,
+    context?: ToolExecutionContext,
   ): Promise<unknown> {
     const tool = this.tools.get(toolName);
     if (!tool) {
       throw new UnknownToolError(toolName);
     }
-    return tool.invoke(input, requestApproval, mode);
+    return tool.invoke(input, requestApproval, mode, context);
   }
 }

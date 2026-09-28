@@ -1,18 +1,20 @@
 import { createRingKo, access, type ApprovalHandler, type ChatMessage, type RingKo } from "@ringko-ai/sdk";
 import {
   createTodoStore,
-  createTodoTool,
+  registerSessionTools,
   registerNetworkTools,
   registerShellTools,
   registerWorkspaceTools,
 } from "@ringko-ai/tools";
 import {
   applyProxyEnv,
+  configuredModelIds,
   createSkill,
   discoverSkills,
   getApiKey,
-  getAuth,
   getConfigValue,
+  getOAuthAccount,
+  getOAuthDomain,
   loadAuth,
   loadConfig,
   loadMcpServerMap,
@@ -23,23 +25,26 @@ import {
   modelLabel as selectionLabel,
   parseConfigValue,
   providerPath,
-  removeAuth,
+  removeOAuthAccount,
   saveConfig,
   selectModel,
-  setAuth,
+  setApiKey,
   setConfigValue,
+  setDefaultOAuthAccount,
+  setOAuthAccount,
   settingsPath,
   unsetConfigValue,
   upsertProviderModels,
   type RingkoConfig,
 } from "@ringko-ai/config";
-import { loginGitHubCopilot, loginOpenAiBrowser, loginOpenAiDevice, openBrowser } from "@ringko-ai/auth";
+import { loginGoogle, loginAnthropic, loginGitHubCopilot, loginOpenAiBrowser, loginOpenAiDevice, loginXaiDevice, openBrowser } from "@ringko-ai/auth";
 import {
   SessionStore,
   latestSessionModel,
   recordSessionModel,
   sessionModel,
   toChatMessages,
+  sessionTodos,
   type SessionHandle,
 } from "@ringko-ai/session";
 import { discoverProviderModels, loadProviderModel } from "./provider.ts";
@@ -176,9 +181,11 @@ function readConfig(parsed: ParsedArgs, io: CliIo): RingkoConfig | undefined {
   }
 }
 
-function registerTools(ringko: RingKo, config: RingkoConfig, workspace: string): void {
+function registerTools(ringko: RingKo, config: RingkoConfig, workspace: string, session?: SessionHandle): void {
   registerWorkspaceTools(ringko.tools, { workspace });
-  ringko.tools.register(createTodoTool(createTodoStore()));
+  const todos = createTodoStore(items => { if (session) { session.appendEvent("session/todo", { todos: items }); session.flush(); } });
+  todos.todos = session ? sessionTodos(session.all()) : [];
+  registerSessionTools(ringko.tools, { todos, ask: async () => { throw new Error("ask requires an interactive host; use ringko tui or Web chat."); } });
   if (config.capabilities?.network) registerNetworkTools(ringko.tools);
   if (config.capabilities?.shell) registerShellTools(ringko.tools, { cwd: workspace });
 }
@@ -235,12 +242,16 @@ async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
 
   const ringko = createRingKo({
     model,
+    task: true,
+    taskModels: configuredModelIds(config),
+    resolveTaskModel: async id => { const client = await loadProviderModel({ ...config, model: id }); if (typeof client === "string") throw new Error(client); return client; },
     requestApproval: denyApprovals(io),
     session,
     history,
+    ...(config.mode === "approval" || config.mode === "assist" || config.mode === "full" ? { accessMode: config.mode } : {}),
     ...(selection ? { modelId: selection.model.id } : {}),
   });
-  registerTools(ringko, config, workspace);
+  registerTools(ringko, config, workspace, session);
 
   try {
     const result = await ringko.run(prompt);
@@ -307,7 +318,7 @@ async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   return 0;
 }
 
-const KNOWN_PROVIDER_TYPES = new Set(["openai", "openai-oauth", "anthropic", "google", "github-copilot", "openai-compatible"]);
+const KNOWN_PROVIDER_TYPES = new Set(["openai", "openai-oauth", "anthropic", "google", "github-copilot", "xai-oauth", "openai-compatible"]);
 
 /** Discover a provider's models (live or catalog) and persist them to provider.json. */
 async function syncModels(providerName: string, fallbackType: string, io: CliIo): Promise<number> {
@@ -321,13 +332,13 @@ async function syncModels(providerName: string, fallbackType: string, io: CliIo)
   const provider = (config.providers ?? []).find((entry) => entry.name === providerName);
   // Infer an OAuth provider type when the provider is not yet in provider.json.
   const oauthType =
-    getAuth(providerName)?.type === "oauth"
-      ? providerName === "openai"
-        ? "openai-oauth"
-        : providerName === "github-copilot"
-          ? "github-copilot"
-          : providerName
-      : undefined;
+    providerName === "github-copilot"
+      ? "github-copilot"
+      : providerName === "xai" || providerName === "grok" || providerName === "xai-oauth"
+        ? "xai-oauth"
+        : providerName === "openai" || providerName === "openai-oauth"
+          ? "openai-oauth"
+          : undefined;
   const knownType = KNOWN_PROVIDER_TYPES.has(providerName) ? providerName : undefined;
   const type = provider?.type ?? provider?.vendor ?? oauthType ?? knownType ?? fallbackType;
   const apiKey = provider?.apiKey ?? getApiKey(providerName);
@@ -373,69 +384,110 @@ async function modelsCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   return syncModels(name, "openai-compatible", io);
 }
 
+function normalizeAuthDomain(value: string): string {
+  if (value === "openai" || value === "chatgpt" || value === "oauth") return "openai-oauth";
+  if (value === "copilot") return "github-copilot";
+  if (value === "xai" || value === "grok" || value === "grok-oauth") return "xai-oauth";
+  if (value === "google" || value === "gemini" || value === "google-oauth") return "google-gemini-cli";
+  if (value === "anthropic" || value === "claude" || value === "claude-oauth") return "anthropic-oauth";
+  return value;
+}
+
 async function authCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
-  const [sub, providerArg, ...flags] = parsed.positionals;
+  const [sub, domainArg, ...flags] = parsed.positionals;
   switch (sub) {
     case undefined:
     case "list":
     case "status": {
-      const entries = Object.entries(loadAuth());
-      if (entries.length === 0) {
-        io.out("no credentials stored.");
-        return 0;
-      }
-      for (const [id, info] of entries) {
-        if (info.type === "oauth") {
-          const expires = new Date(info.expires).toISOString();
-          io.out(`${id}\toauth\taccount=${info.accountId ?? "-"}\texpires=${expires}`);
-        } else {
-          io.out(`${id}\tapikey\tkey=***`);
+      const state = loadAuth();
+      let shown = false;
+      for (const [domain, entry] of Object.entries(state.oauth)) {
+        for (const account of entry.accounts) {
+          shown = true;
+          const label = account.credential.login ?? account.credential.accountId ?? account.id;
+          const isDefault = entry.defaultAccountId === account.id ? " (default)" : "";
+          io.out(`${domain}\t${label}${isDefault}`);
         }
       }
+      for (const id of Object.keys(state.apikeys)) {
+        shown = true;
+        io.out(`${id}\tapikey\tkey=***`);
+      }
+      if (!shown) io.out("no credentials stored.");
       return 0;
     }
     case "set": {
-      const id = providerArg;
+      const id = domainArg;
       const key = flags[0];
       if (!id || !key) {
         io.err("auth set requires <provider> <api-key>.");
         return 2;
       }
-      setAuth(id, { type: "apikey", key });
+      setApiKey(id, key);
       io.out(`stored API key for ${id}.`);
       return 0;
     }
+    case "default": {
+      const domain = normalizeAuthDomain(domainArg ?? "");
+      const accountId = flags[0];
+      if (!domain || !accountId) {
+        io.err("auth default requires <domain> <account-id>.");
+        return 2;
+      }
+      setDefaultOAuthAccount(domain, accountId);
+      io.out(`default account for ${domain} set to ${accountId}.`);
+      return 0;
+    }
     case "logout": {
-      const id = providerArg ?? "openai";
-      removeAuth(id);
-      io.out(`removed credentials for ${id}.`);
+      const domain = normalizeAuthDomain(domainArg ?? "openai");
+      const accountId = flags[0];
+      const entry = getOAuthDomain(domain);
+      const targets = accountId ? entry.accounts.filter((account) => account.id === accountId) : entry.accounts;
+      if (targets.length === 0) {
+        io.out(`no account to remove for ${domain}.`);
+        return 0;
+      }
+      for (const account of targets) removeOAuthAccount(domain, account.id);
+      io.out(`removed ${targets.length} account(s) for ${domain}.`);
       return 0;
     }
     case "login": {
-      const id = providerArg ?? "openai";
-      if (id !== "openai" && id !== "github-copilot") {
-        io.err(`Unsupported OAuth provider "${id}" (supported: openai, github-copilot).`);
+      const domain = normalizeAuthDomain(domainArg ?? "openai");
+      if (domain !== "openai-oauth" && domain !== "github-copilot" && domain !== "xai-oauth" && domain !== "anthropic-oauth" && domain !== "google-gemini-cli") {
+        io.err(`Unsupported OAuth domain "${domain}" (supported: openai-oauth, github-copilot, xai-oauth, anthropic-oauth, google-gemini-cli).`);
         return 2;
       }
       try {
         const credential =
-          id === "github-copilot"
+          domain === "github-copilot"
             ? await loginGitHubCopilot((url, code) => {
                 io.out(`open ${url} and enter code ${code}`);
               })
-            : flags.includes("--device")
-              ? await loginOpenAiDevice((url, code) => {
+            : domain === "xai-oauth"
+              ? await loginXaiDevice((url, code) => {
                   io.out(`open ${url} and enter code ${code}`);
                 })
-              : await loginOpenAiBrowser((url) => {
-                  io.out("open this URL to sign in:");
-                  io.out(url);
-                  openBrowser(url);
-                });
-        setAuth(id, credential);
-        const account = credential.accountId ? ` (account ${credential.accountId})` : "";
-        io.out(`signed in to ${id}${account}.`);
-        await syncModels(id, id === "github-copilot" ? "github-copilot" : "openai-oauth", io);
+              : domain === "google-gemini-cli"
+                ? await loginGoogle(url => { io.out("open this URL to sign in:"); io.out(url); openBrowser(url) }, process.env.GOOGLE_CLOUD_PROJECT)
+              : domain === "anthropic-oauth"
+                ? await loginAnthropic((url) => {
+                    io.out("open this URL to sign in:");
+                    io.out(url);
+                    openBrowser(url);
+                  })
+                : flags.includes("--device")
+                  ? await loginOpenAiDevice((url, code) => {
+                      io.out(`open ${url} and enter code ${code}`);
+                    })
+                  : await loginOpenAiBrowser((url) => {
+                      io.out("open this URL to sign in:");
+                      io.out(url);
+                      openBrowser(url);
+                    });
+        const accountId = credential.accountId ?? credential.login ?? `account-${Date.now().toString(36)}`;
+        setOAuthAccount(domain, { id: accountId, credential, authenticatedAt: Date.now() });
+        io.out(`signed in to ${domain} as ${credential.login ?? accountId}.`);
+        await syncModels(domain === "github-copilot" ? "github-copilot" : domain === "xai-oauth" ? "xai" : domain === "anthropic-oauth" ? "anthropic" : domain === "google-gemini-cli" ? "google-gemini-cli" : "openai", domain, io);
         return 0;
       } catch (error) {
         io.err(error instanceof Error ? error.message : "login failed.");
@@ -641,7 +693,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       const config = readConfig(parsed, io);
       if (!config) return 2;
       const workspace = parsed.workspace ?? config.workspace ?? process.cwd();
-      const ringko = createRingKo({ model: async () => ({ content: "", toolCalls: [] }) });
+      const ringko = createRingKo({ task: true, model: async () => ({ content: "", toolCalls: [] }) });
       registerTools(ringko, config, workspace);
       for (const tool of ringko.tools.list()) io.out(tool.name);
       return 0;

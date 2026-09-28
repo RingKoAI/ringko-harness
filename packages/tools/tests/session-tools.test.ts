@@ -13,7 +13,7 @@ describe("registerSessionTools", () => {
       ask: async () => ({ answers: [{ id: "go", selected: ["Yes"] }] }),
     });
 
-    expect(registry.names()).toEqual(["todowrite", "ask"]);
+    expect(registry.names()).toEqual(["todowrite", "todoread", "ask"]);
     expect(registry.get("todowrite")?.concurrency).toBe("exclusive");
     expect(registry.get("ask")?.concurrency).toBe("exclusive");
 
@@ -22,6 +22,7 @@ describe("registerSessionTools", () => {
     });
     expect(store.todos).toHaveLength(1);
     expect(seen).toEqual(["in_progress"]);
+    expect(await registry.call("todoread", {})).toMatchObject({ todos: [{ content: "ship ask", status: "in_progress" }] });
 
     const answer = await registry.call("ask", {
       questions: [{ id: "go", question: "Ship it?", options: [{ label: "Yes" }] }],
@@ -35,7 +36,7 @@ describe("registerSessionTools", () => {
     const returned = registerSessionTools(registry, { todos: existing });
 
     expect(returned).toBe(existing);
-    expect(registry.names()).toEqual(["todowrite"]);
+    expect(registry.names()).toEqual(["todowrite", "todoread"]);
     expect(registry.has("ask")).toBe(false);
   });
 

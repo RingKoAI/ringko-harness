@@ -37,6 +37,7 @@ function listFrom(source: ModelCatalog, type: string): CatalogModel[] {
 /** Known models for a provider type: curated overrides, else the snapshot. */
 export function knownModels(type: string | undefined): CatalogModel[] {
   if (!type) return [];
+  if (type === "google-gemini-cli" || type === "google-oauth") type = "google";
   const overrides = listFrom(CURATED, type);
   return overrides.length > 0 ? overrides : listFrom(SNAPSHOT, type);
 }

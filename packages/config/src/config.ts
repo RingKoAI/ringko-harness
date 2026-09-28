@@ -49,7 +49,12 @@ export interface RingkoConfig {
     network?: boolean;
     shell?: boolean;
   };
+  /** Legacy alias of `permission` (access mode). */
   mode?: string;
+  /** Access permission: "approval" | "assist" | "full" (independent of the workflow). */
+  permission?: string;
+  /** Active workflow id (see `workflows.json`). */
+  workflow?: string;
   /** Reasoning/thinking depth: "off" | "low" | "high" | "max". */
   thinking?: string;
   /** Whether model reasoning is expanded in the UI (false = collapsed). */
@@ -117,6 +122,8 @@ export function loadConfig(options: LoadConfigOptions = {}): RingkoConfig {
   if (Array.isArray(providerFile.providers)) merged.providers = providerFile.providers as ProviderDefinition[];
   if (typeof providerFile.model === "string") merged.model = providerFile.model;
   if (typeof providerFile.small_model === "string") merged.small_model = providerFile.small_model;
+  // `mode` is the legacy key for the access permission.
+  if (merged.permission === undefined && typeof merged.mode === "string") merged.permission = merged.mode;
   return merged;
 }
 
@@ -133,9 +140,12 @@ function writeJson(path: string, value: Record<string, unknown>): string {
 
 /** Persist the config: providers/selection to `provider.json`, the rest to `settings.local.json`. */
 export function saveConfig(config: RingkoConfig, env: NodeJS.ProcessEnv = process.env): string[] {
-  const { providers, model, small_model, ...settings } = config;
+  const { providers, model, small_model, mode, ...rest } = config;
+  const settings = { ...rest } as Record<string, unknown>;
+  if (settings.permission === undefined && typeof mode === "string") settings.permission = mode;
+  void mode;
   return [
-    writeJson(settingsPath(env), settings as Record<string, unknown>),
+    writeJson(settingsPath(env), settings),
     writeJson(providerPath(env), {
       model: model ?? "",
       small_model: small_model ?? "",
@@ -172,11 +182,14 @@ export function saveProviders(file: ProviderFile, env: NodeJS.ProcessEnv = proce
 
 /** Write `settings.local.json` alone, leaving `provider.json` untouched. */
 export function saveSettings(config: RingkoConfig, env: NodeJS.ProcessEnv = process.env): string {
-  const { providers, model, small_model, ...settings } = config;
+  const { providers, model, small_model, mode, ...rest } = config;
   void providers;
   void model;
   void small_model;
-  return writeJson(settingsPath(env), settings as Record<string, unknown>);
+  const settings = { ...rest } as Record<string, unknown>;
+  if (settings.permission === undefined && typeof mode === "string") settings.permission = mode;
+  void mode;
+  return writeJson(settingsPath(env), settings);
 }
 
 export interface SelectionOverride {

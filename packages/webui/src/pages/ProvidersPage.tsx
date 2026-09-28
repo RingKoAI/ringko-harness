@@ -1,15 +1,16 @@
 import { Plus, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { fetchProviders, saveProviders, type ProviderDefinition, type ProviderFile } from '@/api'
+import { fetchPresets, fetchProviders, saveProviders, type ProviderDefinition, type ProviderFile, type ProviderPreset } from '@/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useI18n } from '@/i18n'
+import { isOAuthProviderType } from '@/lib/oauth'
 import { useApp } from '@/store'
 
-const TYPES = ['openai-compatible', 'openai', 'openai-oauth', 'anthropic', 'google', 'github-copilot']
+const TYPES = ['openai-compatible', 'openai', 'anthropic', 'google']
 
 function emptyProvider(): ProviderDefinition {
   return { name: 'new-provider', type: 'openai-compatible', baseURL: '', apiKey: '', models: [] }
@@ -22,6 +23,8 @@ export function ProvidersPage() {
   const [mode, setMode] = useState<'visual' | 'json'>('visual')
   const [json, setJson] = useState('')
   const [busy, setBusy] = useState(false)
+  const [presets, setPresets] = useState<ProviderPreset[]>([])
+  const [presetId, setPresetId] = useState('')
 
   const load = useCallback(() => {
     fetchProviders()
@@ -36,7 +39,24 @@ export function ProvidersPage() {
     load()
   }, [load])
 
-  const providers = file.providers ?? []
+  useEffect(() => {
+    fetchPresets()
+      .then((value) => setPresets(value.presets))
+      .catch(() => {})
+  }, [])
+
+  function addPreset(): void {
+    const preset = presets.find((entry) => entry.id === presetId)
+    if (!preset) return
+    const provider: ProviderDefinition = { name: preset.id, type: preset.type, models: [] }
+    if (preset.baseURL) provider.baseURL = preset.baseURL
+    setFile((current) => ({ ...current, providers: [...(current.providers ?? []), provider] }))
+    setPresetId('')
+  }
+
+  const providers = (file.providers ?? [])
+    .map((provider, index) => ({ provider, index }))
+    .filter(({ provider }) => !isOAuthProviderType(provider.type ?? provider.vendor))
 
   function patchProvider(index: number, patch: Partial<ProviderDefinition>): void {
     setFile((current) => ({
@@ -101,7 +121,26 @@ export function ProvidersPage() {
           />
         ) : (
           <>
-            {providers.map((provider, index) => (
+            <p className="text-xs text-muted-foreground">{t('settings.oauthHint')}</p>
+            <div className="flex items-center gap-2">
+              <select
+                value={presetId}
+                onChange={(event) => setPresetId(event.target.value)}
+                className="h-9 flex-1 rounded-md border bg-transparent px-2 text-sm"
+              >
+                <option value="">{t('settings.fromPreset')}</option>
+                {presets.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label}
+                    {preset.apiKeyEnv ? ` · ${preset.apiKeyEnv}` : ''}
+                  </option>
+                ))}
+              </select>
+              <Button size="sm" variant="outline" onClick={addPreset} disabled={presetId === ''}>
+                {t('settings.addProvider')}
+              </Button>
+            </div>
+            {providers.map(({ provider, index }) => (
               <div key={index} className="space-y-3 rounded-lg border p-3">
                 <div className="flex items-center gap-2">
                   <Input

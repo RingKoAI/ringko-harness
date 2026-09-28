@@ -36,6 +36,7 @@ function parseGlob(value: unknown): GlobInput {
 export function createGlobTool(workspace: Workspace): ToolDefinition<GlobInput, GlobOutput> {
   return defineTool<GlobInput, GlobOutput>({
     name: "glob",
+    taskAccess: "read",
     description: "Find files matching a glob pattern (e.g. `**/*.ts`). Targets outside the workspace require approval.",
     inputSchema: {
       type: "object",
@@ -50,11 +51,12 @@ export function createGlobTool(workspace: Workspace): ToolDefinition<GlobInput, 
         ? { kind: "workspace_file", reason: `Glob ${target.relative}.`, target: target.absolute }
         : { kind: "external_file", reason: `Glob outside the workspace: ${target.absolute}.`, target: target.absolute };
     },
-    async execute({ pattern, path }) {
+    async execute({ pattern, path }, context) {
       const target = workspace.resolve(path ?? ".");
       const matches: string[] = [];
       let truncated = false;
       for await (const match of new Bun.Glob(pattern).scan({ cwd: target.absolute, dot: false })) {
+        context?.signal?.throwIfAborted();
         if (matches.length >= MAX_RESULTS) {
           truncated = true;
           break;

@@ -1,11 +1,14 @@
-import { ArrowUp, Brain, ListTree, Paperclip, Square, Terminal, User, Wrench, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { Activity, ArrowUp, Brain, Check, Copy, GitBranch, ListTree, MessageSquare, Paperclip, Square, Terminal, ThumbsDown, ThumbsUp, User, Wrench, X } from 'lucide-react'
+import { useEffect, useRef, useState, type SetStateAction } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   compact,
   fetchContext,
+  fetchFeedback,
+  forkSession,
   reload,
+  sendFeedback,
   setUi,
   uploadFile,
   type ServerMessage,
@@ -13,12 +16,19 @@ import {
   type UploadedFile,
 } from '@/api'
 import { AccessPicker } from '@/components/access-picker'
+import { QueuePanel } from '@/components/queue-panel'
+import { WorkspacePanel } from '@/components/workspace-panel'
+import { ModePicker } from '@/components/mode-picker'
 import { ContextRingLabeled } from '@/components/context-ring'
 import { Markdown } from '@/components/markdown'
 import { ModelPicker } from '@/components/model-picker'
 import { ThinkingPicker } from '@/components/thinking-picker'
 import { TodoPanel } from '@/components/todo-panel'
+import { TaskPanel } from '@/components/task-panel'
+import { JobPanel } from '@/components/job-panel'
+import { QuestionPanel } from '@/components/question-panel'
 import { ToolLogSheet } from '@/components/tool-log-sheet'
+import { TrajectoryView } from '@/components/trajectory-view'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -89,14 +99,23 @@ function ToolResult({ message, t }: { message: ServerMessage; t: Translate }) {
 
 function MessageRow({
   message,
+  index,
   showThinking,
   showTools,
+  onBranch,
+  onFeedback,
+  feedback,
 }: {
   message: ServerMessage
+  index: number
   showThinking: boolean
   showTools: boolean
+  onBranch: (index: number) => void
+  onFeedback: (index: number, value: 'up' | 'down') => void
+  feedback?: 'up' | 'down'
 }) {
   const { t } = useI18n()
+  const [copied, setCopied] = useState(false)
   const isUser = message.role === 'user'
   const isTool = message.role === 'tool'
   return (
@@ -139,6 +158,51 @@ function MessageRow({
           )
         ) : null}
         {showTools && message.toolCalls && message.toolCalls.length > 0 ? <ToolCallList calls={message.toolCalls} t={t} /> : null}
+        {!isTool ? (
+          <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+            {!isUser && message.content ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-6"
+                title={copied ? t('message.copied') : t('message.copy')}
+                onClick={() => {
+                  void navigator.clipboard.writeText(message.content)
+                  setCopied(true)
+                  toast.success(t('message.copied'))
+                  setTimeout(() => setCopied(false), 1500)
+                }}
+              >
+                {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+              </Button>
+            ) : null}
+            <Button variant="ghost" size="icon" className="size-6" title={t('message.branch')} onClick={() => onBranch(index)}>
+              <GitBranch className="size-3" />
+            </Button>
+            {!isUser && message.content ? (
+              <>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn('size-6', feedback === 'up' && 'text-primary')}
+                  title={t('message.good')}
+                  onClick={() => onFeedback(index, 'up')}
+                >
+                  <ThumbsUp className="size-3" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn('size-6', feedback === 'down' && 'text-destructive')}
+                  title={t('message.bad')}
+                  onClick={() => onFeedback(index, 'down')}
+                >
+                  <ThumbsDown className="size-3" />
+                </Button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   )
@@ -149,16 +213,43 @@ export function ChatPage() {
   const app = useApp()
   const navigate = useNavigate()
   const { id } = useParams<{ id: string }>()
-  const [draft, setDraft] = useState('')
-  const [attachments, setAttachments] = useState<UploadedFile[]>([])
+  const draft = app.draft
+  const setDraft = app.setDraft
+  const [attachmentDrafts, setAttachmentDrafts] = useState<Record<string, UploadedFile[]>>({})
+  const attachmentKey = app.sessionId ?? 'new'
+  const attachments = attachmentDrafts[attachmentKey] ?? []
+  const setAttachments = (value: SetStateAction<UploadedFile[]>) => setAttachmentDrafts(previous => ({ ...previous, [attachmentKey]: typeof value === 'function' ? value(previous[attachmentKey] ?? []) : value }))
   const [context, setContext] = useState<{ used: number; limit: number } | null>(null)
   const [toolLogOpen, setToolLogOpen] = useState(false)
+  const [workspaceOpen, setWorkspaceOpen] = useState(false)
+  const [view, setView] = useState<'chat' | 'trajectory'>('chat')
+  const [feedback, setFeedback] = useState<Record<number, 'up' | 'down'>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Load the session named by the URL (deep link / refresh).
   useEffect(() => {
-    if (id && id !== app.sessionId) app.openSession(id)
-  }, [id, app.sessionId, app.openSession])
+    if (id) app.openSession(id)
+  }, [id, app.openSession])
+
+  // Load the per-message ratings for the active session.
+  useEffect(() => {
+    const current = app.sessionId
+    if (!current) {
+      setFeedback({})
+      return
+    }
+    let active = true
+    fetchFeedback(current)
+      .then((value) => {
+        if (active) setFeedback(value)
+      })
+      .catch(() => {
+        if (active) setFeedback({})
+      })
+    return () => {
+      active = false
+    }
+  }, [app.sessionId])
 
   // Keep the URL in sync with the active session (after the first message).
   useEffect(() => {
@@ -184,6 +275,7 @@ export function ChatPage() {
 
   async function onFiles(files: FileList | null): Promise<void> {
     if (!files || files.length === 0) return
+    if (files.length + attachments.length > 16) { toast.error(t('upload.limit')); return }
     try {
       const uploaded = await Promise.all(Array.from(files, (file) => uploadFile(file)))
       setAttachments((current) => [...current, ...uploaded])
@@ -194,7 +286,8 @@ export function ChatPage() {
 
   const submit = (): void => {
     const prompt = draft.trim()
-    if (prompt.length === 0 || app.busy) return
+    if (prompt.length === 0) return
+    if (app.busy && (prompt === '/reload' || prompt === '/compact')) { toast.error(t('queue.commandBusy')); return }
     if (prompt === '/reload') {
       setDraft('')
       reload()
@@ -233,13 +326,46 @@ export function ChatPage() {
 
   const showThinking = app.info?.expandThinking ?? false
   const showTools = app.info?.expandTools ?? false
+
+  async function branch(index: number): Promise<void> {
+    const current = app.sessionId
+    if (!current) return
+    try {
+      const { sessionId } = await forkSession(current, index)
+      toast.success(t('message.branched'))
+      navigate(`/${sessionId}`)
+      void app.openSession(sessionId)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  function rate(index: number, value: 'up' | 'down'): void {
+    const current = app.sessionId
+    if (!current) return
+    const next = feedback[index] === value ? null : value
+    setFeedback((previous) => {
+      const copy = { ...previous }
+      if (next) copy[index] = next
+      else delete copy[index]
+      return copy
+    })
+    void sendFeedback(current, index, next).catch((cause: unknown) =>
+      toast.error(cause instanceof Error ? cause.message : String(cause)),
+    )
+  }
   const empty = app.messages.length === 0
   const commandHints =
     draft.startsWith('/') && !draft.includes(' ') ? COMMANDS.filter((command) => command.name.startsWith(draft.slice(1))) : []
 
   return (
     <>
-      <ScrollArea className="min-h-0 flex-1">
+      <div className="flex shrink-0 gap-1 border-b px-3 py-2">
+        <Button size="sm" variant={view === 'chat' ? 'secondary' : 'ghost'} aria-pressed={view === 'chat'} onClick={() => setView('chat')}><MessageSquare />{t('trajectory.chat')}</Button>
+        <Button size="sm" variant={view === 'trajectory' ? 'secondary' : 'ghost'} aria-pressed={view === 'trajectory'} onClick={() => setView('trajectory')}><Activity />{t('trajectory.title')}</Button>
+        <Button size="sm" variant="ghost" onClick={() => setWorkspaceOpen(true)}><ListTree />{t('workspace.title')}</Button>
+      </div>
+      {view === 'trajectory' ? <TrajectoryView key={app.sessionId ?? 'new'} sessionId={app.sessionId} /> : <ScrollArea className="min-h-0 flex-1">
         {empty ? (
           <div className="flex h-full min-h-[60vh] flex-col items-center justify-center gap-6 px-6 text-center">
             <div className="grid size-12 place-items-center rounded-2xl bg-primary text-lg font-semibold text-primary-foreground shadow-sm">
@@ -265,9 +391,24 @@ export function ChatPage() {
           </div>
         ) : (
           <div className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
-            {app.messages.map((message, index) => (
-              <MessageRow key={index} message={message} showThinking={showThinking} showTools={showTools} />
+            {app.messages.map((message, index) => message.role === 'system' ? null : (
+              <MessageRow
+                key={index}
+                message={message}
+                index={index}
+                showThinking={showThinking}
+                showTools={showTools}
+                onBranch={branch}
+                onFeedback={rate}
+                feedback={feedback[index]}
+              />
             ))}
+            <TaskPanel />
+            <JobPanel />
+            {app.partial ? <div aria-live="off" aria-label={t('stream.live')} className="min-w-0">
+              {app.partial.reasoning ? <details open={showThinking} className="mb-3 rounded-lg border p-3"><summary className="cursor-pointer text-sm text-muted-foreground">{t('ui.showThinking')}</summary><div className="mt-2 whitespace-pre-wrap break-words text-sm text-muted-foreground">{app.partial.reasoning}</div></details> : null}
+              <Markdown content={app.partial.content} />
+            </div> : null}
             {app.busy ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <span className="size-2 animate-pulse rounded-full bg-primary" />
@@ -276,10 +417,12 @@ export function ChatPage() {
             ) : null}
           </div>
         )}
-      </ScrollArea>
+      </ScrollArea>}
 
       <div className="shrink-0 border-t bg-background/60 p-3 backdrop-blur sm:p-4">
         <TodoPanel />
+        <QuestionPanel />
+        <QueuePanel key={app.sessionId ?? 'new'} />
         <div className="mx-auto max-w-3xl rounded-2xl border bg-card shadow-sm transition-all focus-within:ring-2 focus-within:ring-ring/40">
           {commandHints.length > 0 ? (
             <div className="flex flex-col gap-0.5 px-2 pt-2">
@@ -330,6 +473,7 @@ export function ChatPage() {
             <div className="flex min-w-0 items-center gap-1">
               <ModelPicker />
               <ThinkingPicker />
+              <ModePicker />
               <AccessPicker />
               <Button
                 variant="ghost"
@@ -386,9 +530,12 @@ export function ChatPage() {
                 return usage ? <ContextRingLabeled used={usage.used} limit={usage.limit} /> : null
               })()}
               {app.busy ? (
+                <>
                 <Button variant="outline" size="icon" className="rounded-full" onClick={app.stop} title={t('composer.stop')}>
                   <Square />
                 </Button>
+                <Button size="icon" className="rounded-full" onClick={submit} disabled={!draft.trim()} title={t('queue.add')} aria-label={t('queue.add')}><ArrowUp /></Button>
+                </>
               ) : (
                 <Button
                   size="icon"
@@ -406,6 +553,7 @@ export function ChatPage() {
         <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-muted-foreground">{t('composer.hint')}</p>
       </div>
       <ToolLogSheet open={toolLogOpen} onOpenChange={setToolLogOpen} sessionId={app.sessionId} busy={app.busy} />
+      {workspaceOpen ? <WorkspacePanel onClose={() => setWorkspaceOpen(false)} /> : null}
     </>
   )
 }

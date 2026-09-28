@@ -39,7 +39,7 @@ describe("discoverSkills", () => {
     writeSkill(join(home, ".ringko"), "alpha", "---\nname: alpha\ndescription: A.\n---\n");
     writeSkill(join(home, ".agents"), "beta", "---\nname: beta\ndescription: B.\n---\n");
 
-    const skills = discoverSkills({ env });
+    const skills = discoverSkills({ env, cwd: home });
     const names = skills.map((skill) => skill.name).sort();
     expect(names).toEqual(["alpha", "beta"]);
     expect(skills.find((skill) => skill.name === "alpha")?.source).toBe("ringko");
@@ -50,19 +50,36 @@ describe("discoverSkills", () => {
     writeSkill(join(home, ".ringko"), "dup", "---\nname: dup\ndescription: from ringko\n---\n");
     writeSkill(join(home, ".agents"), "dup", "---\nname: dup\ndescription: from agents\n---\n");
 
-    const skills = discoverSkills({ env });
+    const skills = discoverSkills({ env, cwd: home });
     expect(skills).toHaveLength(1);
     expect(skills[0].description).toBe("from ringko");
   });
 
   it("falls back to the directory name without frontmatter", () => {
     writeSkill(join(home, ".ringko"), "plain", "# just a body\n");
-    expect(discoverSkills({ env })).toEqual([
-      { name: "plain", description: undefined, dir: join(home, ".ringko", "skills", "plain"), source: "ringko" },
+    expect(discoverSkills({ env, cwd: home })).toEqual([
+      { name: "plain", description: undefined, dir: join(home, ".ringko", "skills", "plain"), source: "ringko", scope: "global" },
     ]);
   });
 
+  it("discovers project-level skills with the project scope", () => {
+    const project = mkdtempSync(join(tmpdir(), "ringko-proj-"));
+    const sub = join(project, "app");
+    mkdirSync(sub, { recursive: true });
+    mkdirSync(join(project, ".git"));
+    const dir = join(project, ".agents", "skills", "proj");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: proj\ndescription: P.\n---\n");
+
+    const skills = discoverSkills({ env, cwd: sub });
+    const proj = skills.find((skill) => skill.name === "proj");
+    expect(proj?.scope).toBe("project");
+    expect(proj?.source).toBe("project");
+
+    rmSync(project, { recursive: true, force: true });
+  });
+
   it("returns an empty list when nothing is installed", () => {
-    expect(discoverSkills({ env })).toEqual([]);
+    expect(discoverSkills({ env, cwd: home })).toEqual([]);
   });
 });

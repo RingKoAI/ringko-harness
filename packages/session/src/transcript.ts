@@ -1,6 +1,6 @@
 // Transcript events: the mapping between the harness agent conversation and
 // session-log events. The log is the source of truth; ChatMessage[] is derived.
-import type { AgentEvent, ChatMessage, ModelToolCall } from "@ringko-ai/harness";
+import type { AgentEvent, ChatMessage, ModelToolCall, ReasoningDetail } from "@ringko-ai/harness";
 import type { SessionEvent } from "./types.ts";
 
 export const TRANSCRIPT_EVENT = {
@@ -14,7 +14,11 @@ export const TRANSCRIPT_EVENT = {
   thinking: "session/thinking",
   archive: "session/archived",
   compaction: "session/compaction",
+  feedback: "session/feedback",
 } as const;
+
+export const FEEDBACK_VALUES = ["up", "down"] as const;
+export type FeedbackValue = (typeof FEEDBACK_VALUES)[number];
 
 interface HandleLike {
   appendEvent(type: string, data?: unknown): SessionEvent;
@@ -29,11 +33,13 @@ export function recordAssistantMessage(
   turn: number,
   content: string,
   toolCalls: readonly ModelToolCall[],
+  reasoningDetails?: readonly ReasoningDetail[],
 ): SessionEvent {
   return handle.appendEvent(TRANSCRIPT_EVENT.assistant, {
     turn,
     content,
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
+    ...(reasoningDetails && reasoningDetails.length > 0 ? { reasoningDetails } : {}),
   });
 }
 
@@ -76,6 +82,24 @@ export function recordSessionTitle(handle: HandleLike, title: string): SessionEv
 /** Record the session's reasoning/thinking depth. */
 export function recordSessionThinking(handle: HandleLike, level: string): SessionEvent {
   return handle.appendEvent(TRANSCRIPT_EVENT.thinking, { level });
+}
+
+/** Record a user's rating for a transcript message (by index); null clears it. */
+export function recordFeedback(handle: HandleLike, index: number, value: FeedbackValue | null): SessionEvent {
+  return handle.appendEvent(TRANSCRIPT_EVENT.feedback, { index, value });
+}
+
+/** The latest rating per transcript message index. */
+export function sessionFeedback(events: readonly SessionEvent[]): Record<number, FeedbackValue> {
+  const result: Record<number, FeedbackValue> = {};
+  for (const event of events) {
+    if (event.type !== TRANSCRIPT_EVENT.feedback) continue;
+    const data = asRecord(event.data);
+    if (!data || typeof data.index !== "number") continue;
+    if (data.value === "up" || data.value === "down") result[data.index] = data.value;
+    else delete result[data.index];
+  }
+  return result;
 }
 
 /** Record whether the session is archived. */
@@ -131,7 +155,7 @@ export function sessionThinking(events: readonly SessionEvent[]): string | undef
 /** Record one harness agent event into the session log. */
 export function recordAgentEvent(handle: HandleLike, event: AgentEvent): SessionEvent {
   if (event.type === "model") {
-    return recordAssistantMessage(handle, event.turn, event.message.content, event.message.toolCalls ?? []);
+    return recordAssistantMessage(handle, event.turn, event.message.content, event.message.toolCalls ?? [], event.message.reasoningDetails);
   }
   if (event.type === "tool_call") {
     const call = event.message.toolCalls?.[0];
@@ -192,6 +216,21 @@ function parseToolCalls(value: unknown): ModelToolCall[] {
   return calls;
 }
 
+function parseReasoningDetails(value: unknown): ReasoningDetail[] {
+  if (!Array.isArray(value)) return [];
+  const details: ReasoningDetail[] = [];
+  for (const item of value) {
+    const record = asRecord(item);
+    if (!record || typeof record.text !== "string") continue;
+    const providerOptions = asRecord(record.providerOptions);
+    details.push({
+      text: record.text,
+      ...(providerOptions ? { providerOptions: providerOptions as Record<string, Record<string, unknown>> } : {}),
+    });
+  }
+  return details;
+}
+
 /** Reconstruct harness chat messages from a session's events. */
 export function toChatMessages(events: readonly SessionEvent[]): ChatMessage[] {
   const messages: ChatMessage[] = [];
@@ -206,14 +245,20 @@ export function toChatMessages(events: readonly SessionEvent[]): ChatMessage[] {
       }
       continue;
     }
-    if (event.type === TRANSCRIPT_EVENT.user) {
+    if (event.type === "session/notification" && typeof data.content === "string") {
+      messages.push({ role: "system", content: data.content });
+    } else if (event.type === TRANSCRIPT_EVENT.user) {
       messages.push({ role: "user", content: typeof data.content === "string" ? data.content : "" });
     } else if (event.type === TRANSCRIPT_EVENT.assistant) {
       const toolCalls = parseToolCalls(data.toolCalls);
+      const reasoningDetails = parseReasoningDetails(data.reasoningDetails);
       messages.push({
         role: "assistant",
         content: typeof data.content === "string" ? data.content : "",
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        ...(reasoningDetails.length > 0
+          ? { reasoningDetails, reasoning: reasoningDetails.map((detail) => detail.text).join("") }
+          : {}),
       });
     } else if (event.type === TRANSCRIPT_EVENT.tool) {
       messages.push({

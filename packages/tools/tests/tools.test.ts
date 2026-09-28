@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ApprovalHandlerUnavailableError, executeTool, type ToolApprovalRequest } from "@ringko-ai/harness";
@@ -24,6 +24,24 @@ afterEach(async () => {
 const never = async (): Promise<boolean> => {
   throw new Error("Safe tools must not request approval.");
 };
+
+it("requires approval for a workspace junction pointing outside and rejects target changes", async () => {
+  const workspaceRoot = join(dir, "workspace"), externalA = join(dir, "a"), externalB = join(dir, "b");
+  await Promise.all([mkdir(workspaceRoot), mkdir(externalA), mkdir(externalB)]);
+  await writeFile(join(externalA, "target.txt"), "original A");
+  await writeFile(join(externalB, "target.txt"), "original B");
+  const link = join(workspaceRoot, "linked");
+  await symlink(externalA, link, process.platform === "win32" ? "junction" : "dir");
+  const tool = createWriteTool(createWorkspace(workspaceRoot));
+  await expect(executeTool(tool, { path: "linked/target.txt", content: "unsafe" })).rejects.toBeInstanceOf(ApprovalHandlerUnavailableError);
+  await expect(executeTool(tool, { path: "linked/target.txt", content: "unsafe" }, async request => {
+    expect(request.riskKind).toBe("external_file");
+    await rm(link); await symlink(externalB, link, process.platform === "win32" ? "junction" : "dir");
+    return true;
+  })).rejects.toThrow("target changed after approval");
+  expect(await readFile(join(externalA, "target.txt"), "utf8")).toBe("original A");
+  expect(await readFile(join(externalB, "target.txt"), "utf8")).toBe("original B");
+});
 
 describe("read", () => {
   it("reads a file with line numbers", async () => {

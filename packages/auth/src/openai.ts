@@ -93,6 +93,13 @@ export function extractAccountId(idToken?: string, accessToken?: string): string
   return undefined;
 }
 
+/** The account email from the id token claims, when present. */
+export function extractEmail(idToken?: string): string | undefined {
+  const claims = decodeJwt(idToken);
+  const email = claims?.email;
+  return typeof email === "string" && email.length > 0 ? email : undefined;
+}
+
 interface TokenResponse {
   id_token?: string;
   access_token?: string;
@@ -104,12 +111,14 @@ function toCredential(tokens: TokenResponse, fallbackRefresh?: string): OAuthCre
   const refresh = tokens.refresh_token ?? fallbackRefresh;
   if (!tokens.access_token || !refresh) throw new Error("OAuth token response was missing tokens.");
   const accountId = extractAccountId(tokens.id_token, tokens.access_token);
+  const login = extractEmail(tokens.id_token);
   return {
     type: "oauth",
     refresh,
     access: tokens.access_token,
     expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
     ...(accountId ? { accountId } : {}),
+    ...(login ? { login } : {}),
   };
 }
 
@@ -229,6 +238,66 @@ export async function loginOpenAiBrowser(onUrl: (url: string) => void): Promise<
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Codex/ChatGPT subscription usage endpoint (see the Codex CLI `wham/usage`). */
+export const OPENAI_CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+
+export interface QuotaTier {
+  /** Window label: `5_hour`, `7_day`, `30_day`, or `<n>_<unit>`. */
+  name: string;
+  /** Used percent (0-100). */
+  utilization: number;
+  /** Epoch milliseconds when the window resets. */
+  resetsAt?: number;
+}
+
+export interface CodexQuota {
+  tiers: QuotaTier[];
+}
+
+interface UsageWindow {
+  used_percent?: number;
+  limit_window_seconds?: number;
+  reset_at?: number;
+}
+
+function windowTierName(seconds: number): string {
+  if (seconds === 18_000) return "5_hour";
+  if (seconds === 604_800) return "7_day";
+  if (seconds === 2_592_000) return "30_day";
+  const hours = seconds / 3600;
+  return hours >= 24 ? `${Math.floor(hours / 24)}_day` : `${Math.floor(hours)}_hour`;
+}
+
+/** Query the ChatGPT/Codex subscription windows for an OAuth access token. */
+export async function queryCodexQuota(access: string, accountId?: string): Promise<CodexQuota> {
+  applyProxyEnv();
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${access}`,
+    "user-agent": "codex-cli",
+    accept: "application/json",
+  };
+  if (accountId) headers["chatgpt-account-id"] = accountId;
+  const response = await fetch(OPENAI_CODEX_USAGE_URL, {
+    headers,
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) throw new Error(`Quota request failed: ${response.status}`);
+  const body = (await response.json()) as {
+    rate_limit?: { primary_window?: UsageWindow; secondary_window?: UsageWindow };
+  };
+  const tiers: QuotaTier[] = [];
+  for (const window of [body.rate_limit?.primary_window, body.rate_limit?.secondary_window]) {
+    if (!window || typeof window.used_percent !== "number") continue;
+    const seconds = typeof window.limit_window_seconds === "number" ? window.limit_window_seconds : 0;
+    tiers.push({
+      name: seconds > 0 ? windowTierName(seconds) : "unknown",
+      utilization: window.used_percent,
+      ...(typeof window.reset_at === "number" ? { resetsAt: window.reset_at * 1000 } : {}),
+    });
+  }
+  return { tiers };
+}
 
 /** Device-code flow (headless); `onCode` receives the verification URL and code. */
 export async function loginOpenAiDevice(onCode: (url: string, code: string) => void): Promise<OAuthCredential> {

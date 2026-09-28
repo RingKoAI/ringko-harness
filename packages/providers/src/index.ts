@@ -5,12 +5,17 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModel } from "ai";
 import type { ModelClient } from "@ringko-ai/harness";
 import { createAiSdkModelClient, type AiSdkModelOptions } from "./ai-sdk.ts";
+import { resolveAnthropicOauthModel } from "./anthropic/index.ts";
 import { resolveGitHubCopilotModel } from "./github-copilot/index.ts";
 import { resolveOpenAiOauthModel } from "./openai/index.ts";
+import { resolveXaiOauthModel } from "./xai/index.ts";
+import { resolveGoogleOauthModel } from "./google/index.ts";
 
 export * from "./ai-sdk.ts";
 export * from "./openai/index.ts";
 export * from "./github-copilot/index.ts";
+export * from "./anthropic/index.ts";
+export * from "./xai/index.ts";
 export * from "./models.ts";
 
 /**
@@ -23,7 +28,10 @@ export type ProviderName =
   | "openai-oauth"
   | "github-copilot"
   | "anthropic"
+  | "anthropic-oauth"
+  | "xai-oauth"
   | "google"
+  | "google-gemini-cli"
   | "openai-compatible";
 
 export interface ProviderClientOptions extends AiSdkModelOptions {
@@ -45,11 +53,15 @@ export function resolveProviderModel(options: ProviderClientOptions): LanguageMo
     case "openai":
       return openai(options.model);
     case "openai-oauth":
-      return resolveOpenAiOauthModel(options.model, options.name);
+      return resolveOpenAiOauthModel(options.model);
     case "github-copilot":
-      return resolveGitHubCopilotModel(options.model, options.name);
+      return resolveGitHubCopilotModel(options.model);
+    case "xai-oauth":
+      return resolveXaiOauthModel(options.model);
     case "anthropic":
       return anthropic(options.model);
+    case "anthropic-oauth":
+      return resolveAnthropicOauthModel(options.model);
     case "google": {
       if (options.apiKey || options.baseURL) {
         const provider = createGoogleGenerativeAI({
@@ -60,6 +72,8 @@ export function resolveProviderModel(options: ProviderClientOptions): LanguageMo
       }
       return google(options.model);
     }
+    case "google-gemini-cli":
+      return resolveGoogleOauthModel(options.model);
     case "openai-compatible": {
       if (!options.baseURL) {
         throw new TypeError('Provider "openai-compatible" requires a baseURL.');
@@ -82,5 +96,10 @@ export function createProviderClient(options: ProviderClientOptions): ModelClien
   if (!options || typeof options.model !== "string" || options.model.trim().length === 0) {
     throw new TypeError("createProviderClient requires a model id.");
   }
-  return createAiSdkModelClient(resolveProviderModel(options), options);
+  // The Codex `/responses` backend only accepts `stream: true`, so the OpenAI
+  // OAuth route uses the streaming transport and resolves one completion.
+  return createAiSdkModelClient(resolveProviderModel(options), {
+    ...options,
+    ...(options.provider === "openai-oauth" ? { stream: true } : {}),
+  });
 }

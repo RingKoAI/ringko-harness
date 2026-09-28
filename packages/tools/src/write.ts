@@ -2,7 +2,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
 import { FileTracker } from "./file-tracker.ts";
-import type { Workspace } from "./workspace.ts";
+import { resolveWriteTarget, type Workspace } from "./workspace.ts";
 
 export interface WriteInput {
   path: string;
@@ -35,8 +35,9 @@ async function exists(path: string): Promise<boolean> {
   try {
     await stat(path);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }
 
@@ -44,6 +45,8 @@ async function exists(path: string): Promise<boolean> {
 export function createWriteTool(workspace: Workspace, tracker: FileTracker = new FileTracker()): ToolDefinition<WriteInput, WriteOutput> {
   return defineTool<WriteInput, WriteOutput>({
     name: "write",
+    serialGroup: `files:${process.platform === "win32" ? workspace.root.toLowerCase() : workspace.root}`,
+    taskAccess: "write",
     concurrency: "exclusive",
     description:
       "Create or overwrite a UTF-8 text file. Overwriting an existing file, or writing outside the workspace, requires approval.",
@@ -55,7 +58,7 @@ export function createWriteTool(workspace: Workspace, tracker: FileTracker = new
     },
     parseInput: parseWrite,
     async assessRisk({ path }) {
-      const target = workspace.resolve(path);
+      const target = await resolveWriteTarget(workspace, path);
       if (!target.insideWorkspace) {
         return { kind: "external_file", reason: `Write outside the workspace: ${target.absolute}.`, target: target.absolute };
       }
@@ -64,10 +67,13 @@ export function createWriteTool(workspace: Workspace, tracker: FileTracker = new
       }
       return { kind: "workspace_write", level: "low", reason: `Create ${target.relative}.`, target: target.absolute };
     },
-    async execute({ path, content }) {
-      const target = workspace.resolve(path);
+    async execute({ path, content }, context) {
+      const target = await resolveWriteTarget(workspace, path);
+      if (context?.approvedTarget && context.approvedTarget !== target.absolute) throw new Error("Write target changed after approval; retry the call.");
       const existed = await exists(target.absolute);
+      context?.signal?.throwIfAborted();
       await mkdir(dirname(target.absolute), { recursive: true });
+      context?.signal?.throwIfAborted();
       await writeFile(target.absolute, content, "utf8");
       tracker.record(target.absolute, await stat(target.absolute));
       return {

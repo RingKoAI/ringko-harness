@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { DirectoryBrowser } from '@/components/directory-browser'
+import { SettingsDialog } from '@/components/settings-dialog'
 import {
   Dialog,
   DialogContent,
@@ -289,6 +290,7 @@ export function Layout() {
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-xs">
                           {session.title ?? t('sidebar.untitled')}
+                          {app.runningSessions.includes(session.id) ? <span className="ml-2 text-primary"> · {t('session.running')}</span> : null}
                           {session.archived ? ` · ${t('session.archived')}` : ''}
                         </span>
                         <span className="block truncate text-[10px] text-muted-foreground">
@@ -339,12 +341,12 @@ export function Layout() {
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarMenuButton asChild isActive={location.pathname.startsWith('/settings')}>
-                <NavLink to="/settings/general">
+              <SettingsDialog>
+                <SidebarMenuButton>
                   <SettingsIcon />
                   <span>{t('nav.settings')}</span>
-                </NavLink>
-              </SidebarMenuButton>
+                </SidebarMenuButton>
+              </SettingsDialog>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>

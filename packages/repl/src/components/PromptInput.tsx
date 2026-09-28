@@ -1,99 +1,109 @@
-import { Box, Text, useApp, useInput } from "ink";
-import TextInput from "ink-text-input";
-import { useEffect, useState } from "react";
-import { filterCommands } from "../commands.ts";
+import { Box, Text, useApp, useInput, usePaste, useStdout } from "ink";
+import { Fragment, useState } from "react";
+import { commandGroup, filterCommands } from "../commands.ts";
+import { edit, editorLines, graphemes, HISTORY_LIMIT, type EditorState } from "../editor.ts";
+import { shortcut, type Shortcut } from "../keybindings.ts";
 import { theme } from "../theme.ts";
+import { truncate } from "../state.ts";
 
 export interface PromptInputProps {
   running: boolean;
+  editor: EditorState;
+  onEdit: (state: EditorState) => void;
+  history: readonly string[];
   onSubmit: (value: string) => void;
+  onShortcut: (action: Shortcut) => void;
+  onInterrupt: () => void;
 }
-
 const MAX_SUGGESTIONS = 6;
+const MAX_EDITOR_LINES = 5;
 
-export function PromptInput({ running, onSubmit }: PromptInputProps) {
+export function PromptInput({ running, editor, onEdit, history, onSubmit, onShortcut, onInterrupt }: PromptInputProps) {
   const { exit } = useApp();
-  const [value, setValue] = useState("");
+  const { stdout } = useStdout();
   const [selected, setSelected] = useState(0);
-
-  const suggestions =
-    value.startsWith("/") && !/\s/.test(value) ? filterCommands(value.slice(1)).slice(0, MAX_SUGGESTIONS) : [];
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
+  const value = editor.text;
+  const maxSuggestions = Math.max(1, Math.min(MAX_SUGGESTIONS, Math.floor(((stdout.rows ?? 24) - 14) / 2)));
+  const width = Math.max(10, (stdout.columns ?? 80) - 6);
+  const suggestions = value.startsWith("/") && !/\s/.test(value) ? filterCommands(value.slice(1)).slice(0, maxSuggestions) : [];
   const active = Math.min(selected, Math.max(0, suggestions.length - 1));
-
-  useEffect(() => {
+  const recent = history.slice(-HISTORY_LIMIT);
+  function change(action: Parameters<typeof edit>[1]) {
+    onEdit(edit(editor, action));
     setSelected(0);
-  }, [value]);
-
-  // Ctrl+C clears the input; pressing it again on an empty input exits.
-  // Ctrl+D exits immediately.
+  }
+  usePaste(text => { change({ type: "insert", text }); });
   useInput((input, key) => {
+    if (key.eventType === "release") return;
     if (key.ctrl && input === "c") {
-      if (value.length > 0) {
-        setValue("");
-        setSelected(0);
-      } else {
-        exit();
-      }
+      if (running) onInterrupt();
+      else { change({ type: "clear" }); setHistoryIndex(null); }
       return;
     }
-    if (key.ctrl && input === "d") exit();
+    if (key.ctrl && input === "d") {
+      if (!running && !value) exit();
+      else if (!running) change({ type: "delete" });
+      return;
+    }
+    if (key.escape) { if (running) onInterrupt(); return; }
+    const action = shortcut(input, key);
+    if (action) { onShortcut(action); return; }
+    if (key.return) {
+      if (key.shift || key.meta) { change({ type: "insert", text: "\n" }); return; }
+      if (running) return;
+      let text = value.trim();
+      if (!text) return;
+      if (suggestions[active]) text = `/${suggestions[active].name}`;
+      change({ type: "clear" }); setHistoryIndex(null); onSubmit(text); return;
+    }
+    if (key.tab) { const chosen = suggestions[active]; if (chosen) change({ type: "replace", text: `/${chosen.name} ` }); return; }
+    if (key.upArrow || key.downArrow) {
+      if (suggestions.length) { setSelected(Math.max(0, Math.min(suggestions.length - 1, active + (key.upArrow ? -1 : 1)))); return; }
+      const chars = graphemes(value);
+      if ((key.upArrow && chars.slice(0, editor.cursor).includes("\n")) || (key.downArrow && chars.slice(editor.cursor).includes("\n"))) {
+        change({ type: key.upArrow ? "up" : "down" }); return;
+      }
+      if (!recent.length) return;
+      if (historyIndex === null && key.downArrow) return;
+      if (historyIndex === null) setDraft(value);
+      const index = Math.max(0, Math.min(recent.length, (historyIndex ?? recent.length) + (key.upArrow ? -1 : 1)));
+      setHistoryIndex(index === recent.length ? null : index);
+      change({ type: "replace", text: recent[index] ?? draft }); return;
+    }
+    if (key.ctrl) {
+      const type = ({ a: "home", e: "end", u: "killStart", k: "killEnd", w: "killWord", b: "left", f: "right" } as const)[input as "a" | "e" | "u" | "k" | "w" | "b" | "f"];
+      if (type) change({ type });
+      return;
+    }
+    if (key.leftArrow) change({ type: "left" });
+    else if (key.rightArrow) change({ type: "right" });
+    else if (key.home) change({ type: "home" });
+    else if (key.end) change({ type: "end" });
+    else if (key.backspace) change({ type: "backspace" });
+    else if (key.delete) change({ type: "delete" });
+    else if (!key.meta && input) change({ type: "insert", text: input });
   });
 
-  useInput(
-    (_input, key) => {
-      if (key.upArrow) {
-        setSelected((current) => Math.max(0, current - 1));
-      } else if (key.downArrow) {
-        setSelected((current) => Math.min(suggestions.length - 1, current + 1));
-      } else if (key.tab) {
-        const chosen = suggestions[active];
-        if (chosen) setValue(`/${chosen.name} `);
-      }
-    },
-    { isActive: suggestions.length > 0 },
-  );
-
-  return (
-    <Box flexDirection="column">
-      {suggestions.length > 0 ? (
-        <Box flexDirection="column" paddingX={1}>
-          {suggestions.map((command, index) => (
-            <Box key={command.name}>
-              <Text
-                color={index === active ? theme.brand : undefined}
-                backgroundColor={index === active ? theme.userBackground : undefined}
-                bold={index === active}
-              >
-                /{command.name}
-              </Text>
-              <Text color={theme.dim}>
-                {"  "}
-                {command.description}
-              </Text>
-            </Box>
-          ))}
-          <Text color={theme.dim}>↑/↓ select · tab complete · enter run</Text>
-        </Box>
-      ) : null}
-      <Box borderStyle="round" borderColor={theme.border} borderLeft={false} borderRight={false}>
-        <Text color={theme.brand}>{"❯ "}</Text>
-        <TextInput
-          value={value}
-          onChange={setValue}
-          placeholder={running ? "working…" : "Type a message, or / for commands"}
-          onSubmit={(submitted) => {
-            if (running) return;
-            let text = submitted.trim();
-            if (text.length === 0) return;
-            if (suggestions.length > 0 && !text.includes(" ")) {
-              const chosen = suggestions[active];
-              if (chosen) text = `/${chosen.name}`;
-            }
-            setValue("");
-            onSubmit(text);
-          }}
-        />
+  const lines = editorLines(editor, (stdout.columns ?? 80) - 6, MAX_EDITOR_LINES);
+  return <Box flexDirection="column" flexShrink={0}>
+    {suggestions.length ? <Box flexDirection="column" paddingX={1}>
+      {suggestions.map((command, index) => <Fragment key={command.name}>
+        {index === 0 || commandGroup(suggestions[index - 1]?.name ?? "") !== commandGroup(command.name) ? <Text color={theme.dim} bold>{commandGroup(command.name)}</Text> : null}
+        <Box>
+        <Text color={index === active ? theme.brand : undefined} bold={index === active}>/{command.name}</Text>
+        <Text color={theme.dim}>  {truncate(command.description, Math.max(1, width - command.name.length - 3))}</Text>
+      </Box></Fragment>)}
+      <Text color={theme.dim}>{truncate("Up/Down select · Tab complete · Enter run", width)}</Text>
+    </Box> : null}
+    <Box borderStyle="round" borderColor={running ? theme.permission : theme.brand} paddingX={1}>
+      <Text color={theme.brand}>{"> "}</Text>
+      <Box flexGrow={1} flexDirection="column">
+        {lines.map((line, index) => <Text key={index}>{line.before}{line.cursor !== undefined ? <Text inverse>{line.cursor}</Text> : null}{line.after}</Text>)}
+        {!value ? <Text color={theme.dim}>{running ? "Working. You can prepare your next message; Esc interrupts." : "Message or /command"}</Text> : null}
       </Box>
     </Box>
-  );
+    <Text color={theme.dim}>{truncate(`${running ? "Esc interrupt" : "Enter send"} · Alt+Enter newline · Up/Down history · Ctrl+L models`, width)}</Text>
+  </Box>;
 }

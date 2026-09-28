@@ -21,6 +21,32 @@ controls to inspect recorded call arguments, results, status, and timestamps.
 Older sessions without separate `tool/call` events remain readable. The log is
 available through `GET /api/sessions/:id/tool-log` in pages of up to 100 calls.
 
+### Delegated tasks
+
+CLI, TUI and Web chat support `task` with `mode: "read"`, `"write"` or `"full"`.
+Write mode auto-approves workspace edits; full mode opens all parent-configured
+capabilities. Children have independent context and may select a configured model.
+Task and shell support background execution, event subscriptions and cancellation;
+completion resumes the parent model with results. `ask` renders questions in TUI/Web;
+`todowrite`/`todoread` persist and restore the session plan. See
+[Task and job tools](docs/TASK-TOOL.md) for limits and permission boundaries.
+
+### Session trajectory
+
+Select **Trajectory** above the chat to inspect recorded user, model, assistant,
+tool, task, compaction, and session events. The sequence strip selects an event; the
+inspector shows its stored data, including failed tool results. Filters and
+search apply to loaded event summaries. The active view polls every three
+seconds and supports loading older events.
+
+`GET /api/sessions/:id/trajectory` requires the same authorization as other
+session endpoints. Pages contain at most 50 events; `before` and `after` are
+exclusive sequence cursors. The browser retains at most 1,000 events and event
+details are capped at 32,768 characters; complete records remain in the session
+JSONL. Tool duration uses recorded call/result timestamps. Model events reflect
+the existing run-level log; per-step token usage and model latency are not yet
+recorded.
+
 ## User-level resources
 
 Configuration, skills, and MCP servers live outside the project, under two roots

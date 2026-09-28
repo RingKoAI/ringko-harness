@@ -6,12 +6,14 @@ import { createGlobTool, type GlobInput, type GlobOutput } from "./glob.ts";
 import { createGrepTool, type GrepInput, type GrepMatch, type GrepOutput } from "./grep.ts";
 import { createReadTool, type ReadInput, type ReadOutput } from "./read.ts";
 import { createShellTool, type ShellInput, type ShellOptions, type ShellOutput } from "./shell.ts";
-import { createTodoStore, createTodoTool, type TodoInput, type TodoItem, type TodoOutput, type TodoStatus, type TodoStore } from "./todo.ts";
+import { createTodoStore, createTodoTool, createTodoReadTool, type TodoInput, type TodoItem, type TodoOutput, type TodoStatus, type TodoStore } from "./todo.ts";
 import { createWebFetchTool, type WebFetchInput, type WebFetchOptions, type WebFetchOutput } from "./webfetch.ts";
 import { createWriteTool, type WriteInput, type WriteOutput } from "./write.ts";
 import { createWorkspace, type ResolvedTarget, type Workspace } from "./workspace.ts";
 
 export { createWorkspace, FileTracker };
+export { AskManager, ASK_LIMITS, validateAskOutput } from "./ask.ts";
+export type { AskEvent } from "./ask.ts";
 export type { FileVersion, ResolvedTarget, Workspace };
 export {
   createAskTool,
@@ -22,6 +24,7 @@ export {
   createShellTool,
   createTodoStore,
   createTodoTool,
+  createTodoReadTool,
   createWebFetchTool,
   createWriteTool,
 };
@@ -100,12 +103,13 @@ export interface SessionToolsOptions {
 }
 
 /**
- * Register the in-session tools: `todowrite`, and `ask` when an answerer is
+ * Register the in-session tools: `todowrite`, `todoread`, and `ask` when an answerer is
  * supplied. Returns the store the host UI can read.
  */
 export function registerSessionTools(registry: ToolRegistry, options: SessionToolsOptions = {}): TodoStore {
   const store = options.todos ?? createTodoStore(options.onTodosChange);
   registry.register(createTodoTool(store));
+  registry.register(createTodoReadTool(store));
   if (options.ask) {
     registry.register(createAskTool(options.ask));
   }

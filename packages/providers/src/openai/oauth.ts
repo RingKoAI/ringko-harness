@@ -4,7 +4,7 @@
 import { randomUUID } from "node:crypto";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
-import { applyProxyEnv, getAuth, setAuth, type OAuthCredential } from "@ringko-ai/config";
+import { applyProxyEnv, getOAuthAccount, updateOAuthCredential, type OAuthCredential } from "@ringko-ai/config";
 import {
   CODEX_ORIGINATOR,
   CODEX_RESIDENCY_HEADER,
@@ -15,7 +15,8 @@ import {
 } from "@ringko-ai/auth";
 import { copyHeaders } from "../fetch-util.ts";
 
-export const OPENAI_OAUTH_PROVIDER_ID = "openai";
+/** Auth domain the ChatGPT/Codex OAuth accounts live under. */
+export const OPENAI_OAUTH_DOMAIN = "openai-oauth";
 const PLACEHOLDER_KEY = "ringko-oauth";
 const REFRESH_SKEW_MS = 60_000;
 const CODEX_RESPONSES_PATH = "/backend-api/codex/responses";
@@ -67,20 +68,20 @@ export function withCodexStore(body: BodyInit | null | undefined): BodyInit | nu
  * adds the Codex CLI identity headers, and rewrites responses requests to the
  * Codex backend. Concurrent refreshes are de-duplicated.
  */
-export function createOpenAiOauthFetch(providerId: string = OPENAI_OAUTH_PROVIDER_ID): typeof fetch {
+export function createOpenAiOauthFetch(accountId?: string): typeof fetch {
   let pending: Promise<OAuthCredential> | null = null;
   const sessionId = randomUUID();
   const send = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     applyProxyEnv();
-    const stored = getAuth(providerId);
-    if (!stored || stored.type !== "oauth") {
-      throw new Error('Not signed in to OpenAI. Run "ringko auth login openai" first.');
+    const account = getOAuthAccount(OPENAI_OAUTH_DOMAIN, accountId);
+    if (!account) {
+      throw new Error('Not signed in to OpenAI. Run "ringko auth login openai-oauth" first.');
     }
-    let credential = stored;
+    let credential = account.credential;
     if (credential.expires <= Date.now() + REFRESH_SKEW_MS) {
       pending ??= refreshOpenAi(credential.refresh)
         .then((next) => {
-          setAuth(providerId, next);
+          updateOAuthCredential(OPENAI_OAUTH_DOMAIN, account.id, next);
           return next;
         })
         .catch((error: unknown) => {
@@ -98,7 +99,12 @@ export function createOpenAiOauthFetch(providerId: string = OPENAI_OAUTH_PROVIDE
     if (credential.accountId) headers.set("chatgpt-account-id", credential.accountId);
     headers.set("originator", CODEX_ORIGINATOR);
     headers.set("user-agent", codexUserAgent());
-    headers.set("session_id", sessionId);
+    // The Codex backend keys on the hyphenated session/thread headers plus the
+    // thread-scoped request id; `session_id` (underscore) is not recognized.
+    headers.set("session-id", sessionId);
+    headers.set("thread-id", sessionId);
+    headers.set("x-client-request-id", sessionId);
+    headers.set("accept", "text/event-stream");
     const residency = extractResidency(credential.access);
     if (residency) headers.set(CODEX_RESIDENCY_HEADER, residency);
 
@@ -112,11 +118,11 @@ export function createOpenAiOauthFetch(providerId: string = OPENAI_OAUTH_PROVIDE
 }
 
 /** Resolve an OpenAI model backed by the ChatGPT OAuth (Codex) endpoint. */
-export function resolveOpenAiOauthModel(model: string, providerId: string = OPENAI_OAUTH_PROVIDER_ID): LanguageModel {
+export function resolveOpenAiOauthModel(model: string, accountId?: string): LanguageModel {
   const client = createOpenAI({
     apiKey: PLACEHOLDER_KEY,
     baseURL: OPENAI_CODEX_ENDPOINT,
-    fetch: createOpenAiOauthFetch(providerId),
+    fetch: createOpenAiOauthFetch(accountId),
   });
   return client.responses(model);
 }

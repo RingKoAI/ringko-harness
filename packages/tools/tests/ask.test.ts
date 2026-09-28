@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { executeTool } from "@ringko-ai/harness";
-import { createAskTool, type AskInput } from "../src/ask.ts";
+import { AskManager, createAskTool, ASK_LIMITS, type AskInput, type AskEvent } from "../src/ask.ts";
 
 const question: AskInput = {
   questions: [
@@ -13,6 +13,34 @@ const question: AskInput = {
 };
 
 describe("ask", () => {
+  it("serializes parent/child questions and keeps invalid answers pending", async () => {
+    const events: AskEvent[] = [];
+    const manager = new AskManager(event => events.push(event));
+    const first = manager.request(question);
+    const second = manager.request(question);
+    expect(events.map(event => event.type)).toEqual(["requested"]);
+    const id = events[0].id;
+    expect(() => manager.respond(id, { answers: [{ id: "cleanup", selected: ["Invalid"] }] })).toThrow("unknown option");
+    expect(events).toHaveLength(1);
+    manager.respond(id, { answers: [{ id: "cleanup", selected: ["Yes"] }] });
+    expect(await first).toMatchObject({ answers: [{ selected: ["Yes"] }] });
+    expect(events.map(event => event.type)).toEqual(["requested", "answered", "requested"]);
+    manager.respond(events[2].id, { answers: [{ id: "cleanup", selected: [], custom: "Use a different scope" }] });
+    expect(await second).toMatchObject({ answers: [{ custom: "Use a different scope" }] });
+  });
+
+  it("cancels queued questions and bounds untrusted prompts and answers", async () => {
+    const events: AskEvent[] = [];
+    const manager = new AskManager(event => events.push(event));
+    const controller = new AbortController();
+    const pending = executeTool(createAskTool(manager.request), question, undefined, "approval", { signal: controller.signal });
+    await Promise.resolve(); controller.abort();
+    await expect(pending).rejects.toThrow();
+    expect(events.at(-1)?.type).toBe("cancelled");
+    const tool = createAskTool(async () => ({ answers: [{ id: "cleanup", selected: [], custom: "x".repeat(ASK_LIMITS.answerCharacters + 1) }] }));
+    await expect(executeTool(tool, question)).rejects.toThrow("custom");
+    await expect(executeTool(tool, { questions: Array.from({ length: 5 }, (_, index) => ({ id: `q${index}`, question: "Which?" })) })).rejects.toThrow();
+  });
   it("returns the handler's answers", async () => {
     const tool = createAskTool(async (input) => {
       expect(input.questions[0]?.id).toBe("cleanup");

@@ -33,6 +33,9 @@ export interface Info {
   auth: { required: boolean };
   access: Access;
   accessMode: AccessMode;
+  permission: AccessMode;
+  mode: { id: string; label: string; description: string | null };
+  workflows: { id: string; label: string; description: string | null }[];
   context: { used: number; limit: number };
   thinking: string | null;
   expandThinking: boolean;
@@ -103,6 +106,27 @@ export interface ToolLogPage {
   total: number;
 }
 
+export type TrajectoryKind = 'user' | 'assistant' | 'model' | 'tool' | 'task' | 'compaction' | 'session'
+export interface TrajectoryRecord {
+  seq: number; time: number; type: string; kind: TrajectoryKind; turn: number | null;
+  label: string; preview: string; details: string; truncated: boolean; failed: boolean; durationMs: number | null;
+}
+export interface TrajectoryPage {
+  records: TrajectoryRecord[]; hasOlder: boolean; hasNewer: boolean; lastSeq: number;
+}
+
+export function fetchTrajectory(id: string, cursor: { before?: number; after?: number } = {}, signal?: AbortSignal): Promise<TrajectoryPage> {
+  const query = new URLSearchParams();
+  if (cursor.before !== undefined) query.set('before', String(cursor.before));
+  if (cursor.after !== undefined) query.set('after', String(cursor.after));
+  return fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/trajectory?${query}`, { headers: authHeaders(), signal })
+    .then(async response => {
+      if (response.status === 401) throw new UnauthorizedError();
+      if (!response.ok) throw new Error(`Trajectory request failed (${response.status}).`);
+      return await response.json() as TrajectoryPage;
+    });
+}
+
 export interface ServerMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
@@ -132,7 +156,19 @@ export interface UploadedFile {
   path: string;
 }
 
+export interface WorkspaceEntry { name: string; path: string; directory: boolean }
+export function fetchWorkspaceFiles(path = ''): Promise<{ path: string; entries: WorkspaceEntry[]; truncated: boolean }> { return getJson(`/api/workspace/files?path=${encodeURIComponent(path)}`) }
+export function fetchWorkspaceFile(path: string): Promise<{ path: string; content: string; binary: boolean; truncated: boolean }> { return getJson(`/api/workspace/file?path=${encodeURIComponent(path)}`) }
+export function fetchWorkspaceDiff(path = ''): Promise<{ path: string; content: string }> { return getJson(`/api/workspace/diff?path=${encodeURIComponent(path)}`) }
+
 export interface ChatHandlers {
+  onDelta?(delta: { kind: 'text' | 'reasoning'; text: string }): void;
+  onJob?(event: JobUpdate): void;
+  onAsk?(event: QuestionRequest): void;
+  onAskClosed?(id: string): void;
+  onTask?(event: TaskUpdate): void;
+  onApprovalClosed?(id: string): void;
+  onSession?(sessionId: string): void;
   onAssistant(message: { content: string; reasoning: string | null; toolCalls: ToolCall[]; turn: number }): void;
   onTool(message: { name: string; content: string; error: boolean; turn: number }): void;
   onApproval(approval: Approval): void;
@@ -142,7 +178,43 @@ export interface ChatHandlers {
   onUnauthorized?(): void;
 }
 
+export interface TaskSummary {
+  taskId: string; parentCallId: string | null; description: string; mode: 'read' | 'write' | 'full'; model?: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'unknown'; startedAt: number; completedAt: number | null;
+  content?: string; reason?: string; activity?: string;
+}
+export interface TaskUpdate {
+  taskId: string; parentCallId: string | null; description: string; mode: 'read' | 'write' | 'full'; model?: string;
+  type: 'started' | 'event' | 'completed' | 'failed' | 'cancelled'; time: number;
+  reason?: string; result?: { content: string };
+  event?: { type: string; toolName?: string; turn: number };
+}
+
+export interface TaskRecord { seq: number; time: number; type: string; data: { event?: { type: string; turn: number; toolName?: string; message?: ServerMessage }; reason?: string; result?: { content: string } } }
+export function fetchTaskDetail(sessionId: string, taskId: string, after = -1): Promise<{ task: TaskSummary; records: TaskRecord[]; cursor: number }> {
+  return getJson(`/api/sessions/${encodeURIComponent(sessionId)}/task-detail?taskId=${encodeURIComponent(taskId)}&after=${after}`)
+}
+
+export async function stopSession(id: string): Promise<void> {
+  const response = await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST', headers: authHeaders() });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok && response.status !== 404) throw new Error(`Stop failed (${response.status}).`);
+}
+
 const BASE = "";
+export interface QuestionRequest { id: string; input: { questions: Array<{ id: string; question: string; header?: string; detail?: string; multiSelect?: boolean; options?: Array<{ label: string; description?: string }> }> } }
+export interface QuestionOutput { answers: Array<{ id: string; selected: string[]; custom?: string }> }
+export interface JobSummary { jobId: string; kind: 'sub' | 'shell'; description: string; status: 'running' | 'completed' | 'failed' | 'cancelled' | 'unknown'; background: boolean; lastSeq: number; result?: unknown; output?: string }
+export interface JobUpdate { jobId: string; kind: 'sub' | 'shell'; seq: number; type: string; truncated: boolean; data: unknown }
+export async function answerQuestion(id: string, output?: QuestionOutput): Promise<void> {
+  const response = await fetch(`${BASE}/api/ask`, { method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }), body: JSON.stringify({ id, ...(output ? { output } : { cancel: true }) }) });
+  if (!response.ok) throw new Error(`Answer failed (${response.status}).`);
+}
+export async function jobAction(sessionId: string, jobId: string, action: 'status' | 'cancel' | 'background'): Promise<JobSummary> {
+  const response = await fetch(`${BASE}/api/sessions/${encodeURIComponent(sessionId)}/jobs`, { method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }), body: JSON.stringify({ jobId, action }) });
+  if (!response.ok) throw new Error(`Job action failed (${response.status}).`);
+  return await response.json() as JobSummary;
+}
 const TOKEN_KEY = "ringko.token";
 
 export class UnauthorizedError extends Error {
@@ -205,11 +277,36 @@ export function fetchContext(id: string): Promise<ContextUsage> {
   return getJson<ContextUsage>(`/api/sessions/${encodeURIComponent(id)}/context`);
 }
 
+export async function forkSession(id: string, index: number): Promise<{ sessionId: string }> {
+  const response = await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/fork`, {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ index }),
+  })
+  if (response.status === 401) throw new UnauthorizedError()
+  if (!response.ok) throw new Error(`Branch failed (${response.status}).`)
+  return (await response.json()) as { sessionId: string }
+}
+
+export function fetchFeedback(id: string): Promise<Record<number, 'up' | 'down'>> {
+  return getJson<Record<number, 'up' | 'down'>>(`/api/sessions/${encodeURIComponent(id)}/feedback`)
+}
+
+export async function sendFeedback(id: string, index: number, value: 'up' | 'down' | null): Promise<void> {
+  const response = await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/feedback`, {
+    method: 'POST',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ index, value }),
+  })
+  if (response.status === 401) throw new UnauthorizedError()
+  if (!response.ok) throw new Error(`Feedback failed (${response.status}).`)
+}
+
 export function fetchSessions(): Promise<SessionMeta[]> {
   return getJson<SessionMeta[]>("/api/sessions");
 }
 
-export function fetchSession(id: string): Promise<{ id: string; messages: ServerMessage[] }> {
+export function fetchSession(id: string): Promise<{ id: string; messages: ServerMessage[]; tasks?: TaskSummary[]; todos?: TodoItem[]; jobs?: JobSummary[] }> {
   return getJson<{ id: string; messages: ServerMessage[] }>(`/api/sessions/${encodeURIComponent(id)}`);
 }
 
@@ -276,7 +373,9 @@ async function projectRequest(init: RequestInit): Promise<ProjectsResponse> {
 export interface McpServerEntry {
   name: string;
   source: string;
+  scope: string;
   kind: string;
+  authenticated: boolean;
   config: Record<string, unknown>;
 }
 
@@ -289,11 +388,59 @@ export function fetchMcp(): Promise<McpPayload> {
   return getJson<McpPayload>("/api/mcp");
 }
 
-export async function saveMcp(servers: Record<string, unknown>): Promise<McpPayload> {
+export interface McpToolInfo {
+  name: string;
+  description: string | null;
+}
+
+export interface McpConnected {
+  servers: { name: string; serverInfo: Record<string, unknown>; tools: McpToolInfo[] }[];
+  errors: { name: string; message: string }[];
+}
+
+export function fetchMcpConnected(): Promise<McpConnected> {
+  return getJson<McpConnected>("/api/mcp/connected");
+}
+
+export async function testMcp(
+  name: string,
+  config: Record<string, unknown>,
+): Promise<{ serverInfo: Record<string, unknown>; tools: McpToolInfo[] }> {
+  const response = await fetch(`${BASE}/api/mcp/test`, {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ name, config }),
+  });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Test failed (${response.status}).`);
+  }
+  return (await response.json()) as { serverInfo: Record<string, unknown>; tools: McpToolInfo[] };
+}
+
+export async function startMcpOAuth(name: string, url: string): Promise<OAuthStart> {
+  const response = await fetch(`${BASE}/api/mcp/oauth`, {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ name, url }),
+  });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `OAuth start failed (${response.status}).`);
+  }
+  return (await response.json()) as OAuthStart;
+}
+
+export async function saveMcp(
+  servers: Record<string, unknown>,
+  scope: "global" | "project" = "global",
+): Promise<McpPayload> {
   const response = await fetch(`${BASE}/api/mcp`, {
     method: "PUT",
     headers: authHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ servers }),
+    body: JSON.stringify({ servers, scope }),
   });
   if (response.status === 401) throw new UnauthorizedError();
   if (!response.ok) {
@@ -307,6 +454,7 @@ export interface SkillEntry {
   name: string;
   description?: string;
   source: string;
+  scope: string;
   dir: string;
 }
 
@@ -406,6 +554,20 @@ export function fetchProviders(): Promise<ProviderFile> {
   return getJson<ProviderFile>("/api/providers");
 }
 
+export interface ProviderPreset {
+  id: string;
+  label: string;
+  type: string;
+  baseURL?: string;
+  apiKeyEnv?: string;
+  auth?: string;
+  docs?: string;
+}
+
+export function fetchPresets(): Promise<{ presets: ProviderPreset[] }> {
+  return getJson<{ presets: ProviderPreset[] }>("/api/presets");
+}
+
 export async function saveProviders(file: ProviderFile): Promise<Info> {
   const response = await fetch(`${BASE}/api/providers`, {
     method: "PUT",
@@ -416,6 +578,116 @@ export async function saveProviders(file: ProviderFile): Promise<Info> {
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || `Save failed (${response.status}).`);
+  }
+  return (await response.json()) as Info;
+}
+
+export interface AuthAccount {
+  id: string;
+  uuid: string;
+  login: string;
+  avatarUrl: string | null;
+  authenticatedAt: number;
+  isDefault: boolean;
+  reauthRequired: boolean;
+}
+
+export interface AuthDomain {
+  domain: string;
+  defaultAccountId: string | null;
+  accounts: AuthAccount[];
+}
+
+export interface AuthStatus {
+  domains: AuthDomain[];
+}
+
+export interface OAuthStart {
+  flowId: string;
+  verificationUrl: string;
+  userCode: string;
+}
+
+export type OAuthFlowStatus = 'pending' | 'success' | 'error';
+
+async function errorFrom(response: Response, fallback: string): Promise<Error> {
+  const body = await response.text().catch(() => '');
+  if (body.length > 0) {
+    try {
+      const parsed = JSON.parse(body) as { error?: unknown };
+      if (typeof parsed.error === 'string') return new Error(parsed.error);
+    } catch {
+      return new Error(body);
+    }
+  }
+  return new Error(fallback);
+}
+
+async function postAuth(path: string, body: unknown, fallback: string): Promise<AuthStatus> {
+  const response = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify(body),
+  });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok) throw await errorFrom(response, fallback);
+  return (await response.json()) as AuthStatus;
+}
+
+export function fetchAuth(): Promise<AuthStatus> {
+  return getJson<AuthStatus>('/api/auth');
+}
+
+export async function startOAuth(domain: string, projectId?: string): Promise<OAuthStart> {
+  const response = await fetch(`${BASE}/api/auth/oauth`, {
+    method: 'POST',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ domain, ...(projectId ? { projectId } : {}) }),
+  });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok) throw await errorFrom(response, `OAuth start failed (${response.status}).`);
+  return (await response.json()) as OAuthStart;
+}
+
+export function fetchOAuthStatus(flowId: string): Promise<{ status: OAuthFlowStatus; error?: string }> {
+  return getJson(`/api/auth/oauth/${encodeURIComponent(flowId)}`);
+}
+
+export interface QuotaTier {
+  name: string;
+  utilization: number;
+  resetsAt?: number;
+}
+
+export interface QuotaResponse {
+  tiers: QuotaTier[];
+  plan?: string;
+}
+
+export function fetchQuota(domain: string, accountId: string): Promise<QuotaResponse> {
+  return getJson<QuotaResponse>(
+    `/api/auth/quota?domain=${encodeURIComponent(domain)}&accountId=${encodeURIComponent(accountId)}`,
+  );
+}
+
+export function setDefaultAuth(domain: string, accountId: string): Promise<AuthStatus> {
+  return postAuth('/api/auth/default', { domain, accountId }, 'Could not set the default account.');
+}
+
+export function removeAuthAccount(domain: string, accountId: string): Promise<AuthStatus> {
+  return postAuth('/api/auth/remove', { domain, accountId }, 'Could not remove the account.');
+}
+
+export async function setMode(workflow: string): Promise<Info> {
+  const response = await fetch(`${BASE}/api/mode`, {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ workflow }),
+  });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Switch failed (${response.status}).`);
   }
   return (await response.json()) as Info;
 }
@@ -541,21 +813,31 @@ export function streamChat(
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let terminal = false;
     try {
       for (;;) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          if (!terminal && !controller.signal.aborted) handlers.onError("Stream ended before completion. Reopen the session to inspect saved results.");
+          break;
+        }
         buffer += decoder.decode(value, { stream: true });
+        buffer = buffer.replace(/\r\n/g, "\n");
+        if (buffer.length > 4 * 1024 * 1024) throw new Error("Stream frame is too large.");
         let index = buffer.indexOf("\n\n");
         while (index !== -1) {
           const frame = buffer.slice(0, index);
           buffer = buffer.slice(index + 2);
+          if (/^event: (done|error)$/m.test(frame)) terminal = true;
           dispatch(frame);
           index = buffer.indexOf("\n\n");
         }
       }
     } catch (error) {
       if (!controller.signal.aborted) handlers.onError(error instanceof Error ? error.message : "Stream failed.");
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
     }
   })();
 
@@ -574,8 +856,27 @@ export function streamChat(
       return;
     }
     switch (event) {
+      case "delta": {
+        const delta = payload as { kind?: unknown; text?: unknown };
+        if ((delta.kind === 'text' || delta.kind === 'reasoning') && typeof delta.text === 'string') handlers.onDelta?.({ kind: delta.kind, text: delta.text });
+        break;
+      }
+      case "job": handlers.onJob?.(payload as JobUpdate); break;
+      case "ask": handlers.onAsk?.(payload as QuestionRequest); break;
+      case "ask_closed": handlers.onAskClosed?.((payload as { id: string }).id); break;
+      case "session": {
+        const id = (payload as { sessionId?: unknown }).sessionId;
+        if (typeof id === "string") handlers.onSession?.(id);
+        break;
+      }
       case "assistant":
         handlers.onAssistant(payload as Parameters<ChatHandlers["onAssistant"]>[0]);
+        break;
+      case "task":
+        handlers.onTask?.(payload as TaskUpdate);
+        break;
+      case "approval_closed":
+        handlers.onApprovalClosed?.((payload as { id: string }).id);
         break;
       case "tool":
         handlers.onTool(payload as Parameters<ChatHandlers["onTool"]>[0]);

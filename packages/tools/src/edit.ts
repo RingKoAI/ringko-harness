@@ -1,7 +1,7 @@
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
 import { FileTracker } from "./file-tracker.ts";
-import type { Workspace } from "./workspace.ts";
+import { resolveWriteTarget, type Workspace } from "./workspace.ts";
 
 export interface EditInput {
   path: string;
@@ -53,6 +53,8 @@ function countOccurrences(haystack: string, needle: string): number {
 export function createEditTool(workspace: Workspace, tracker: FileTracker = new FileTracker()): ToolDefinition<EditInput, EditOutput> {
   return defineTool<EditInput, EditOutput>({
     name: "edit",
+    serialGroup: `files:${process.platform === "win32" ? workspace.root.toLowerCase() : workspace.root}`,
+    taskAccess: "write",
     concurrency: "exclusive",
     description:
       "Replace an exact string in a file. `old_string` must appear; set `replace_all` to change every occurrence. External targets require approval.",
@@ -68,14 +70,15 @@ export function createEditTool(workspace: Workspace, tracker: FileTracker = new 
       additionalProperties: false,
     },
     parseInput: parseEdit,
-    assessRisk({ path }) {
-      const target = workspace.resolve(path);
+    async assessRisk({ path }) {
+      const target = await resolveWriteTarget(workspace, path);
       return target.insideWorkspace
         ? { kind: "workspace_write", reason: `Edit ${target.relative}.`, target: target.absolute }
         : { kind: "external_file", reason: `Edit outside the workspace: ${target.absolute}.`, target: target.absolute };
     },
-    async execute({ path, old_string, new_string, replace_all }) {
-      const target = workspace.resolve(path);
+    async execute({ path, old_string, new_string, replace_all }, context) {
+      const target = await resolveWriteTarget(workspace, path);
+      if (context?.approvedTarget && context.approvedTarget !== target.absolute) throw new Error("Edit target changed after approval; retry the call.");
       const content = await readFile(target.absolute, "utf8");
       const occurrences = countOccurrences(content, old_string);
       if (occurrences === 0) {
@@ -87,6 +90,7 @@ export function createEditTool(workspace: Workspace, tracker: FileTracker = new 
       const updated = replace_all
         ? content.split(old_string).join(new_string)
         : content.replace(old_string, new_string);
+      context?.signal?.throwIfAborted();
       await writeFile(target.absolute, updated, "utf8");
       tracker.record(target.absolute, await stat(target.absolute));
       return {

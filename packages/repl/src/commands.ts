@@ -1,5 +1,6 @@
 // Slash-command registry and input parsing for the REPL (pure, unit-testable).
 import { discoverSkills, loadMcpServers } from "@ringko-ai/config";
+import { SHORTCUT_HELP } from "./keybindings.ts";
 
 export type ParsedInput =
   | { kind: "prompt"; value: string }
@@ -10,6 +11,7 @@ export interface SlashContext {
   /** Append a notice line to the transcript. */
   print(text: string): void;
   clear(): void;
+  newSession?(): void;
   exit(): void;
   modelLabel: string;
   workspace: string;
@@ -41,18 +43,20 @@ export interface SlashCommand {
 export function buildCommands(): SlashCommand[] {
   return [
     { name: "help", aliases: ["?"], description: "show this help", run: (ctx) => ctx.print(helpText()) },
+    { name: "shortcuts", aliases: ["keys"], description: "show keyboard shortcuts", run: ctx => ctx.print(SHORTCUT_HELP) },
     { name: "clear", description: "clear the transcript", run: (ctx) => ctx.clear() },
+    { name: "new", description: "start a new session", run: ctx => ctx.newSession?.() },
     { name: "exit", aliases: ["quit", "q"], description: "quit the REPL", run: (ctx) => ctx.exit() },
     {
       name: "connect",
-      description: "list providers / connection info",
+      description: "add a provider from presets, or switch provider",
       run: (ctx, arg) => {
         void ctx.connect(arg);
       },
     },
     {
       name: "login",
-      description: "sign in to a provider via OAuth (default: openai)",
+      description: "sign in with OAuth (openai | github-copilot | xai | anthropic)",
       run: (ctx, arg) => {
         void ctx.login(arg);
       },
@@ -127,6 +131,13 @@ export function buildCommands(): SlashCommand[] {
 }
 
 const COMMANDS = buildCommands();
+
+export function commandGroup(name: string): string {
+  if (["new", "resume", "session", "clear", "compact"].includes(name)) return "Session";
+  if (["connect", "login", "model", "effort", "thinking"].includes(name)) return "Model & providers";
+  if (["workspace", "tools", "skills", "mcp"].includes(name)) return "Workspace";
+  return "Help & application";
+}
 
 export function findCommand(name: string): SlashCommand | undefined {
   const lower = name.toLowerCase();

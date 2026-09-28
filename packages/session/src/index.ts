@@ -5,3 +5,7 @@ export * from "./store.ts";
 export * from "./transcript.ts";
 export * from "./history.ts";
 export * from "./tool-log.ts";
+export * from "./trajectory.ts";
+export * from "./task-log.ts";
+export * from "./todos.ts";
+export * from "./jobs.ts";

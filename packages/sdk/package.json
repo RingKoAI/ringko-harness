@@ -11,7 +11,9 @@
     "test": "bun test tests"
   },
   "dependencies": {
+    "@ringko-ai/config": "workspace:*",
     "@ringko-ai/harness": "workspace:*",
+    "@ringko-ai/runtime": "workspace:*",
     "@ringko-ai/session": "workspace:*"
   }
 }

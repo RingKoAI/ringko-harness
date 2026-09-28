@@ -17,6 +17,35 @@ const echoMetadata: ToolMetadata[] = [
 ];
 
 describe("AI SDK model client", () => {
+  it("delivers reasoning and text chunks before returning one completed turn", async () => {
+    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: new ReadableStream({ start(controller) {
+      controller.enqueue({ type: "stream-start", warnings: [] });
+      controller.enqueue({ type: "reasoning-start", id: "r" });
+      controller.enqueue({ type: "reasoning-delta", id: "r", delta: "thinking" });
+      controller.enqueue({ type: "reasoning-end", id: "r" });
+      controller.enqueue({ type: "text-start", id: "t" });
+      controller.enqueue({ type: "text-delta", id: "t", delta: "hello " });
+      controller.enqueue({ type: "text-delta", id: "t", delta: "world" });
+      controller.enqueue({ type: "text-end", id: "t" });
+      controller.enqueue({ type: "finish", finishReason: { unified: "stop", raw: undefined }, usage });
+      controller.close();
+    } }) }) });
+    const chunks: string[] = [];
+    const turn = await createAiSdkModelClient(model)({ messages: [{ role: "user", content: "hi" }], tools: [], onDelta: delta => chunks.push(`${delta.kind}:${delta.text}`) });
+    expect(chunks).toEqual(["reasoning:thinking", "text:hello ", "text:world"]);
+    expect(turn).toMatchObject({ content: "hello world", reasoning: "thinking" });
+  });
+  it("passes child instructions and background notifications through SDK instructions", async () => {
+    const model = new MockLanguageModelV4({ doGenerate: async options => {
+      const text = JSON.stringify(options.prompt);
+      expect(text).toContain("host instructions");
+      expect(text).toContain("child instructions");
+      expect(text).toContain("background result");
+      return { content: [{ type: "text", text: "reviewed" }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+    } });
+    const result = await createAiSdkModelClient(model, { system: "host instructions" })({ messages: [{ role: "system", content: "child instructions" }, { role: "user", content: "Inspect" }, { role: "system", content: "background result" }], tools: [] });
+    expect(result.content).toBe("reviewed");
+  });
   it("returns text content", async () => {
     const model = new MockLanguageModelV4({
       doGenerate: async () => ({
@@ -79,6 +108,26 @@ describe("toModelMessages", () => {
         role: "tool",
         content: [
           { type: "tool-result", toolCallId: "call-1", toolName: "echo", output: { type: "text", value: "pong" } },
+        ],
+      },
+    ]);
+  });
+
+  it("replays assistant reasoning blocks ahead of text", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "assistant",
+        content: "answer",
+        reasoningDetails: [{ text: "thinking", providerOptions: { anthropic: { signature: "sig" } } }],
+      },
+    ];
+
+    expect(toModelMessages(messages)).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "thinking", providerOptions: { anthropic: { signature: "sig" } } },
+          { type: "text", text: "answer" },
         ],
       },
     ]);

@@ -1,5 +1,7 @@
 import { DEFAULT_ACCESS_MODE, type AccessMode } from "./access.ts";
 import type { ApprovalHandler, ToolMetadata, ToolRegistry } from "./tools.ts";
+import { abortable } from "./cancellation.ts";
+import type { JobManager } from "./jobs.ts";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -10,6 +12,18 @@ export interface ChatMessage {
   toolCalls?: readonly ModelToolCall[];
   /** Model reasoning for this assistant turn, when the provider returns it. */
   reasoning?: string;
+  /**
+   * Provider reasoning blocks for this turn, replayable verbatim. Each block
+   * carries its text plus the provider options (e.g. an Anthropic thinking
+   * signature) needed to resend it unchanged on the next request.
+   */
+  reasoningDetails?: readonly ReasoningDetail[];
+}
+
+/** One provider reasoning block, replayable verbatim. */
+export interface ReasoningDetail {
+  text: string;
+  providerOptions?: Record<string, Record<string, unknown>>;
 }
 
 export interface ModelToolCall {
@@ -21,6 +35,10 @@ export interface ModelToolCall {
 export interface ModelUsage {
   inputTokens?: number;
   outputTokens?: number;
+  /** Prompt-cache read tokens, when the provider reports them. */
+  cacheReadTokens?: number;
+  /** Prompt-cache write tokens, when the provider reports them. */
+  cacheWriteTokens?: number;
 }
 
 export interface ModelTurn {
@@ -28,6 +46,8 @@ export interface ModelTurn {
   toolCalls: readonly ModelToolCall[];
   /** Model reasoning text, when the provider exposes it. */
   reasoning?: string;
+  /** Provider reasoning blocks, replayed verbatim on the next request. */
+  reasoningDetails?: readonly ReasoningDetail[];
   /** Token usage reported by the provider, when available. */
   usage?: ModelUsage;
 }
@@ -37,7 +57,11 @@ export interface ModelRequest {
   tools: readonly ToolMetadata[];
   /** Aborts the underlying provider request (e.g. the user pressed Esc). */
   signal?: AbortSignal;
+  /** Transient presentation chunks; only the completed turn enters history. */
+  onDelta?: (delta: ModelDelta) => void;
 }
+
+export interface ModelDelta { kind: "text" | "reasoning"; text: string }
 
 export type ModelClient = (request: ModelRequest) => Promise<ModelTurn>;
 
@@ -58,6 +82,8 @@ export interface AgentRunResult {
 }
 
 export interface AgentOptions {
+  onDelta?: (delta: ModelDelta) => void;
+  jobs?: JobManager;
   model: ModelClient;
   tools: ToolRegistry;
   requestApproval?: ApprovalHandler;
@@ -93,7 +119,9 @@ function serialize(value: unknown): string {
 }
 
 export class Agent {
+  private readonly onDelta?: (delta: ModelDelta) => void;
   private readonly model: ModelClient;
+  private readonly jobs?: JobManager;
   private readonly tools: ToolRegistry;
   private readonly requestApproval?: ApprovalHandler;
   private readonly instructions?: string;
@@ -117,6 +145,8 @@ export class Agent {
       throw new TypeError("maxTurns must be a positive integer.");
     }
     this.model = options.model;
+    this.onDelta = options.onDelta;
+    this.jobs = options.jobs;
     this.tools = options.tools;
     this.requestApproval = options.requestApproval;
     this.instructions = options.instructions;
@@ -134,8 +164,8 @@ export class Agent {
     this.maxParallelTools = options.maxParallelTools ?? DEFAULT_MAX_PARALLEL_TOOLS;
   }
 
-  async run(prompt: string): Promise<AgentRunResult> {
-    if (prompt.trim().length === 0) {
+  async run(prompt?: string): Promise<AgentRunResult> {
+    if ((prompt !== undefined && prompt.trim().length === 0) || (prompt === undefined && !this.initialMessages.length)) {
       throw new TypeError("Agent prompt must not be empty.");
     }
 
@@ -147,15 +177,18 @@ export class Agent {
     ) {
       messages.unshift({ role: "system", content: this.instructions });
     }
-    messages.push({ role: "user", content: prompt });
+    if (prompt !== undefined) messages.push({ role: "user", content: prompt });
 
     let lastUsage: ModelUsage | undefined;
     for (let turn = 1; turn <= this.maxTurns; turn += 1) {
-      const response = await this.model({
+      this.signal?.throwIfAborted();
+      const response = await abortable(this.model({
         messages,
         tools: this.tools.list(),
+        ...(this.onDelta ? { onDelta: (delta: ModelDelta) => { this.signal?.throwIfAborted(); this.onDelta?.(delta); } } : {}),
         ...(this.signal ? { signal: this.signal } : {}),
-      });
+      }), this.signal);
+      this.signal?.throwIfAborted();
       if (!response || typeof response.content !== "string" || !Array.isArray(response.toolCalls)) {
         throw new TypeError("Model client returned an invalid turn.");
       }
@@ -173,6 +206,7 @@ export class Agent {
         content: response.content,
         toolCalls: response.toolCalls,
         ...(response.reasoning ? { reasoning: response.reasoning } : {}),
+        ...(response.reasoningDetails && response.reasoningDetails.length > 0 ? { reasoningDetails: response.reasoningDetails } : {}),
       };
       messages.push(assistant);
       this.onEvent?.({ type: "model", turn, message: assistant });
@@ -186,6 +220,7 @@ export class Agent {
       // limit, exclusive calls run alone as a barrier. Results stay in call
       // order regardless of completion order.
       const results = await this.runToolCalls(response.toolCalls, turn);
+      this.signal?.throwIfAborted();
       response.toolCalls.forEach((call, index) => {
         const { output, failed } = results[index];
         const toolMessage: ChatMessage = {
@@ -248,7 +283,7 @@ export class Agent {
       toolName: call.name,
     });
     try {
-      const output = await this.tools.call(call.name, call.arguments, this.approvalHandler(), this.accessMode);
+      const output = await this.tools.call(call.name, call.arguments, this.approvalHandler(), this.accessMode, { signal: this.signal, callId: call.id, jobs: this.jobs });
       return { output, failed: false };
     } catch (error) {
       return { output: error instanceof Error ? error.message : "Tool execution failed.", failed: true };
@@ -260,7 +295,7 @@ export class Agent {
     const handler = this.requestApproval;
     if (!handler) return undefined;
     return async (request) => {
-      const run = this.approvalChain.then(() => handler(request));
+      const run = this.approvalChain.then(() => { this.signal?.throwIfAborted(); request.signal?.throwIfAborted(); return handler(request); });
       this.approvalChain = run.then(
         () => undefined,
         () => undefined,

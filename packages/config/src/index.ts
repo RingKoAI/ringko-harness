@@ -1,8 +1,13 @@
 export * from "./paths.ts";
 export * from "./config.ts";
 export * from "./auth.ts";
+export * from "./tool-auth.ts";
 export * from "./catalog.ts";
+export * from "./presets.ts";
 export * from "./projects.ts";
+export * from "./usage.ts";
 export * from "./proxy.ts";
 export * from "./skills.ts";
 export * from "./mcp.ts";
+export * from "./instructions.ts";
+export { configuredModelIds } from "./task-models.ts";

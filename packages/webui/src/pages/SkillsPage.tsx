@@ -23,9 +23,7 @@ export function SkillsPage() {
       .catch((cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)))
   }, [])
 
-  useEffect(() => {
-    load()
-  }, [load])
+  useEffect(load, [load])
 
   async function create(): Promise<void> {
     const value = name.trim()
@@ -58,14 +56,53 @@ export function SkillsPage() {
     }
   }
 
+  function section(scope: 'project' | 'global'): React.ReactNode {
+    const list = skills.filter((skill) => skill.scope === scope)
+    return (
+      <Card>
+        <CardHeader className="flex-row items-center gap-2">
+          <CardTitle className="text-sm">{t(scope === 'project' ? 'skills.project' : 'skills.global')}</CardTitle>
+          <Badge variant="outline">{list.length}</Badge>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {list.length === 0 ? (
+            <p className="text-xs text-muted-foreground">{t('skills.empty')}</p>
+          ) : (
+            list.map((skill) => (
+              <div key={skill.dir} className="flex items-center justify-between gap-3 rounded-lg border p-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{skill.name}</span>
+                    <Badge variant="outline">{skill.source}</Badge>
+                  </div>
+                  {skill.description ? (
+                    <p className="truncate text-xs text-muted-foreground">{skill.description}</p>
+                  ) : null}
+                  <p className="truncate font-mono text-[10px] text-muted-foreground">{skill.dir}</p>
+                </div>
+                <Button size="icon" variant="ghost" onClick={() => void remove(skill.dir)}>
+                  <Trash2 />
+                </Button>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+    )
+  }
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('settings.skills')}</CardTitle>
+    <div className="space-y-3">
+      <div>
+        <p className="text-sm font-medium">{t('settings.skills')}</p>
         <p className="mt-1 text-xs text-muted-foreground">{t('skills.hint')}</p>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="space-y-2 rounded-lg border p-3">
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">{t('skills.create')}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
           <Input value={name} onChange={(event) => setName(event.target.value)} placeholder={t('skills.name')} />
           <Input
             value={description}
@@ -82,32 +119,11 @@ export function SkillsPage() {
             <Plus data-icon="inline-start" />
             {t('skills.create')}
           </Button>
-        </div>
+        </CardContent>
+      </Card>
 
-        {skills.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t('skills.empty')}</p>
-        ) : (
-          <div className="space-y-2">
-            {skills.map((skill) => (
-              <div key={skill.dir} className="flex items-center justify-between gap-3 rounded-lg border p-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">{skill.name}</span>
-                    <Badge variant="outline">{skill.source}</Badge>
-                  </div>
-                  {skill.description ? (
-                    <p className="truncate text-xs text-muted-foreground">{skill.description}</p>
-                  ) : null}
-                  <p className="truncate font-mono text-[10px] text-muted-foreground">{skill.dir}</p>
-                </div>
-                <Button size="icon" variant="ghost" onClick={() => void remove(skill.dir)}>
-                  <Trash2 />
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+      {section('project')}
+      {section('global')}
+    </div>
   )
 }

@@ -1,28 +1,41 @@
 # @ringko-ai/repl
 
-Interactive terminal UI for RingKo, built with [Ink](https://github.com/vadimdemedes/ink)
-(React for the terminal). The layout follows the model used by Claude Code /
-OpenClaude: a transcript, a live status/spinner row, an approval dialog, a
-bordered input bar, and a status line.
+Interactive terminal UI for RingKo, built with Ink and React.
 
-```
- �?RingKo  agent harness
- model · /path/to/workspace
- �?user message
- �?assistant text
- �?read_file
-   �? <result>
- �?Running�? (esc to interrupt)
- �?Approve run_shell? ─────────────�? �?shell · high                     �? �?Run echo hello                   �? �?y approve · n reject             �? └──────────────────────────────────�? �?type a message, or /help
- model · workspace · session-�?· /help
-```
+## Layout
 
-- Risky tool calls block on the approval dialog (`y`/`n`) �?the harness stays the
-  only execution boundary.
-- The conversation is recorded to `~/.ringko/sessions`.
-- Slash commands: type `/` to see hints (filtered as you type). Built-ins:
-  `/help`, `/clear`, `/exit`, `/model`, `/workspace`, `/session`, `/tools`,
-  `/skills`, `/mcp`.
+The screen contains a compact header, a scrollable transcript, a live operation
+indicator, tool approvals, a bounded editor or selector, and a model/status footer.
 
-Launch it with `ringko tui` (the CLI resolves the provider and passes the model
-in), or `launchRepl({ model, modelLabel, config, workspace })` from a host.
+- `/model` opens model search grouped by provider; `/connect` browses providers.
+- `/resume` restores a session and its visible conversation; `/new` starts a new one.
+- Type `/` for command suggestions. Tab completes; Enter runs the selected command.
+- Prompt history retains the last 100 entries in memory. A draft survives selector
+  navigation and history browsing. Multiline paste does not submit automatically.
+- PgUp/PgDn browse wrapped transcript rows. Ctrl+O expands tool output.
+- Risky tool calls require explicit approval; the harness remains the execution boundary.
+- Conversation records are stored in `~/.ringko/sessions`.
+
+## Keyboard
+
+Use `/shortcuts` to see the complete help. Main Pi-style bindings:
+
+| Key | Action |
+| --- | --- |
+| Ctrl+L | Select model |
+| Ctrl+P / Alt+P | Next / previous model |
+| Shift+Tab | Cycle reasoning depth |
+| Ctrl+O / Ctrl+T | Toggle tool output / thinking |
+| Ctrl+X | Copy last answer |
+| Ctrl+R | Resume session picker |
+| Shift+Enter / Alt+Enter | Insert newline |
+| Esc | Interrupt run or close selector |
+| Ctrl+C | Clear draft or interrupt |
+| Ctrl+D | Exit only with an empty draft while idle |
+
+Ctrl+Shift+P also cycles backward in terminals that distinguish it. Modifier
+support depends on the terminal; Alt+P and Alt+Enter are portable alternatives.
+
+Launch with `ringko tui`, or call `launchRepl({ model, modelLabel, config, workspace })`.
+See [the comparison report](../../docs/TUI-COMPARISON.md) for reference code,
+implemented behavior, verification scope and remaining gaps.

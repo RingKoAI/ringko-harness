@@ -7,6 +7,17 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import {
+  loginAnthropic,
+  loginGitHubCopilot,
+  loginOpenAiDevice,
+  loginXaiDevice,
+  loginGoogle,
+  queryCodexQuota,
+  queryXaiQuota,
+  refreshOpenAi,
+  refreshXai,
+} from "@ringko-ai/auth";
+import {
   createRingKo,
   access,
   estimateMessagesTokens,
@@ -17,41 +28,79 @@ import {
 } from "@ringko-ai/sdk";
 import {
   createTodoStore,
-  createTodoTool,
+  registerSessionTools,
+  AskManager,
+  type AskHandler,
+  type TodoItem,
   registerNetworkTools,
   registerShellTools,
   registerWorkspaceTools,
 } from "@ringko-ai/tools";
 import {
   createSkill,
+  configuredModelIds,
   discoverSkills,
+  getOAuthAccount,
+  getToolAuth,
+  instructionsText,
+  loadAuth,
   loadConfig,
+  loadInstructions,
   loadMcpServerMap,
   loadMcpServers,
   loadProjects,
   loadProviders,
+  knownModels,
   modelLabel,
+  OAUTH_DOMAINS,
+  PROVIDER_PRESETS,
+  removeOAuthAccount,
   removeSkill,
   saveMcpServers,
+  saveProjectMcpServers,
   saveProviders,
   saveProjects,
   saveSettings,
+  setDefaultOAuthAccount,
+  setOAuthAccount,
+  setToolAuth,
+  updateOAuthCredential,
   type McpServerConfig,
   type ModelDefinition,
+  type OAuthAccount,
   type ProviderDefinition,
   type RingkoConfig,
 } from "@ringko-ai/config";
 import {
+  authorizeMcpServer,
+  closeMcpConnections,
+  openMcpServer,
+  openMcpServers,
+  registerMcpTools,
+  type McpConnection,
+} from "@ringko-ai/mcp";
+import { listWorkflows, resolveWorkflow, workflowInstructions } from "@ringko-ai/workflow";
+import { EventLog, createTimeSource } from "@ringko-ai/runtime";
+import {
   SessionStore,
+  recordFeedback,
   recordSessionArchived,
   recordSessionTitle,
   sessionArchived,
+  sessionFeedback,
   sessionTitle,
   toolLogEntries,
+  trajectoryPage,
+  taskSummaries,
+  sessionTodos,
+  sessionJobs,
   toChatMessages,
+  type FeedbackValue,
+  type SessionEvent,
   type SessionHandle,
 } from "@ringko-ai/session";
 import { loadModel } from "./model.ts";
+import { WorkspaceReview } from "./workspace-review.ts";
 
 export interface ServerOptions {
   port?: number;
@@ -83,6 +132,7 @@ const DEFAULT_PORT = 8787;
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_WEBUI_DIR = resolve(import.meta.dir, "../../webui/dist");
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_JSON_BYTES = 1_048_576;
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -113,19 +163,32 @@ function registerTools(
   config: RingkoConfig,
   workspace: string,
   onTodo?: (items: unknown) => void,
+  ask?: AskHandler,
+  todos?: TodoItem[],
 ): void {
   registerWorkspaceTools(ringko.tools, { workspace });
-  ringko.tools.register(createTodoTool(createTodoStore(onTodo ? (items) => onTodo(items) : undefined)));
+  const todoStore = createTodoStore(onTodo ? items => onTodo(items) : undefined);
+  todoStore.todos = todos ?? [];
+  registerSessionTools(ringko.tools, { todos: todoStore, ask: ask ?? (async () => { throw new Error("No interactive question handler."); }) });
   if (config.capabilities?.network) registerNetworkTools(ringko.tools);
   if (config.capabilities?.shell) registerShellTools(ringko.tools, { cwd: workspace });
 }
 
 async function readJson<T>(request: Request): Promise<T | undefined> {
+  const reader = request.body?.getReader();
+  if (!reader) return undefined;
   try {
-    return (await request.json()) as T;
+    const chunks: Uint8Array[] = []; let bytes = 0;
+    for (;;) {
+      const { done, value } = await reader.read(); if (done) break;
+      bytes += value.byteLength;
+      if (bytes > MAX_JSON_BYTES) { await reader.cancel(); return undefined; }
+      chunks.push(value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
   } catch {
     return undefined;
-  }
+  } finally { reader.releaseLock(); }
 }
 
 /** Start the local server. Throws if the port is unavailable. */
@@ -137,6 +200,9 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   const webuiDir = resolve(options.webuiDir ?? DEFAULT_WEBUI_DIR);
   let store = new SessionStore({ cwd: workspace });
   const approvals = new Map<string, (approved: boolean) => void>();
+  const questions = new Map<string, AskManager>();
+  const activeAgents = new Map<string, RingKo>();
+  const activeRuns = new Map<string, AbortController>();
   const baseWorkspace = workspace;
   let projects = (() => {
     try {
@@ -162,7 +228,39 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     const active = id ? projects.projects.find((entry) => entry.id === id) : undefined;
     workspace = active ? resolve(active.path) : baseWorkspace;
     store = new SessionStore({ cwd: workspace });
+    resetMcp();
   }
+
+  // Connected MCP servers for the active workspace (lazily established, cached).
+  let mcpCache: { cwd: string; connections: McpConnection[]; errors: { name: string; message: string }[] } | null = null;
+
+  async function mcpConnections(cwd: string): Promise<{ connections: McpConnection[]; errors: { name: string; message: string }[] }> {
+    if (mcpCache?.cwd === cwd) return mcpCache;
+    if (mcpCache) {
+      await closeMcpConnections(mcpCache.connections).catch(() => {});
+      mcpCache = null;
+    }
+    const map: Record<string, McpServerConfig> = {};
+    try {
+      for (const server of loadMcpServers({ cwd })) map[server.name] = server.config;
+    } catch {
+      // invalid config: connect nothing
+    }
+    const opened = await openMcpServers(map);
+    mcpCache = { cwd, connections: opened.connections, errors: opened.errors };
+    return mcpCache;
+  }
+
+  function resetMcp(): void {
+    if (!mcpCache) return;
+    const current = mcpCache.connections;
+    mcpCache = null;
+    void closeMcpConnections(current).catch(() => {});
+  }
+
+  // Runtime event log + a time source; the model watches them via `subscribe`.
+  const eventLog = new EventLog();
+  const stopTimeSource = createTimeSource(eventLog, { intervalMs: 60_000 });
 
   function readConfig(): RingkoConfig | string {
     try {
@@ -176,9 +274,14 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     const config = readConfig();
     if (typeof config === "string") return json({ error: config }, 500);
     const model = loadModel(config);
-    const tools = createRingKo({ model: async () => ({ content: "", toolCalls: [] }) });
+    const tools = createRingKo({ task: true, log: eventLog, model: async () => ({ content: "", toolCalls: [] }) });
     registerTools(tools, config, workspace);
-    const accessMode = isAccessMode(config.mode) ? config.mode : "approval";
+    const accessMode = isAccessMode(config.permission)
+      ? config.permission
+      : isAccessMode(config.mode)
+        ? config.mode
+        : "approval";
+    const workflow = resolveWorkflow(config.workflow);
     const activeId = projects.current;
     const active = activeId ? projects.projects.find((entry) => entry.id === activeId) : undefined;
     return json({
@@ -187,6 +290,13 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       auth: { required: Boolean(options.authToken) },
       access: access(accessMode),
       accessMode,
+      permission: accessMode,
+      mode: { id: workflow.id, label: workflow.label ?? workflow.id, description: workflow.description ?? null },
+      workflows: listWorkflows().map((entry) => ({
+        id: entry.id,
+        label: entry.label ?? entry.id,
+        description: entry.description ?? null,
+      })),
       context: {
         used: estimateToolsTokens(tools.tools.list()),
         limit: typeof model === "string" ? 128_000 : (model.selection.model.maxInputTokens ?? 128_000),
@@ -320,10 +430,12 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
 
   function mcpPayload(): Record<string, unknown> {
     return {
-      servers: loadMcpServers().map((server) => ({
+      servers: loadMcpServers({ cwd: workspace }).map((server) => ({
         name: server.name,
         source: server.source,
+        scope: server.scope,
         kind: server.config.url ? "http" : "stdio",
+        authenticated: Boolean(getToolAuth(server.name)),
         config: server.config,
       })),
       map: loadMcpServerMap(),
@@ -339,10 +451,11 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
   async function handleSaveMcp(request: Request): Promise<Response> {
-    const body = await readJson<{ servers?: unknown }>(request);
+    const body = await readJson<{ servers?: unknown; scope?: unknown }>(request);
     if (typeof body?.servers !== "object" || body.servers === null || Array.isArray(body.servers)) {
       return json({ error: "servers must be an object." }, 400);
     }
+    const scope = body.scope === "project" ? "project" : "global";
     const servers: Record<string, McpServerConfig> = {};
     for (const [name, config] of Object.entries(body.servers as Record<string, unknown>)) {
       if (name.trim().length === 0 || typeof config !== "object" || config === null || Array.isArray(config)) {
@@ -351,15 +464,84 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       servers[name] = config as McpServerConfig;
     }
     try {
-      saveMcpServers(servers);
+      if (scope === "project") saveProjectMcpServers(workspace, servers);
+      else saveMcpServers(servers);
+      resetMcp();
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Cannot save MCP configuration." }, 500);
     }
     return handleMcp();
   }
 
+  async function handleMcpConnected(): Promise<Response> {
+    const mcp = await mcpConnections(workspace);
+    return json({
+      servers: mcp.connections.map((connection) => ({
+        name: connection.name,
+        serverInfo: connection.serverInfo,
+        tools: connection.tools.map((tool) => ({ name: tool.name, description: tool.description ?? null })),
+      })),
+      errors: mcp.errors,
+    });
+  }
+
+  async function handleMcpTest(request: Request): Promise<Response> {
+    const body = await readJson<{ name?: unknown; config?: unknown }>(request);
+    const name = typeof body?.name === "string" ? body.name.trim() : "";
+    if (name.length === 0 || typeof body?.config !== "object" || body.config === null || Array.isArray(body.config)) {
+      return json({ error: "name and config are required." }, 400);
+    }
+    try {
+      const connection = await openMcpServer(name, body.config as McpServerConfig);
+      const tools = connection.tools.map((tool) => ({ name: tool.name, description: tool.description ?? null }));
+      const serverInfo = connection.serverInfo;
+      await connection.client.close().catch(() => {});
+      return json({ serverInfo, tools });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "MCP connection failed." }, 502);
+    }
+  }
+
+  /** Start the OAuth loopback flow for a remote MCP server (e.g. Cloudflare). */
+  async function handleMcpOAuth(request: Request): Promise<Response> {
+    const now = Date.now();
+    pruneOAuthFlows(now);
+    const body = await readJson<{ name?: unknown; url?: unknown }>(request);
+    const name = typeof body?.name === "string" ? body.name.trim() : "";
+    const url = typeof body?.url === "string" ? body.url.trim() : "";
+    if (name.length === 0 || url.length === 0) return json({ error: "name and url are required." }, 400);
+
+    const id = randomUUID();
+    oauthFlows.set(id, { status: "pending", createdAt: now });
+    let resolveIssued: ((value: { url: string }) => void) | undefined;
+    const issued = new Promise<{ url: string }>((resolve) => {
+      resolveIssued = resolve;
+    });
+    const outcome = authorizeMcpServer(url, (authUrl) => resolveIssued?.({ url: authUrl })).then(
+      (credential) => {
+        setToolAuth(name, credential);
+        oauthFlows.set(id, { status: "success", createdAt: now });
+        resetMcp();
+        return undefined;
+      },
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : "MCP authorization failed.";
+        oauthFlows.set(id, { status: "error", error: message, createdAt: now });
+        return message;
+      },
+    );
+    const ready = await Promise.race([
+      issued.then((value) => ({ ok: true as const, ...value })),
+      outcome.then((failure) => (failure === undefined ? undefined : { ok: false as const, error: failure })),
+    ]);
+    if (!ready || !ready.ok) {
+      return json({ error: ready && !ready.ok ? ready.error : "MCP authorization failed before the URL was issued." }, 502);
+    }
+    return json({ flowId: id, verificationUrl: ready.url, userCode: "" });
+  }
+
   function handleSkills(): Response {
-    return json(discoverSkills().map((skill) => ({ ...skill })));
+    return json(discoverSkills({ cwd: workspace }).map((skill) => ({ ...skill })));
   }
 
   async function handleCreateSkill(request: Request): Promise<Response> {
@@ -383,7 +565,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     const dir = typeof body?.dir === "string" ? body.dir : "";
     if (dir.length === 0) return json({ error: "dir is required." }, 400);
     try {
-      if (!removeSkill(dir)) return json({ error: "Unknown skill directory." }, 404);
+      if (!removeSkill(dir, process.env, workspace)) return json({ error: "Unknown skill directory." }, 404);
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Cannot remove skill." }, 400);
     }
@@ -435,6 +617,241 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     return await handleInfo();
   }
 
+  // OAuth device-code flows in flight, keyed by a flow id the WebUI polls.
+  const oauthFlows = new Map<string, { status: "pending" | "success" | "error"; error?: string; createdAt: number }>();
+  const OAUTH_FLOW_TTL_MS = 10 * 60 * 1000;
+  const OAUTH_ISSUE_TIMEOUT_MS = 30 * 1000;
+
+  /** Map an auth domain to the OAuth flow it speaks, if any. */
+  function oauthKind(domain: string): "openai" | "copilot" | "xai" | "anthropic" | "google" | undefined {
+    if (domain === "openai-oauth") return "openai";
+    if (domain === "github-copilot") return "copilot";
+    if (domain === "xai-oauth") return "xai";
+    if (domain === "anthropic-oauth") return "anthropic";
+    if (domain === "google-gemini-cli") return "google";
+    return undefined;
+  }
+
+  function pruneOAuthFlows(now: number): void {
+    for (const [id, flow] of oauthFlows) {
+      if (now - flow.createdAt > OAUTH_FLOW_TTL_MS) oauthFlows.delete(id);
+    }
+  }
+
+  /** Account states only; token material never leaves the server. */
+  function handleAuth(): Response {
+    const state = loadAuth();
+    const domains = [...new Set([...OAUTH_DOMAINS, ...Object.keys(state.oauth)])];
+    return json({
+      domains: domains.map((domain) => {
+        const entry = state.oauth[domain] ?? { accounts: [] };
+        const defaultAccountId = entry.defaultAccountId ?? entry.accounts[0]?.id;
+        return {
+          domain,
+          defaultAccountId: defaultAccountId ?? null,
+          accounts: entry.accounts.map((account: OAuthAccount) => ({
+            id: account.id,
+            uuid: account.uuid ?? account.id,
+            login: account.credential.login ?? "",
+            avatarUrl: account.credential.avatarUrl ?? null,
+            authenticatedAt: account.authenticatedAt,
+            isDefault: defaultAccountId === account.id,
+            reauthRequired: domain === "openai-oauth" && account.credential.accountId === undefined,
+          })),
+        };
+      }),
+    });
+  }
+
+  async function handleSetDefaultAuth(request: Request): Promise<Response> {
+    const body = await readJson<{ domain?: unknown; accountId?: unknown }>(request);
+    const domain = typeof body?.domain === "string" ? body.domain.trim() : "";
+    const accountId = typeof body?.accountId === "string" ? body.accountId.trim() : "";
+    if (domain.length === 0 || accountId.length === 0) {
+      return json({ error: "domain and accountId are required." }, 400);
+    }
+    setDefaultOAuthAccount(domain, accountId);
+    return handleAuth();
+  }
+
+  async function handleRemoveAuthAccount(request: Request): Promise<Response> {
+    const body = await readJson<{ domain?: unknown; accountId?: unknown }>(request);
+    const domain = typeof body?.domain === "string" ? body.domain.trim() : "";
+    const accountId = typeof body?.accountId === "string" ? body.accountId.trim() : "";
+    if (domain.length === 0 || accountId.length === 0) {
+      return json({ error: "domain and accountId are required." }, 400);
+    }
+    removeOAuthAccount(domain, accountId);
+    return handleAuth();
+  }
+
+  async function handleStartOAuth(request: Request): Promise<Response> {
+    const now = Date.now();
+    pruneOAuthFlows(now);
+    const body = await readJson<{ domain?: unknown; projectId?: unknown }>(request);
+    const domain = typeof body?.domain === "string" ? body.domain.trim() : "";
+    if (domain.length === 0) return json({ error: "domain is required." }, 400);
+    const kind = oauthKind(domain);
+    if (!kind) return json({ error: `Unsupported OAuth domain "${domain}".` }, 400);
+    if ([...oauthFlows.values()].filter(flow => flow.status === "pending").length >= 4 || oauthFlows.size >= 64) return json({ error: "Too many sign-in attempts. Finish an existing attempt or retry later." }, 429);
+    const projectId = typeof body?.projectId === "string" ? body.projectId.trim() : undefined;
+    if (body?.projectId !== undefined && typeof body.projectId !== "string") return json({ error: "Google Cloud project ID must be a string." }, 400);
+    if (projectId && !/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/.test(projectId)) return json({ error: "Invalid Google Cloud project ID." }, 400);
+
+    const id = randomUUID();
+    oauthFlows.set(id, { status: "pending", createdAt: now });
+    let resolveIssued: ((value: { url: string; code: string }) => void) | undefined;
+    const onCode = (url: string, code: string): void => resolveIssued?.({ url, code });
+    const login = kind === "openai"
+      ? loginOpenAiDevice(onCode)
+      : kind === "copilot"
+        ? loginGitHubCopilot(onCode)
+        : kind === "google"
+          ? loginGoogle(url => onCode(url, ""), projectId)
+        : kind === "anthropic"
+          ? loginAnthropic((url) => onCode(url, ""))
+          : loginXaiDevice(onCode);
+    const outcome = login.then(
+      (credential) => {
+        const accountId = credential.accountId ?? credential.login ?? randomUUID();
+        setOAuthAccount(domain, { id: accountId, credential, authenticatedAt: Date.now() });
+        if (domain === "google-gemini-cli") {
+          const file = loadProviders();
+          if (!(file.providers ?? []).some(provider => provider.type === domain)) saveProviders({ ...file, providers: [...(file.providers ?? []), { name: "google-gemini-cli", type: domain, models: knownModels(domain).map(model => ({ id: model.id, name: model.name ?? model.id })) }] });
+        }
+        oauthFlows.set(id, { status: "success", createdAt: now });
+        return undefined;
+      },
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : "OAuth login failed.";
+        oauthFlows.set(id, { status: "error", error: message, createdAt: now });
+        return message;
+      },
+    );
+    // Device flows call `onCode` after their start request; wait for that (or the
+    // flow's own failure) so the browser can show the code as soon as it exists.
+    const ready = await new Promise<{ url: string; code: string } | string>((resolve) => {
+      const timer = setTimeout(() => resolve("OAuth start timed out."), OAUTH_ISSUE_TIMEOUT_MS);
+      timer.unref?.();
+      resolveIssued = (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      };
+      void outcome.then((failure) => {
+        if (failure === undefined) return;
+        clearTimeout(timer);
+        resolve(failure);
+      });
+    });
+    if (typeof ready === "string") return json({ error: ready }, 502);
+    return json({ flowId: id, verificationUrl: ready.url, userCode: ready.code });
+  }
+
+  function handleOAuthStatus(id: string): Response {
+    const flow = oauthFlows.get(id);
+    if (!flow) return json({ error: "Unknown OAuth flow." }, 404);
+    return json({ status: flow.status, ...(flow.error ? { error: flow.error } : {}) });
+  }
+
+  /** Query the subscription/usage windows for one OAuth account. */
+  async function handleAuthQuota(request: Request): Promise<Response> {
+    const params = new URL(request.url).searchParams;
+    const domain = (params.get("domain") ?? "").trim();
+    const accountId = (params.get("accountId") ?? "").trim() || undefined;
+    if (domain !== "openai-oauth" && domain !== "xai-oauth") {
+      return json({ error: "Quota is only available for openai-oauth and xai-oauth." }, 400);
+    }
+    const account = getOAuthAccount(domain, accountId);
+    if (!account) return json({ error: "No account for this domain." }, 404);
+    try {
+      let credential = account.credential;
+      if (credential.expires <= Date.now() + 60_000) {
+        credential = domain === "xai-oauth"
+          ? await refreshXai(credential.refresh)
+          : await refreshOpenAi(credential.refresh);
+        updateOAuthCredential(domain, account.id, credential);
+      }
+      const quota = domain === "xai-oauth"
+        ? await queryXaiQuota(credential.access, credential.accountId)
+        : await queryCodexQuota(credential.access, credential.accountId);
+      return json(quota);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Quota query failed." }, 502);
+    }
+  }
+
+  /** The seq of the transcript message at `index` (user/assistant/tool). */
+  function messageSeqAt(events: readonly SessionEvent[], index: number): number {
+    let seen = -1;
+    for (const event of events) {
+      if (event.type === "session/compaction") { seen = -1; continue; }
+      if (event.type !== "user/message" && event.type !== "assistant/message" && event.type !== "tool/result") continue;
+      seen += 1;
+      if (seen === index) return event.seq;
+    }
+    return events.at(-1)?.seq ?? -1;
+  }
+
+  /** Fork a session: copy the event prefix up to a message index into a child session. */
+  /** Get a session's ratings keyed by transcript message index. */
+  function handleGetFeedback(id: string): Response {
+    try {
+      return json(sessionFeedback(store.open(id, "read").all()));
+    } catch {
+      return json({ error: "Unknown session." }, 404);
+    }
+  }
+
+  /** Set or clear the rating for one transcript message. */
+  async function handleSetFeedback(id: string, request: Request): Promise<Response> {
+    const body = await readJson<{ index?: unknown; value?: unknown }>(request);
+    if (typeof body?.index !== "number" || !Number.isInteger(body.index) || body.index < 0) {
+      return json({ error: "Invalid index." }, 400);
+    }
+    const value = body.value;
+    if (value !== "up" && value !== "down" && value !== null && value !== undefined) {
+      return json({ error: "Invalid value." }, 400);
+    }
+    let handle: SessionHandle;
+    try {
+      handle = store.open(id, "write");
+    } catch {
+      return json({ error: "Unknown session." }, 404);
+    }
+    try {
+      recordFeedback(handle, body.index, (value ?? null) as FeedbackValue | null);
+      handle.flush();
+    } finally {
+      handle.close();
+    }
+    return json({ ok: true });
+  }
+
+  async function handleForkSession(id: string, request: Request): Promise<Response> {
+    let events: readonly SessionEvent[];
+    try {
+      events = store.open(id, "read").all();
+    } catch {
+      return json({ error: "Unknown session." }, 404);
+    }
+    if (events.length === 0) return json({ error: "Nothing to branch." }, 400);
+    const body = await readJson<{ index?: unknown }>(request);
+    const index = typeof body?.index === "number" && Number.isInteger(body.index) && body.index >= 0 ? body.index : Number.MAX_SAFE_INTEGER;
+    const cutoff = messageSeqAt(events, index);
+    const child = store.create({ cwd: workspace, parentSession: id });
+    try {
+      child.append(
+        events
+          .filter((event) => event.seq <= cutoff)
+          .map((event) => ({ type: event.type, ...(event.data !== undefined ? { data: event.data } : {}), time: event.time })),
+      );
+      child.flush();
+    } finally {
+      child.close();
+    }
+    return json({ sessionId: child.id });
+  }
+
   /** A session's title, or its first user message truncated as a fallback. */
   function sessionLabel(id: string): string | null {
     try {
@@ -450,14 +867,24 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
   async function handleSetAccess(request: Request): Promise<Response> {
-    const body = await readJson<{ mode?: unknown }>(request);
-    const mode = body?.mode;
-    if (!isAccessMode(mode)) {
-      return json({ error: 'mode must be "approval" | "assist" | "full".' }, 400);
+    const body = await readJson<{ mode?: unknown; permission?: unknown }>(request);
+    const permission = body?.permission ?? body?.mode;
+    if (!isAccessMode(permission)) {
+      return json({ error: 'permission must be "approval" | "assist" | "full".' }, 400);
     }
     const config = readConfig();
     if (typeof config === "string") return json({ error: config }, 500);
-    saveSettings({ ...config, mode });
+    saveSettings({ ...config, permission, mode: permission });
+    return await handleInfo();
+  }
+
+  async function handleSetMode(request: Request): Promise<Response> {
+    const body = await readJson<{ workflow?: unknown; mode?: unknown }>(request);
+    const workflow = typeof (body?.workflow ?? body?.mode) === "string" ? String(body?.workflow ?? body?.mode).trim() : "";
+    if (workflow.length === 0) return json({ error: "workflow is required." }, 400);
+    const config = readConfig();
+    if (typeof config === "string") return json({ error: config }, 500);
+    saveSettings({ ...config, workflow });
     return await handleInfo();
   }
 
@@ -595,6 +1022,9 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         title: sessionTitle(events) ?? null,
         archived: sessionArchived(events),
         messages: toChatMessages(events),
+        tasks: taskSummaries(events, activeRuns.has(id)),
+        todos: sessionTodos(events),
+        jobs: sessionJobs(events, activeRuns.has(id)),
       });
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Unknown session." }, 404);
@@ -616,6 +1046,20 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     }
   }
 
+  /** Cursor-based, read-only projection of recorded session events. */
+  function handleTrajectory(id: string, url: URL): Response {
+    const optional = (key: string): number | undefined => url.searchParams.has(key) ? Number(url.searchParams.get(key)) : undefined;
+    try {
+      const options = { limit: optional("limit"), before: optional("before"), after: optional("after") };
+      if (["limit", "before", "after"].some(key => url.searchParams.has(key) && !/^\d+$/.test(url.searchParams.get(key) ?? ""))) {
+        return json({ error: "Invalid trajectory page." }, 400);
+      }
+      return json(trajectoryPage(store.open(id, "read").all(), options));
+    } catch (error) {
+      return json({ error: error instanceof TypeError ? "Invalid trajectory page." : "Could not read session trajectory." }, error instanceof TypeError ? 400 : 404);
+    }
+  }
+
   /** Estimated context usage for a session: transcript + tool schemas vs the model window. */
   function handleContext(id: string): Response {
     const config = readConfig();
@@ -626,7 +1070,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     let used: number;
     try {
       const history = toChatMessages(store.open(id, "read").all());
-      const probe = createRingKo({ model: async () => ({ content: "", toolCalls: [] }) });
+      const probe = createRingKo({ task: true, model: async () => ({ content: "", toolCalls: [] }) });
       registerTools(probe, config, workspace);
       used = estimateMessagesTokens(history) + estimateToolsTokens(probe.tools.list());
     } catch {
@@ -692,10 +1136,13 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
 
   async function handleChat(request: Request): Promise<Response> {
     const body = await readJson<{ prompt?: string; sessionId?: string; attachments?: unknown }>(request);
-    const raw = (body?.prompt ?? "").trim();
+    if (typeof body?.prompt !== "string" || body.prompt.length > 65536 || (body.sessionId !== undefined && (typeof body.sessionId !== "string" || body.sessionId.length > 128))) return json({ error: "Invalid chat message." }, 400);
+    if (activeRuns.size >= 8) return json({ error: "Too many active sessions. Wait for a running session to finish." }, 429);
+    const raw = body.prompt.trim();
     const attachments = Array.isArray(body?.attachments)
       ? body.attachments.filter((value): value is string => typeof value === "string" && value.length > 0)
       : [];
+    if (attachments.length > 16 || attachments.some(path => path.length > 4096 || path.includes("\0"))) return json({ error: "Invalid attachments." }, 400);
     if (raw.length === 0) return json({ error: "prompt required" }, 400);
     const prompt = attachments.length
       ? `${raw}\n\nAttached files (read them if relevant): ${attachments.join(", ")}`
@@ -711,6 +1158,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     let history: ChatMessage[] = [];
     try {
       if (body?.sessionId) {
+        if (activeRuns.has(body.sessionId)) return json({ error: "This session already has an active run. Queue the message until it finishes." }, 409);
         history = toChatMessages(store.open(body.sessionId, "read").all());
         session = store.open(body.sessionId, "write");
       } else {
@@ -721,15 +1169,39 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     }
 
     const encoder = new TextEncoder();
+    const abort = new AbortController();
+    const requestAbort = () => abort.abort();
+    request.signal.addEventListener("abort", requestAbort, { once: true });
+    if (request.signal.aborted) abort.abort();
+    activeRuns.set(session.id, abort);
+    let closed = false;
+    const pendingApprovals = new Set<string>();
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
-        let closed = false;
         const send = (event: string, data: unknown): void => {
-          if (!closed) controller.enqueue(encoder.encode(sse(event, data)));
+          if (!closed) { try { controller.enqueue(encoder.encode(sse(event, data))); } catch { closed = true; abort.abort(); } }
         };
+        send("session", { sessionId: session.id });
         try {
+          const asker = new AskManager(event => {
+            session.appendEvent(`ask/${event.type}`, event); session.flush();
+            if (event.type === "requested") { questions.set(event.id, asker); send("ask", event); }
+            else { questions.delete(event.id); send("ask_closed", { id: event.id }); }
+          });
+          const workflow = resolveWorkflow(config.workflow);
+          const instructions = [instructionsText(loadInstructions({ cwd: workspace })), workflowInstructions(workflow)]
+            .filter((part) => part.length > 0)
+            .join("\n\n");
           const ringko = createRingKo({
             model: model.client,
+            onDelta: delta => send("delta", delta),
+            task: true,
+            log: eventLog,
+            ...(instructions ? { instructions } : {}),
+            taskModels: configuredModelIds(config),
+            resolveTaskModel: async id => { const built = loadModel({ ...config, model: id }); if (typeof built === "string") throw new Error(built); return built.client; },
+            onJobEvent: event => send("job", event),
+            onTaskEvent: event => send("task", event),
             session,
             history,
             modelId: model.selection.model.id,
@@ -737,18 +1209,33 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
             ...(model.selection.model.maxInputTokens ? { contextWindow: model.selection.model.maxInputTokens } : {}),
             ...(model.selection.model.maxOutputTokens ? { reserveOutputTokens: model.selection.model.maxOutputTokens } : {}),
             ...(config.compaction ? { compaction: config.compaction } : {}),
-            ...(isAccessMode(config.mode) ? { accessMode: config.mode } : {}),
+            ...(isAccessMode(config.permission)
+              ? { accessMode: config.permission }
+              : isAccessMode(config.mode)
+                ? { accessMode: config.mode }
+                : {}),
             requestApproval: async (approval) => {
               const id = randomUUID();
               send("approval", { id, toolName: approval.toolName, riskLevel: approval.riskLevel, reason: approval.reason, target: approval.target ?? null });
               return await new Promise<boolean>((resolveApproval) => {
-                approvals.set(id, resolveApproval);
-                setTimeout(() => {
-                  if (approvals.delete(id)) resolveApproval(false);
-                }, APPROVAL_TIMEOUT_MS).unref?.();
+                const approvalSignal = approval.signal ?? abort.signal;
+                const finish = (approved: boolean) => {
+                  clearTimeout(timer);
+                  approvals.delete(id); pendingApprovals.delete(id);
+                  send("approval_closed", { id });
+                  approvalSignal.removeEventListener("abort", cancel);
+                  resolveApproval(approved);
+                };
+                const cancel = () => finish(false);
+                const timer = setTimeout(cancel, APPROVAL_TIMEOUT_MS);
+                timer.unref?.();
+                approvals.set(id, finish); pendingApprovals.add(id);
+                approvalSignal.addEventListener("abort", cancel, { once: true });
+                if (approvalSignal.aborted) cancel();
               });
             },
             onEvent: (event) => {
+              eventLog.append("session", { type: event.type, turn: event.turn, toolName: event.toolName ?? null });
               if (event.type === "model") {
                 send("assistant", {
                   turn: event.turn,
@@ -766,17 +1253,30 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
               }
             },
           });
-          registerTools(ringko, config, workspace, (items) => send("todo", { items }));
-          const result = await ringko.run(prompt);
+          activeAgents.set(session.id, ringko);
+          registerTools(ringko, config, workspace, items => { session.appendEvent("session/todo", { todos: items }); session.flush(); send("todo", { items }); }, asker.request, sessionTodos(session.all()));
+          try {
+            const mcp = await mcpConnections(workspace);
+            registerMcpTools(ringko.tools, mcp.connections);
+          } catch {
+            // MCP is best-effort; a failed connect must not block the run
+          }
+          const result = await ringko.run(prompt, { signal: abort.signal });
           send("done", { sessionId: session.id, content: result.content, turns: result.turns });
         } catch (error) {
           send("error", { message: error instanceof Error ? error.message : "Run failed." });
         } finally {
+          request.signal.removeEventListener("abort", requestAbort);
+          activeRuns.delete(session.id);
+          activeAgents.delete(session.id);
+          for (const id of pendingApprovals) approvals.get(id)?.(false);
+          const wasClosed = closed;
           closed = true;
           session.close();
-          controller.close();
+          if (!wasClosed) controller.close();
         }
       },
+      cancel() { closed = true; abort.abort(); },
     });
 
     return new Response(stream, {
@@ -840,13 +1340,34 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
           return json({ error: "unauthorized" }, 401);
         }
       }
+      if (url.pathname.startsWith("/api/workspace/") && request.method === "GET") {
+        const review = new WorkspaceReview(workspace);
+        const path = url.searchParams.get("path") ?? "";
+        try {
+          if (url.pathname === "/api/workspace/files") return json(await review.list(path));
+          if (url.pathname === "/api/workspace/file") return json(await review.read(path));
+          if (url.pathname === "/api/workspace/diff") return json(await review.diff(path, request.signal));
+        } catch { return json({ error: "Cannot inspect this workspace path. It must be a regular file/directory inside the workspace; diff requires a Git repository and a bounded patch." }, 400); }
+      }
       if (url.pathname === "/api/reload" && request.method === "POST") return await handleInfo();
+      if (url.pathname === "/api/auth" && request.method === "GET") return handleAuth();
+      if (url.pathname === "/api/auth/default" && request.method === "POST") return await handleSetDefaultAuth(request);
+      if (url.pathname === "/api/auth/remove" && request.method === "POST") return await handleRemoveAuthAccount(request);
+      if (url.pathname === "/api/auth/oauth" && request.method === "POST") return await handleStartOAuth(request);
+      if (url.pathname === "/api/auth/quota" && request.method === "GET") return await handleAuthQuota(request);
+      if (url.pathname.startsWith("/api/auth/oauth/") && request.method === "GET") {
+        return handleOAuthStatus(decodeURIComponent(url.pathname.slice("/api/auth/oauth/".length)));
+      }
+      if (url.pathname === "/api/presets" && request.method === "GET") return json({ presets: PROVIDER_PRESETS });
       if (url.pathname === "/api/providers" && request.method === "GET") return handleProviders();
       if (url.pathname === "/api/providers" && request.method === "PUT") return await handleSaveProviders(request);
       if (url.pathname === "/api/projects" && request.method === "GET") return handleProjects();
       if (url.pathname === "/api/projects" && request.method === "POST") return await handleAddProject(request);
       if (url.pathname === "/api/mcp" && request.method === "GET") return handleMcp();
       if (url.pathname === "/api/mcp" && request.method === "PUT") return await handleSaveMcp(request);
+      if (url.pathname === "/api/mcp/connected" && request.method === "GET") return await handleMcpConnected();
+      if (url.pathname === "/api/mcp/test" && request.method === "POST") return await handleMcpTest(request);
+      if (url.pathname === "/api/mcp/oauth" && request.method === "POST") return await handleMcpOAuth(request);
       if (url.pathname === "/api/skills" && request.method === "GET") return handleSkills();
       if (url.pathname === "/api/skills" && request.method === "POST") return await handleCreateSkill(request);
       if (url.pathname === "/api/skills/remove" && request.method === "POST") return await handleRemoveSkill(request);
@@ -865,6 +1386,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname === "/api/ui" && request.method === "POST") return await handleSetUi(request);
       if (url.pathname === "/api/compact" && request.method === "POST") return await handleCompact(request);
       if (url.pathname === "/api/access" && request.method === "POST") return await handleSetAccess(request);
+      if (url.pathname === "/api/permission" && request.method === "POST") return await handleSetAccess(request);
+      if (url.pathname === "/api/mode" && request.method === "POST") return await handleSetMode(request);
       if (url.pathname === "/api/upload" && request.method === "POST") return await handleUpload(request);
       if (url.pathname === "/api/sessions" && request.method === "GET") return handleSessions();
       if (url.pathname === "/api/sessions" && request.method === "POST") return handleCreateSession();
@@ -873,15 +1396,59 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         const slash = rest.indexOf("/");
         const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
         const action = slash === -1 ? "" : rest.slice(slash + 1);
+        if (action === "jobs" && request.method === "GET") {
+          const agent = activeAgents.get(id);
+          if (agent) return json(agent.jobs.list());
+          try { return json(sessionJobs(store.open(id, "read").all())); } catch { return json({ error: "Unknown session." }, 404); }
+        }
+        if (action === "jobs" && request.method === "POST") {
+          const agent = activeAgents.get(id); if (!agent) return json({ error: "No active jobs." }, 404);
+          const body = await readJson<unknown>(request);
+          try { return json(await agent.tools.call("job", body)); } catch (error) { return json({ error: error instanceof Error ? error.message : "Invalid job request." }, 400); }
+        }
+        if (action === "events" && request.method === "GET") {
+          const agent = activeAgents.get(id); if (!agent) return json({ error: "No active jobs." }, 404);
+          try { return json(await agent.jobs.subscribe({ jobId: url.searchParams.get("jobId") ?? "", after: Number(url.searchParams.get("after") ?? -1), waitMs: Number(url.searchParams.get("waitMs") ?? 0) }, request.signal)); } catch { return json({ error: "Invalid event subscription." }, 400); }
+        }
+        if (action === "task-detail" && request.method === "GET") {
+          try {
+            const events = store.open(id, "read").all();
+            const taskId = url.searchParams.get("taskId");
+            const after = Number(url.searchParams.get("after") ?? -1);
+            if (!taskId || taskId.length > 128 || !Number.isSafeInteger(after) || after < -1) return json({ error: "Invalid task cursor." }, 400);
+            const task = taskSummaries(events, activeRuns.has(id)).find(item => item.taskId === taskId);
+            if (!task) return json({ error: "Unknown task in this session." }, 404);
+            const records = events.filter(event => event.seq > after && event.type.startsWith("task/") && event.data && typeof event.data === "object" && (event.data as { taskId?: string }).taskId === taskId).slice(0, 100);
+            return json({ task, records, cursor: records.at(-1)?.seq ?? after });
+          } catch { return json({ error: "Unknown session." }, 404); }
+        }
         if (request.method === "GET" && action === "") return handleSession(id);
         if (request.method === "DELETE" && action === "") return handleDeleteSession(id);
         if (request.method === "GET" && action === "context") return handleContext(id);
         if (request.method === "GET" && action === "tool-log") return handleToolLog(id, url);
+        if (request.method === "GET" && action === "trajectory") return handleTrajectory(id, url);
+        if (request.method === "POST" && action === "fork") return await handleForkSession(id, request);
+        if (request.method === "GET" && action === "feedback") return handleGetFeedback(id);
+        if (request.method === "POST" && action === "feedback") return await handleSetFeedback(id, request);
+        if (request.method === "POST" && action === "stop") {
+          const run = activeRuns.get(id);
+          if (!run) return json({ error: "No active run for this session." }, 404);
+          run.abort();
+          return json({ ok: true });
+        }
         if (request.method === "POST" && action === "title") return await handleRenameSession(id, request);
         if (request.method === "POST" && action === "archive") return await handleArchiveSession(id, request);
       }
       if (url.pathname === "/api/chat" && request.method === "POST") return await handleChat(request);
       if (url.pathname === "/api/approval" && request.method === "POST") return await handleApproval(request);
+      if (url.pathname === "/api/ask" && request.method === "POST") {
+        const body = await readJson<{ id?: unknown; output?: unknown; cancel?: unknown }>(request);
+        if (typeof body?.id !== "string") return json({ error: "Question id required." }, 400);
+        if (body.cancel !== true && body.output === undefined) return json({ error: "Answers or explicit cancellation required." }, 400);
+        const asker = questions.get(body.id); if (!asker) return json({ error: "No pending question." }, 404);
+        try { asker.respond(body.id, body.cancel === true ? undefined : body.output); return json({ ok: true }); }
+        catch (error) { return json({ error: error instanceof Error ? error.message : "Invalid answer." }, 400); }
+      }
       if (url.pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
       if (options.devServerUrl) return await proxyDev(request, url);
       return await serveStatic(url.pathname);
@@ -892,6 +1459,6 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   return {
     url: `http://${host}:${boundPort}`,
     port: boundPort,
-    stop: () => server.stop(true),
+    stop: () => { stopTimeSource(); for (const run of activeRuns.values()) run.abort(); void closeMcpConnections(mcpCache?.connections ?? []).catch(() => {}); server.stop(true); },
   };
 }

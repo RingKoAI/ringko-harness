@@ -3,6 +3,12 @@ import { executeTool } from "@ringko-ai/harness";
 import { createTodoStore, createTodoTool } from "../src/todo.ts";
 
 describe("todowrite", () => {
+  it("retains the previous snapshot when persistence fails", async () => {
+    const store = createTodoStore(() => { throw new Error("Disk full"); });
+    store.todos = [{ content: "Previous", status: "pending" }];
+    await expect(executeTool(createTodoTool(store), { todos: [{ content: "Next", status: "completed" }] })).rejects.toThrow("Disk full");
+    expect(store.todos).toEqual([{ content: "Previous", status: "pending" }]);
+  });
   it("stores the list without approval", async () => {
     const store = createTodoStore();
     const tool = createTodoTool(store);

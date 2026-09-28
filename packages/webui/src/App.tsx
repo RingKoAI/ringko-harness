@@ -4,7 +4,6 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { Layout } from '@/layout/Layout'
 import { ChatPage } from '@/pages/ChatPage'
 import { LoginPage } from '@/pages/LoginPage'
-import { SettingsPage } from '@/pages/SettingsPage'
 import { AppProvider } from '@/store'
 
 export default function App() {
@@ -17,8 +16,8 @@ export default function App() {
             <Route element={<Layout />}>
               <Route index element={<ChatPage />} />
               <Route path=":id" element={<ChatPage />} />
-              <Route path="settings" element={<Navigate to="/settings/general" replace />} />
-              <Route path="settings/:page" element={<SettingsPage />} />
+              <Route path="settings" element={<Navigate to="/" replace />} />
+              <Route path="settings/:page" element={<Navigate to="/" replace />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

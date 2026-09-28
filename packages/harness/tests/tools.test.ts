@@ -49,6 +49,16 @@ function makeTool(
 }
 
 describe("tool approval boundary", () => {
+  it("serializes assessment and execution across registries sharing a write group", async () => {
+    let state = 0;
+    const observed: number[] = [];
+    const tool = defineTool({ ...makeTool("safe", () => "unused"), serialGroup: "fixture-workspace", assessRisk: () => { observed.push(state); return { kind: "safe" as const, reason: "Fixture" }; }, execute: async () => { const previous = state; await new Promise(resolve => setTimeout(resolve, 5)); state = previous + 1; return state; } });
+    const first = new ToolRegistry(), second = new ToolRegistry();
+    first.register(tool); second.register(tool);
+    await Promise.all([first.call("sample_tool", { value: "first" }), second.call("sample_tool", { value: "second" })]);
+    expect(state).toBe(2);
+    expect(observed).toEqual([0, 1]);
+  });
   it("executes safe tools without asking for approval", async () => {
     let executed = false;
     const result = await executeTool(

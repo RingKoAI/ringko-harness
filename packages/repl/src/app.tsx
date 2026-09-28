@@ -1,9 +1,11 @@
-import { Box, useApp, useInput, useStdout } from "ink";
+import { Box, Text, useApp, useInput, useStdout, useBoxMetrics, type DOMElement } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRingKo, type ChatMessage, type ModelClient, type RingKo, type ToolApprovalRequest } from "@ringko-ai/sdk";
 import {
   createTodoStore,
-  createTodoTool,
+  registerSessionTools,
+  AskManager,
+  type AskEvent,
   registerNetworkTools,
   registerShellTools,
   registerWorkspaceTools,
@@ -16,29 +18,40 @@ import {
   recordSessionThinking,
   recordSessionTitle,
   sessionThinking,
+  sessionTitle,
   toChatMessages,
+  sessionTodos,
   type SessionHandle,
 } from "@ringko-ai/session";
 import {
   modelLabel,
+  configuredModelIds,
+  PROVIDER_PRESETS,
   saveConfig,
   selectModel,
-  setAuth,
+  setOAuthAccount,
   upsertProviderModels,
   type RingkoConfig,
 } from "@ringko-ai/config";
 import { discoverModels } from "@ringko-ai/providers";
-import { loginGitHubCopilot, loginOpenAiBrowser, loginOpenAiDevice, openBrowser } from "@ringko-ai/auth";
+import { loginAnthropic, loginGitHubCopilot, loginOpenAiBrowser, loginOpenAiDevice, loginXaiDevice, openBrowser } from "@ringko-ai/auth";
 import { Banner } from "./components/Banner.tsx";
 import { Transcript } from "./components/Transcript.tsx";
 import { Spinner } from "./components/Spinner.tsx";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { StatusBar } from "./components/StatusBar.tsx";
 import { ApprovalDialog } from "./components/ApprovalDialog.tsx";
+import { AskDialog } from "./components/AskDialog.tsx";
 import { AuthDialog, type AuthBox } from "./components/AuthDialog.tsx";
 import { Selector, type SelectorItem } from "./components/Selector.tsx";
 import { findCommand, parseInput, type SlashContext } from "./commands.ts";
 import { agentEventToItems, nextId, noticeItem, userItem, type ReplItem } from "./state.ts";
+import { modelItems, nextModel } from "./selection.ts";
+import type { Shortcut } from "./keybindings.ts";
+import { theme } from "./theme.ts";
+import { HISTORY_LIMIT, type EditorState } from "./editor.ts";
+import { copyToClipboard } from "./clipboard.ts";
+import { messagesToItems } from "./state.ts";
 
 export interface ReplProps {
   model: ModelClient;
@@ -95,7 +108,9 @@ function sessionItems(store: SessionStore, limit = 20): SelectorItem[] {
     .list()
     .slice(0, limit)
     .map((meta) => ({
-      label: `${new Date(meta.header.createdAt).toISOString()}  ${meta.header.cwd ?? ""}`,
+      label: (() => { try { return sessionTitle(store.open(meta.id, "read").all()) ?? meta.id; } catch { return meta.id; } })(),
+      description: `${new Date(meta.header.createdAt).toLocaleString()} · ${meta.id}`,
+      group: meta.header.cwd ?? "Sessions",
       value: meta.id,
     }));
 }
@@ -132,7 +147,14 @@ export function Repl(props: ReplProps) {
   const [config, setConfig] = useState<RingkoConfig>(props.config);
   const [items, setItems] = useState<ReplItem[]>([]);
   const [running, setRunning] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const busyRef = useRef(false);
+  const [editor, setEditor] = useState<EditorState>({ text: "", cursor: 0 });
+  const [history, setHistory] = useState<string[]>([]);
   const [pending, setPending] = useState<PendingApproval | null>(null);
+  const [question, setQuestion] = useState<AskEvent | null>(null);
+  const askRef = useRef<AskManager | null>(null);
+  const [jobs, setJobs] = useState<Array<{ jobId: string; description: string; kind: string; status: string; background: boolean }>>([]);
   const abortRef = useRef<AbortController | null>(null);
   const [authBox, setAuthBox] = useState<AuthBox | null>(null);
   const [picker, setPicker] = useState<PickerState | null>(null);
@@ -142,6 +164,10 @@ export function Repl(props: ReplProps) {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [thinking, setThinking] = useState<string>(props.config.thinking ?? "high");
   const [expandThinking, setExpandThinking] = useState<boolean>(props.config.expandThinking ?? false);
+  const [expandTools, setExpandTools] = useState<boolean>(props.config.expandTools ?? false);
+  const [scrollOffset, setScrollOffset] = useState(0);
+  const transcriptBox = useRef<DOMElement | null>(null);
+  const transcriptSize = useBoxMetrics(transcriptBox);
   const ringkoRef = useRef<RingKo | null>(null);
   const sessionRef = useRef<SessionHandle | null>(null);
   const historyRef = useRef<ChatMessage[]>([]);
@@ -151,20 +177,32 @@ export function Repl(props: ReplProps) {
 
   const resumeSession = useCallback(
     (id: string): void => {
+      if (sessionRef.current?.id === id) { print("this session is already active."); return; }
+      try {
       const store = new SessionStore({ cwd: workspace });
       const events = store.open(id, "read").all();
-      sessionRef.current?.close();
       const session = store.open(id, "write");
+      const level = sessionThinking(events) ?? thinking;
+      try {
+        recordSessionModel(session, modelLabelText);
+        recordSessionThinking(session, level);
+        session.flush();
+      } catch (error) { session.close(); throw error; }
+      sessionRef.current?.close();
       sessionRef.current = session;
       historyRef.current = toChatMessages(events);
+      setItems(messagesToItems(historyRef.current, events));
+      setScrollOffset(0);
+      setHistory(historyRef.current.filter(message => message.role === "user").map(message => message.content).slice(-HISTORY_LIMIT));
+      setTodos(sessionTodos(events));
+      setJobs([]);
+      setTitle(sessionTitle(events));
+      titledRef.current = Boolean(sessionTitle(events));
       setSessionId(session.id);
-      const level = sessionThinking(events) ?? thinking;
       setThinking(level);
       onSession?.(session.id);
-      recordSessionModel(session, modelLabelText);
-      recordSessionThinking(session, level);
-      session.flush();
       print(`resumed ${session.id}`);
+      } catch (error) { print(`cannot resume session: ${error instanceof Error ? error.message : "unknown error"}`); }
     },
     [workspace, modelLabelText, thinking, onSession, print],
   );
@@ -190,6 +228,10 @@ export function Repl(props: ReplProps) {
     const store = new SessionStore({ cwd: workspace });
     const activate = (session: SessionHandle, history: ChatMessage[], level: string) => {
       historyRef.current = history;
+      setItems(messagesToItems(history, session.all()));
+      setTodos(sessionTodos(session.all()));
+      setJobs([]);
+      setHistory(history.filter(message => message.role === "user").map(message => message.content).slice(-HISTORY_LIMIT));
       sessionRef.current = session;
       setSessionId(session.id);
       setThinking(level);
@@ -202,6 +244,8 @@ export function Repl(props: ReplProps) {
 
     if (props.resumeSessionId) {
       const events = store.open(props.resumeSessionId, "read").all();
+      setTitle(sessionTitle(events));
+      titledRef.current = Boolean(sessionTitle(events));
       activate(
         store.open(props.resumeSessionId, "write"),
         toChatMessages(events),
@@ -226,6 +270,7 @@ export function Repl(props: ReplProps) {
     }
 
     return () => {
+      abortRef.current?.abort();
       sessionRef.current?.close();
       sessionRef.current = null;
     };
@@ -235,10 +280,34 @@ export function Repl(props: ReplProps) {
   useEffect(() => {
     const session = sessionRef.current;
     if (!session) return;
+    const asker = new AskManager(event => {
+      session.appendEvent(`ask/${event.type}`, event); session.flush();
+      setQuestion(current => event.type === "requested" ? event : current?.id === event.id ? null : current);
+    });
+    askRef.current = asker;
     const ringko = createRingKo({
       model: modelRef.current,
+      task: true,
+      taskModels: createModel ? configuredModelIds(config) : [],
+      resolveTaskModel: async id => { if (!createModel) throw new Error("Model selection unavailable."); const client = await createModel({ ...config, model: id }); if (typeof client === "string") throw new Error(client); return client; },
+      onJobEvent: event => {
+        if (event.type === "started") {
+          const data = event.data as { description: string; background: boolean };
+          setJobs(previous => [...previous, { jobId: event.jobId, description: data.description, kind: event.kind, status: "running", background: data.background }]);
+        } else if (["completed", "failed", "cancelled", "background"].includes(event.type)) setJobs(previous => previous.map(job => job.jobId === event.jobId ? { ...job, ...(event.type === "background" ? { background: true } : { status: event.type }) } : job));
+        if (event.kind === "shell" && ["stdout", "stderr"].includes(event.type)) print(`shell ${event.jobId.slice(0, 8)} ${event.type}: ${(event.data as { content?: string }).content ?? "[truncated output]"}`);
+      },
+      ...(config.mode === "approval" || config.mode === "assist" || config.mode === "full" ? { accessMode: config.mode } : {}),
+      onTaskEvent: event => {
+        if (event.type !== "event") print(`task ${event.taskId.slice(0, 8)} [${event.mode}] ${event.model} ${event.type}: ${event.description}${event.reason ? ` (${event.reason})` : ""}`);
+      },
       session,
-      requestApproval: (request) => new Promise<boolean>((resolve) => setPending({ request, resolve })),
+      requestApproval: (request) => new Promise<boolean>((resolve) => {
+        const finish = (approved: boolean) => { request.signal?.removeEventListener("abort", cancel); resolve(approved); };
+        const cancel = () => { finish(false); setPending(current => current?.request === request ? null : current); };
+        request.signal?.addEventListener("abort", cancel, { once: true });
+        if (request.signal?.aborted) cancel(); else setPending({ request, resolve: finish });
+      }),
       onEvent: (event) => {
         const mapped = agentEventToItems(event);
         if (mapped.length > 0) setItems((previous) => [...previous, ...mapped]);
@@ -247,14 +316,18 @@ export function Repl(props: ReplProps) {
       ...(modelId ? { modelId } : {}),
     });
     registerWorkspaceTools(ringko.tools, { workspace });
-    ringko.tools.register(createTodoTool(createTodoStore(setTodos)));
+    const todoStore = createTodoStore(items => { session.appendEvent("session/todo", { todos: items }); session.flush(); setTodos(items); });
+    todoStore.todos = sessionTodos(session.all());
+    registerSessionTools(ringko.tools, { todos: todoStore, ask: asker.request });
     if (config.capabilities?.network) registerNetworkTools(ringko.tools);
     if (config.capabilities?.shell) registerShellTools(ringko.tools, { cwd: workspace });
     ringkoRef.current = ringko;
     return () => {
+      asker.cancelAll(); ringko.jobs.cancelAll();
+      askRef.current = null;
       ringkoRef.current = null;
     };
-  }, [modelVersion, modelId, workspace, config, sessionId]);
+  }, [modelVersion, modelId, workspace, config.mode, config.providers, config.capabilities?.network, config.capabilities?.shell, sessionId, print, createModel]);
 
   const applyModel = useCallback(
     async (value: string): Promise<void> => {
@@ -279,7 +352,13 @@ export function Repl(props: ReplProps) {
         return;
       }
       const next: RingkoConfig = { ...config, model: `${providerName}/${modelIdValue}` };
-      const result = await createModel(next);
+      if (busyRef.current) return;
+      busyRef.current = true;
+      setSwitching(true);
+      let result: ModelClient | string;
+      try { result = await createModel(next); }
+      catch (error) { print(error instanceof Error ? error.message : "Cannot switch model."); return; }
+      finally { busyRef.current = false; setSwitching(false); }
       if (typeof result === "string") {
         print(result);
         return;
@@ -314,13 +393,7 @@ export function Repl(props: ReplProps) {
       }
       const current = selectModel(config);
       const currentKey = current ? `${current.provider.name}/${current.model.id}` : "";
-      const options: SelectorItem[] = [];
-      for (const provider of config.providers ?? []) {
-        for (const entry of provider.models ?? []) {
-          const value = `${provider.name}/${entry.id}`;
-          options.push({ label: `${provider.name}/${entry.name}`, value, current: value === currentKey });
-        }
-      }
+      const options = modelItems(config, currentKey);
       if (options.length === 0) {
         print("no models configured; edit ~/.ringko/provider.json");
         return;
@@ -346,7 +419,13 @@ export function Repl(props: ReplProps) {
       }
       const next: RingkoConfig = { ...config, thinking: level };
       if (createModel) {
-        const result = await createModel(next);
+        if (busyRef.current) return;
+        busyRef.current = true;
+        setSwitching(true);
+        let result: ModelClient | string;
+        try { result = await createModel(next); }
+        catch (error) { print(error instanceof Error ? error.message : "Cannot change thinking level."); return; }
+        finally { busyRef.current = false; setSwitching(false); }
         if (typeof result === "string") {
           print(result);
           return;
@@ -393,11 +472,13 @@ export function Repl(props: ReplProps) {
   const compact = useCallback(
     (arg: string): void => {
       const ringko = ringkoRef.current;
-      if (!ringko) return;
+      if (!ringko || busyRef.current) return;
+      busyRef.current = true; setSwitching(true);
       ringko
         .compact(arg.trim() || undefined)
         .then((result) => print(result.compacted ? "compacted context." : "nothing to compact."))
-        .catch((error: unknown) => print(`compact failed: ${(error as Error).message}`));
+        .catch((error: unknown) => print(`compact failed: ${(error as Error).message}`))
+        .finally(() => { historyRef.current = [...ringko.history]; busyRef.current = false; setSwitching(false); });
     },
     [print],
   );
@@ -422,11 +503,22 @@ export function Repl(props: ReplProps) {
 
   const runLogin = useCallback(
     async (providerId: string, method: string): Promise<void> => {
+      if (busyRef.current) return;
+      busyRef.current = true; setSwitching(true);
       try {
         let credential;
         if (providerId === "github-copilot") {
           credential = await loginGitHubCopilot((url, code) => {
             setAuthBox({ title: "GitHub Copilot", url, instructions: `Enter code: ${code}` });
+          });
+        } else if (providerId === "xai" || providerId === "grok" || providerId === "xai-oauth") {
+          credential = await loginXaiDevice((url, code) => {
+            setAuthBox({ title: "xAI (Grok)", url, instructions: `Enter code: ${code}` });
+          });
+        } else if (providerId === "anthropic" || providerId === "claude" || providerId === "anthropic-oauth" || providerId === "claude-oauth") {
+          credential = await loginAnthropic((url) => {
+            setAuthBox({ title: "Anthropic · browser", url, instructions: "Complete authorization in your browser." });
+            openBrowser(url);
           });
         } else if (method === "device") {
           credential = await loginOpenAiDevice((url, code) => {
@@ -443,11 +535,16 @@ export function Repl(props: ReplProps) {
           });
         }
         setAuthBox(null);
-        setAuth(providerId, credential);
-        const account = credential.accountId ? ` (account ${credential.accountId})` : "";
-        print(`signed in to ${providerId}${account}.`);
-
-        const type = providerId === "github-copilot" ? "github-copilot" : "openai-oauth";
+        const type = providerId === "github-copilot"
+          ? "github-copilot"
+          : providerId === "xai" || providerId === "grok" || providerId === "xai-oauth"
+            ? "xai-oauth"
+            : providerId === "anthropic" || providerId === "claude" || providerId === "anthropic-oauth" || providerId === "claude-oauth"
+              ? "anthropic-oauth"
+              : "openai-oauth";
+        const accountId = credential.accountId ?? credential.login ?? providerId;
+        setOAuthAccount(type, { id: accountId, credential, authenticatedAt: Date.now() });
+        print(`signed in to ${type} as ${credential.login ?? accountId}.`);
         let nextConfig = config;
         try {
           const discovered = await discoverModels({ type, providerId });
@@ -457,8 +554,8 @@ export function Repl(props: ReplProps) {
             saveConfig(nextConfig);
             print(`${discovered.length} model(s) available for ${providerId}.`);
           }
-        } catch {
-          // Non-fatal: discovery is best-effort.
+        } catch (error) {
+          print(`signed in, but model discovery failed: ${error instanceof Error ? error.message : "unknown error"}`);
         }
 
         if (createModel) {
@@ -474,6 +571,8 @@ export function Repl(props: ReplProps) {
       } catch (error) {
         setAuthBox(null);
         print(error instanceof Error ? error.message : "login failed.");
+      } finally {
+        busyRef.current = false; setSwitching(false);
       }
     },
     [config, createModel, print],
@@ -492,8 +591,14 @@ export function Repl(props: ReplProps) {
       if (requested === "" || requested === "github-copilot" || requested === "copilot") {
         options.push({ label: "GitHub Copilot (device code)", value: "github-copilot:device" });
       }
+      if (requested === "" || requested === "xai" || requested === "xai-oauth" || requested === "grok") {
+        options.push({ label: "xAI · Grok (device code)", value: "xai-oauth:device" });
+      }
+      if (requested === "" || requested === "anthropic" || requested === "anthropic-oauth" || requested === "claude") {
+        options.push({ label: "Anthropic · Claude Pro/Max (browser)", value: "anthropic-oauth:browser" });
+      }
       if (options.length === 0) {
-        print(`unsupported OAuth provider: ${arg} (supported: openai, github-copilot)`);
+        print(`unsupported OAuth provider: ${arg} (supported: openai, github-copilot, xai, anthropic)`);
         return;
       }
       setPicker({
@@ -511,21 +616,80 @@ export function Repl(props: ReplProps) {
 
   const connect = useCallback((): void => {
     const providers = config.providers ?? [];
-    if (providers.length === 0) {
-      print("no providers configured; edit ~/.ringko/provider.json");
-      return;
-    }
-    for (const provider of providers) {
-      const models = (provider.models ?? []).map((entry) => entry.id).join(", ");
-      print(`${provider.name} (${provider.type ?? "?"})  ${models}`);
-    }
-    print(`current: ${modelLabel(selectModel(config))} · switch with /model`);
-  }, [config, print]);
+    const presetItems: SelectorItem[] = PROVIDER_PRESETS.map((preset) => ({
+      label: preset.label,
+      value: `preset:${preset.id}`,
+      group: "Presets",
+      description: `${preset.type}${preset.baseURL ? ` · ${preset.baseURL}` : ""}`,
+    }));
+    const configuredItems: SelectorItem[] = providers.map((provider) => ({
+      label: provider.name,
+      value: `provider:${provider.name}`,
+      group: "Configured",
+      description: `${provider.type ?? "custom"} · ${provider.models?.length ?? 0} models`,
+    }));
+    setPicker({
+      title: "Connect a provider",
+      items: [...presetItems, ...configuredItems],
+      onSelect: (value) => {
+        if (value.startsWith("preset:")) {
+          const preset = PROVIDER_PRESETS.find((entry) => entry.id === value.slice("preset:".length));
+          if (!preset) return;
+          if ((config.providers ?? []).some((provider) => provider.name === preset.id)) {
+            setPicker(null);
+            print(`${preset.id} is already configured.`);
+            return;
+          }
+          const provider = { name: preset.id, type: preset.type, ...(preset.baseURL ? { baseURL: preset.baseURL } : {}) };
+          const next = { ...config, providers: [...(config.providers ?? []), provider] };
+          try {
+            saveConfig(next);
+            setConfig(next);
+          } catch (error) {
+            print(error instanceof Error ? error.message : "cannot save provider.");
+            return;
+          }
+          setPicker(null);
+          print(
+            preset.auth === "oauth"
+              ? `added ${preset.id} (${preset.type}). Run /login ${preset.id} to sign in.`
+              : `added ${preset.id} (${preset.type}). Set its API key in ~/.ringko/provider.json or the WebUI, then /model.`,
+          );
+          return;
+        }
+        if (value.startsWith("provider:")) {
+          const name = value.slice("provider:".length);
+          const current = selectModel(config);
+          const options = modelItems(config, current ? `${current.provider.name}/${current.model.id}` : "").filter((item) => item.group === name);
+          if (!options.length) {
+            print(`no models configured for ${name}; use ringko models ${name}`);
+            return;
+          }
+          setPicker({ title: `${name} models`, items: options, onSelect: (model) => { setPicker(null); void applyModel(model); } });
+        }
+      },
+    });
+  }, [config, print, applyModel]);
 
   const slash = useMemo<SlashContext>(
     () => ({
       print,
-      clear: () => setItems([]),
+      clear: () => { setItems([]); setScrollOffset(0); },
+      newSession: () => {
+        const session = new SessionStore({ cwd: workspace }).create();
+        try {
+          recordSessionModel(session, modelLabelText);
+          recordSessionThinking(session, thinking);
+          session.flush();
+        } catch (error) { session.close(); throw error; }
+        sessionRef.current?.close();
+        sessionRef.current = session;
+        historyRef.current = [];
+        setItems([]); setHistory([]); setTodos([]); setTitle(undefined); setScrollOffset(0);
+        titledRef.current = false;
+        setSessionId(session.id);
+        onSession?.(session.id);
+      },
       exit: () => exit(),
       modelLabel: modelLabelText,
       workspace,
@@ -552,10 +716,15 @@ export function Repl(props: ReplProps) {
       pickThinking,
       toggleThinking,
       compact,
+      thinking,
+      onSession,
     ],
   );
 
   async function submit(input: string): Promise<void> {
+    if (busyRef.current) return;
+    setHistory(previous => [...previous.filter(value => value !== input), input].slice(-HISTORY_LIMIT));
+    setScrollOffset(0);
     const parsed = parseInput(input);
     if (parsed.kind === "unknown") {
       setItems((previous) => [...previous, noticeItem(`Unknown command: /${parsed.name} (try /help)`)]);
@@ -567,12 +736,14 @@ export function Repl(props: ReplProps) {
         setItems((previous) => [...previous, noticeItem(`Unknown command: /${parsed.name} (try /help)`)]);
         return;
       }
-      command.run(slash, parsed.arg);
+      try { command.run(slash, parsed.arg); }
+      catch (error) { print(`command failed: ${error instanceof Error ? error.message : "unknown error"}`); }
       return;
     }
 
     const ringko = ringkoRef.current;
     if (!ringko) return;
+    busyRef.current = true;
     setItems((previous) => [...previous, userItem(parsed.value)]);
     setRunning(true);
     const controller = new AbortController();
@@ -595,34 +766,84 @@ export function Repl(props: ReplProps) {
         },
       ]);
     } finally {
+      historyRef.current = sessionRef.current ? toChatMessages(sessionRef.current.all()) : [...ringko.history];
+      busyRef.current = false;
       abortRef.current = null;
       setRunning(false);
     }
   }
 
-  useInput((_input, key) => {
-    if (key.escape && running && !picker && !pending) {
-      abortRef.current?.abort();
+  useInput((input, key) => {
+    if (running && !question && !pending && key.ctrl && input === "b") {
+      const foreground = ringkoRef.current?.jobs.list().find(job => job.status === "running" && !job.background);
+      if (foreground) { ringkoRef.current?.jobs.detach(foreground.jobId); print(`job ${foreground.jobId} moved to background`); }
     }
   });
 
+  useInput((input, key) => {
+    if (pending && key.ctrl && input === "c") {
+      pending.resolve(false); setPending(null); abortRef.current?.abort();
+    }
+  }, { isActive: Boolean(pending) });
+
   function answer(approved: boolean): void {
-    setPending((current) => {
-      current?.resolve(approved);
-      return null;
-    });
+    pending?.resolve(approved);
+    setPending(null);
+  }
+
+  function handleShortcut(action: Shortcut): void {
+    if (action === "pageUp" || action === "pageDown") {
+      const page = Math.max(1, Math.floor(transcriptSize.height) - 2);
+      setScrollOffset(previous => Math.max(0, previous + (action === "pageUp" ? page : -page)));
+      return;
+    }
+    if (switching && action !== "copy") { print("wait for the current configuration operation."); return; }
+    if (action === "thinking") { toggleThinking(""); return; }
+    if (action === "tools") {
+      const value = !expandTools;
+      setExpandTools(value);
+      const next = { ...config, expandTools: value };
+      setConfig(next);
+      try { saveConfig(next); } catch (error) { print(`display changed, but saving failed: ${error instanceof Error ? error.message : "unknown error"}`); }
+      return;
+    }
+    if (action === "copy") {
+      const last = [...items].reverse().find(item => item.kind === "assistant");
+      if (last) { copyToClipboard(last.text); print("last answer sent to clipboard."); }
+      else print("no assistant answer to copy.");
+      return;
+    }
+    if (busyRef.current) { print("wait for the current operation, or press Esc to interrupt."); return; }
+    if (action === "model") pickModel("");
+    else if (action === "sessions") openSessionPicker();
+    else if (action === "effort") {
+      const levels = ["off", "low", "high", "max"];
+      void applyThinking(levels[(levels.indexOf(thinking) + 1) % levels.length]);
+    } else if (action === "nextModel" || action === "previousModel") {
+      const current = selectModel(config);
+      const key = current ? `${current.provider.name}/${current.model.id}` : "";
+      const next = nextModel(modelItems(config, key), key, action === "nextModel" ? 1 : -1);
+      if (next) void applyModel(next); else pickModel("");
+    }
   }
 
   return (
     <Box flexDirection="column" width={size.columns} height={size.rows}>
       <Banner modelLabel={modelLabelText} workspace={workspace} />
-      <Box flexDirection="column" flexGrow={1} justifyContent="flex-end" overflowY="hidden">
-        <Transcript items={items} expandThinking={expandThinking} />
+      <Box ref={transcriptBox} flexDirection="column" flexGrow={1} flexShrink={1} minHeight={0} justifyContent="flex-end" overflowY="hidden">
+        <Transcript items={items} expandThinking={expandThinking} expandTools={expandTools} columns={size.columns} rows={Math.floor(transcriptSize.height)} offset={scrollOffset} onOffset={setScrollOffset} />
+        {items.length === 0 ? <Box flexDirection="column" paddingX={2} marginBottom={1}>
+          <Text bold color={theme.brand}>What would you like to work on?</Text>
+          <Text color={theme.dim}>/connect providers · /model models · /resume sessions</Text>
+          <Text color={theme.dim}>Ctrl+L models · Shift+Tab effort · /shortcuts keyboard help</Text>
+        </Box> : null}
       </Box>
       {running ? <Spinner /> : null}
+      {switching ? <Spinner label="Applying changes" /> : null}
       <TodoPanel todos={todos} />
+      {jobs.some(job => job.status === "running") ? <Box flexDirection="column" paddingX={1}>{jobs.filter(job => job.status === "running").slice(-4).map(job => <Text key={job.jobId} color={theme.dim}>{job.kind} {job.jobId.slice(0, 8)} · {job.background ? "background" : "foreground"} · {job.description}</Text>)}<Text color={theme.dim}>Ctrl+B move foreground job to background</Text></Box> : null}
       {pending ? <ApprovalDialog request={pending.request} onAnswer={answer} /> : null}
-      {pending ? null : authBox ? (
+      {pending ? null : question?.input ? <AskDialog key={question.id} input={question.input} onAnswer={output => askRef.current?.respond(question.id, output)} onCancel={() => askRef.current?.respond(question.id)} /> : authBox ? (
         <AuthDialog
           auth={authBox}
           onCopied={(label) => print(`${label} copied to clipboard.`)}
@@ -636,12 +857,13 @@ export function Repl(props: ReplProps) {
           onCancel={() => setPicker(null)}
         />
       ) : (
-        <PromptInput running={running} onSubmit={submit} />
+        <PromptInput running={running || switching} editor={editor} onEdit={setEditor} history={history} onSubmit={submit} onShortcut={handleShortcut} onInterrupt={() => abortRef.current?.abort()} />
       )}
       <StatusBar
         modelLabel={thinking === "off" ? `${modelLabelText} • thinking off` : `${modelLabelText} • ${thinking}`}
         workspace={workspace}
         title={title}
+        columns={size.columns}
       />
     </Box>
   );

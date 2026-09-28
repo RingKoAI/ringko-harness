@@ -1,14 +1,13 @@
 import { useTheme } from 'next-themes'
 import type { ReactNode } from 'react'
-import { NavLink, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { setModel } from '@/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Separator } from '@/components/ui/separator'
 import { LOCALES, useI18n, type Locale, type MessageKey } from '@/i18n'
 import { ConnectorsPage } from '@/pages/ConnectorsPage'
+import { OAuthPage } from '@/pages/OAuthPage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
 import { ProvidersPage } from '@/pages/ProvidersPage'
 import { SkillsPage } from '@/pages/SkillsPage'
@@ -20,6 +19,7 @@ const PAGES: { slug: string; label: MessageKey }[] = [
   { slug: 'general', label: 'settings.general' },
   { slug: 'projects', label: 'settings.projects' },
   { slug: 'providers', label: 'settings.providers' },
+  { slug: 'oauth', label: 'settings.oauth' },
   { slug: 'models', label: 'settings.models' },
   { slug: 'connectors', label: 'settings.connectors' },
   { slug: 'skills', label: 'settings.skills' },
@@ -167,16 +167,23 @@ function AboutPage() {
   )
 }
 
-export function SettingsPage() {
+export function SettingsPanel({
+  page,
+  onNavigate,
+}: {
+  page: string
+  onNavigate: (page: string) => void
+}) {
   const { t } = useI18n()
-  const { page } = useParams()
   const active = PAGES.some((entry) => entry.slug === page) ? page : 'general'
 
   const content =
     active === 'projects' ? (
       <ProjectsPage />
-    ) : active === 'providers' ? (
+    ) :     active === 'providers' ? (
       <ProvidersPage />
+    ) : active === 'oauth' ? (
+      <OAuthPage />
     ) : active === 'models' ? (
       <ModelsPage />
     ) : active === 'connectors' ? (
@@ -190,27 +197,26 @@ export function SettingsPage() {
     )
 
   return (
-    <div className="flex min-h-0 flex-1">
-      <nav className="w-48 shrink-0 border-r p-3">
-        <p className="px-2 pb-2 text-xs font-medium text-muted-foreground">{t('settings.title')}</p>
-        <div className="flex flex-col gap-1">
-          {PAGES.map((entry) => (
-            <Button
-              key={entry.slug}
-              asChild
-              variant="ghost"
-              className={cn('justify-start', active === entry.slug && 'bg-accent text-accent-foreground')}
-            >
-              <NavLink to={`/settings/${entry.slug}`}>{t(entry.label)}</NavLink>
-            </Button>
-          ))}
-        </div>
+    <div className="flex h-full min-h-0">
+      <nav className="flex w-40 shrink-0 flex-col gap-1 overflow-y-auto border-r p-2">
+        {PAGES.map((entry) => (
+          <Button
+            key={entry.slug}
+            variant="ghost"
+            size="sm"
+            className={cn('justify-start', active === entry.slug && 'bg-accent text-accent-foreground')}
+            onClick={() => onNavigate(entry.slug)}
+          >
+            {t(entry.label)}
+          </Button>
+        ))}
       </nav>
-      <div className="min-w-0 flex-1 overflow-y-auto p-6">
-        <div className="mx-auto max-w-2xl">
-          <h1 className="mb-4 text-lg font-semibold">{t('settings.title')}</h1>
-          <Separator className="mb-4" />
-          {content}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex h-10 shrink-0 items-center border-b px-4 text-sm font-medium">
+          {t('settings.title')}
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div className="mx-auto max-w-2xl">{content}</div>
         </div>
       </div>
     </div>

@@ -1,6 +1,7 @@
 import { Box, Text, useInput } from "ink";
 import type { ToolApprovalRequest } from "@ringko-ai/sdk";
 import { theme } from "../theme.ts";
+import { cleanTerminalText } from "../editor.ts";
 
 export interface ApprovalDialogProps {
   request: ToolApprovalRequest;
@@ -16,13 +17,13 @@ export function ApprovalDialog({ request, onAnswer }: ApprovalDialogProps) {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={theme.permission} paddingX={1}>
       <Text color={theme.permission} bold>
-        Approve {request.toolName}?
+        Approve {cleanTerminalText(request.toolName)}?
       </Text>
       <Text color={theme.dim}>
         {request.riskKind} · {request.riskLevel}
       </Text>
-      <Text>{request.reason}</Text>
-      {request.target ? <Text color={theme.dim}>target: {request.target}</Text> : null}
+      <Text>{cleanTerminalText(request.reason)}</Text>
+      {request.target ? <Text color={theme.dim}>target: {cleanTerminalText(request.target)}</Text> : null}
       <Text color={theme.dim}>y approve · n reject</Text>
     </Box>
   );
