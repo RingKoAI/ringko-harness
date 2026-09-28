@@ -1,7 +1,7 @@
 // Model discovery: query a provider's `/models` endpoint when it has one, and
 // fall back to the maintained catalog (`@ringko-ai/config` `models.json`).
 import { applyProxyEnv, getAuth, knownModels } from "@ringko-ai/config";
-import { OPENAI_CODEX_ENDPOINT } from "@ringko-ai/auth";
+import { CODEX_ORIGINATOR, OPENAI_CODEX_ENDPOINT, codexUserAgent, codexVersion } from "@ringko-ai/auth";
 
 export interface DiscoveredModel {
   id: string;
@@ -10,6 +10,24 @@ export interface DiscoveredModel {
 
 export const COPILOT_MODELS_URL = "https://api.githubcopilot.com/models";
 const GITHUB_API_VERSION = "2026-06-01";
+
+/** Build the Codex model discovery request using the same client identity as inference. */
+export function codexModelsRequest(access: string, accountId?: string): {
+  url: string;
+  headers: Record<string, string>;
+} {
+  const url = new URL(`${OPENAI_CODEX_ENDPOINT}/models`);
+  url.searchParams.set("client_version", codexVersion());
+  return {
+    url: url.toString(),
+    headers: {
+      authorization: `Bearer ${access}`,
+      originator: CODEX_ORIGINATOR,
+      "user-agent": codexUserAgent(),
+      ...(accountId ? { "chatgpt-account-id": accountId } : {}),
+    },
+  };
+}
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -88,10 +106,8 @@ export async function discoverModels(input: {
       const credential = auth("openai");
       if (credential?.type === "oauth") {
         try {
-          const live = await fetchModels(`${OPENAI_CODEX_ENDPOINT}/models`, {
-            authorization: `Bearer ${credential.access}`,
-            ...(credential.accountId ? { "chatgpt-account-id": credential.accountId } : {}),
-          });
+          const request = codexModelsRequest(credential.access, credential.accountId);
+          const live = await fetchModels(request.url, request.headers);
           if (live.length > 0) return live;
         } catch {
           // No usable endpoint; use the catalog below.
