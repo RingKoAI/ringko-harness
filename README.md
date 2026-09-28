@@ -16,6 +16,11 @@ Code extension, desktop app).
 Every tool invocation passes through the harness approval gate; hosts supply the
 approval handler, and risky operations fail closed when none is configured.
 
+In the Web UI, open a session and select **Tool call log** beside the composer
+controls to inspect recorded call arguments, results, status, and timestamps.
+Older sessions without separate `tool/call` events remain readable. The log is
+available through `GET /api/sessions/:id/tool-log` in pages of up to 100 calls.
+
 ## User-level resources
 
 Configuration, skills, and MCP servers live outside the project, under two roots

@@ -6,7 +6,15 @@ import { mkdirSync, readdirSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
-import { createRingKo, access, isAccessMode, type ChatMessage, type RingKo } from "@ringko-ai/sdk";
+import {
+  createRingKo,
+  access,
+  estimateMessagesTokens,
+  estimateToolsTokens,
+  isAccessMode,
+  type ChatMessage,
+  type RingKo,
+} from "@ringko-ai/sdk";
 import {
   createTodoStore,
   createTodoTool,
@@ -39,6 +47,7 @@ import {
   recordSessionTitle,
   sessionArchived,
   sessionTitle,
+  toolLogEntries,
   toChatMessages,
   type SessionHandle,
 } from "@ringko-ai/session";
@@ -178,6 +187,10 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       auth: { required: Boolean(options.authToken) },
       access: access(accessMode),
       accessMode,
+      context: {
+        used: estimateToolsTokens(tools.tools.list()),
+        limit: typeof model === "string" ? 128_000 : (model.selection.model.maxInputTokens ?? 128_000),
+      },
       thinking: config.thinking ?? null,
       expandThinking: config.expandThinking ?? false,
       expandTools: config.expandTools ?? false,
@@ -588,6 +601,40 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     }
   }
 
+  /** Most recent tool calls from the session event log, including legacy calls. */
+  function handleToolLog(id: string, url: URL): Response {
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const limit = Number(url.searchParams.get("limit") ?? 50);
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      return json({ error: "Invalid tool log page." }, 400);
+    }
+    try {
+      const entries = toolLogEntries(store.open(id, "read").all()).reverse();
+      return json({ entries: entries.slice(offset, offset + limit), total: entries.length });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Unknown session." }, 404);
+    }
+  }
+
+  /** Estimated context usage for a session: transcript + tool schemas vs the model window. */
+  function handleContext(id: string): Response {
+    const config = readConfig();
+    if (typeof config === "string") return json({ error: config }, 500);
+    const model = loadModel(config);
+    if (typeof model === "string") return json({ error: model }, 400);
+    const limit = model.selection.model.maxInputTokens ?? 128_000;
+    let used: number;
+    try {
+      const history = toChatMessages(store.open(id, "read").all());
+      const probe = createRingKo({ model: async () => ({ content: "", toolCalls: [] }) });
+      registerTools(probe, config, workspace);
+      used = estimateMessagesTokens(history) + estimateToolsTokens(probe.tools.list());
+    } catch {
+      return json({ error: "Unknown session." }, 404);
+    }
+    return json({ used, limit, ratio: limit > 0 ? Math.min(1, used / limit) : 0 });
+  }
+
   function handleDeleteSession(id: string): Response {
     try {
       return store.delete(id) ? json({ ok: true }) : json({ error: "Unknown session." }, 404);
@@ -828,6 +875,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         const action = slash === -1 ? "" : rest.slice(slash + 1);
         if (request.method === "GET" && action === "") return handleSession(id);
         if (request.method === "DELETE" && action === "") return handleDeleteSession(id);
+        if (request.method === "GET" && action === "context") return handleContext(id);
+        if (request.method === "GET" && action === "tool-log") return handleToolLog(id, url);
         if (request.method === "POST" && action === "title") return await handleRenameSession(id, request);
         if (request.method === "POST" && action === "archive") return await handleArchiveSession(id, request);
       }

@@ -1,12 +1,24 @@
-import { ArrowUp, Brain, Paperclip, Square, Terminal, User, Wrench, X } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { ArrowUp, Brain, ListTree, Paperclip, Square, Terminal, User, Wrench, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { compact, reload, setUi, uploadFile, type ServerMessage, type ToolCall, type UploadedFile } from '@/api'
+import {
+  compact,
+  fetchContext,
+  reload,
+  setUi,
+  uploadFile,
+  type ServerMessage,
+  type ToolCall,
+  type UploadedFile,
+} from '@/api'
 import { AccessPicker } from '@/components/access-picker'
+import { ContextRingLabeled } from '@/components/context-ring'
 import { Markdown } from '@/components/markdown'
 import { ModelPicker } from '@/components/model-picker'
 import { ThinkingPicker } from '@/components/thinking-picker'
 import { TodoPanel } from '@/components/todo-panel'
+import { ToolLogSheet } from '@/components/tool-log-sheet'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -135,9 +147,40 @@ function MessageRow({
 export function ChatPage() {
   const { t } = useI18n()
   const app = useApp()
+  const navigate = useNavigate()
+  const { id } = useParams<{ id: string }>()
   const [draft, setDraft] = useState('')
   const [attachments, setAttachments] = useState<UploadedFile[]>([])
+  const [context, setContext] = useState<{ used: number; limit: number } | null>(null)
+  const [toolLogOpen, setToolLogOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Load the session named by the URL (deep link / refresh).
+  useEffect(() => {
+    if (id && id !== app.sessionId) app.openSession(id)
+  }, [id, app.sessionId, app.openSession])
+
+  // Keep the URL in sync with the active session (after the first message).
+  useEffect(() => {
+    if (!id && app.sessionId) navigate(`/${app.sessionId}`, { replace: true })
+  }, [id, app.sessionId, navigate])
+
+  // Refresh the context-usage ring as the conversation grows.
+  useEffect(() => {
+    if (!app.sessionId) {
+      setContext(null)
+      return
+    }
+    let cancelled = false
+    fetchContext(app.sessionId)
+      .then((usage) => {
+        if (!cancelled) setContext({ used: usage.used, limit: usage.limit })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [app.sessionId, app.messages.length, app.info?.modelId])
 
   async function onFiles(files: FileList | null): Promise<void> {
     if (!files || files.length === 0) return
@@ -196,7 +239,7 @@ export function ChatPage() {
 
   return (
     <>
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-h-0 flex-1">
         {empty ? (
           <div className="flex h-full min-h-[60vh] flex-col items-center justify-center gap-6 px-6 text-center">
             <div className="grid size-12 place-items-center rounded-2xl bg-primary text-lg font-semibold text-primary-foreground shadow-sm">
@@ -235,7 +278,7 @@ export function ChatPage() {
         )}
       </ScrollArea>
 
-      <div className="border-t bg-background/60 p-3 backdrop-blur sm:p-4">
+      <div className="shrink-0 border-t bg-background/60 p-3 backdrop-blur sm:p-4">
         <TodoPanel />
         <div className="mx-auto max-w-3xl rounded-2xl border bg-card shadow-sm transition-all focus-within:ring-2 focus-within:ring-ring/40">
           {commandHints.length > 0 ? (
@@ -310,6 +353,17 @@ export function ChatPage() {
                 variant="ghost"
                 size="icon"
                 className="size-8"
+                title={t('toolLog.title')}
+                aria-label={t('toolLog.title')}
+                disabled={!app.sessionId}
+                onClick={() => setToolLogOpen(true)}
+              >
+                <ListTree className="size-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
                 title={t('upload.attach')}
                 onClick={() => fileInputRef.current?.click()}
               >
@@ -326,25 +380,32 @@ export function ChatPage() {
                 }}
               />
             </div>
-            {app.busy ? (
-              <Button variant="outline" size="icon" className="rounded-full" onClick={app.stop} title={t('composer.stop')}>
-                <Square />
-              </Button>
-            ) : (
-              <Button
-                size="icon"
-                className="rounded-full"
-                onClick={submit}
-                disabled={draft.trim().length === 0}
-                title={t('composer.send')}
-              >
-                <ArrowUp />
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {(() => {
+                const usage = context ?? app.info?.context
+                return usage ? <ContextRingLabeled used={usage.used} limit={usage.limit} /> : null
+              })()}
+              {app.busy ? (
+                <Button variant="outline" size="icon" className="rounded-full" onClick={app.stop} title={t('composer.stop')}>
+                  <Square />
+                </Button>
+              ) : (
+                <Button
+                  size="icon"
+                  className="rounded-full"
+                  onClick={submit}
+                  disabled={draft.trim().length === 0}
+                  title={t('composer.send')}
+                >
+                  <ArrowUp />
+                </Button>
+              )}
+            </div>
           </div>
         </div>
         <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-muted-foreground">{t('composer.hint')}</p>
       </div>
+      <ToolLogSheet open={toolLogOpen} onOpenChange={setToolLogOpen} sessionId={app.sessionId} busy={app.busy} />
     </>
   )
 }

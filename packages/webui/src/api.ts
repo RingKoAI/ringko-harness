@@ -33,6 +33,7 @@ export interface Info {
   auth: { required: boolean };
   access: Access;
   accessMode: AccessMode;
+  context: { used: number; limit: number };
   thinking: string | null;
   expandThinking: boolean;
   expandTools: boolean;
@@ -82,6 +83,24 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments?: unknown;
+}
+
+export interface ToolLogEntry {
+  id: string;
+  callId: string;
+  name: string;
+  arguments: unknown;
+  turn: number | null;
+  requestedAt: number;
+  startedAt: number | null;
+  completedAt: number | null;
+  status: 'pending' | 'success' | 'error';
+  result: string | null;
+}
+
+export interface ToolLogPage {
+  entries: ToolLogEntry[];
+  total: number;
 }
 
 export interface ServerMessage {
@@ -176,12 +195,26 @@ export function fetchInfo(): Promise<Info> {
   return getJson<Info>("/api/info");
 }
 
+export interface ContextUsage {
+  used: number;
+  limit: number;
+  ratio: number;
+}
+
+export function fetchContext(id: string): Promise<ContextUsage> {
+  return getJson<ContextUsage>(`/api/sessions/${encodeURIComponent(id)}/context`);
+}
+
 export function fetchSessions(): Promise<SessionMeta[]> {
   return getJson<SessionMeta[]>("/api/sessions");
 }
 
 export function fetchSession(id: string): Promise<{ id: string; messages: ServerMessage[] }> {
   return getJson<{ id: string; messages: ServerMessage[] }>(`/api/sessions/${encodeURIComponent(id)}`);
+}
+
+export function fetchToolLog(id: string, offset = 0): Promise<ToolLogPage> {
+  return getJson<ToolLogPage>(`/api/sessions/${encodeURIComponent(id)}/tool-log?offset=${offset}`);
 }
 
 export async function createSession(): Promise<SessionMeta> {

@@ -282,7 +282,7 @@ export function Layout() {
                       className={session.archived ? 'opacity-60' : undefined}
                       onClick={() => {
                         app.openSession(session.id)
-                        navigate('/')
+                        navigate(`/${session.id}`)
                       }}
                     >
                       <MessageSquare />
@@ -350,7 +350,7 @@ export function Layout() {
         </SidebarFooter>
       </Sidebar>
 
-      <SidebarInset className="flex h-svh min-w-0 flex-col">
+      <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-1 h-4" />

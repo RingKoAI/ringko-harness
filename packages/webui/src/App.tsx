@@ -16,6 +16,7 @@ export default function App() {
             <Route path="/auth/login" element={<LoginPage />} />
             <Route element={<Layout />}>
               <Route index element={<ChatPage />} />
+              <Route path=":id" element={<ChatPage />} />
               <Route path="settings" element={<Navigate to="/settings/general" replace />} />
               <Route path="settings/:page" element={<SettingsPage />} />
             </Route>
