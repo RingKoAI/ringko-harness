@@ -15,11 +15,12 @@
     "dev:webui": "pnpm --filter @ringko-ai/webui dev",
     "dev:app": "pnpm --filter @ringko-ai/app start",
     "test": "pnpm --filter @ringko-ai/config test && pnpm --filter @ringko-ai/auth test && pnpm --filter @ringko-ai/session test && pnpm --filter @ringko-ai/harness test && pnpm --filter @ringko-ai/tools test && pnpm --filter @ringko-ai/sdk test && pnpm --filter @ringko-ai/providers test && pnpm --filter @ringko-ai/repl test && pnpm --filter @ringko-ai/tui test",
-    "typecheck": "bunx tsc -p packages/config/tsconfig.json && bunx tsc -p packages/auth/tsconfig.json && bunx tsc -p packages/session/tsconfig.json && bunx tsc -p packages/harness/tsconfig.json && bunx tsc -p packages/tools/tsconfig.json && bunx tsc -p packages/sdk/tsconfig.json && bunx tsc -p packages/providers/tsconfig.json && bunx tsc -p packages/repl/tsconfig.json && bunx tsc -p packages/tui/tsconfig.json"
+    "typecheck": "pnpm exec tsc -p packages/config/tsconfig.json && pnpm exec tsc -p packages/auth/tsconfig.json && pnpm exec tsc -p packages/session/tsconfig.json && pnpm exec tsc -p packages/harness/tsconfig.json && pnpm exec tsc -p packages/tools/tsconfig.json && pnpm exec tsc -p packages/sdk/tsconfig.json && pnpm exec tsc -p packages/providers/tsconfig.json && pnpm exec tsc -p packages/repl/tsconfig.json && pnpm exec tsc -p packages/tui/tsconfig.json"
   },
   "devDependencies": {
     "bun-types": "^1.2.19",
     "concurrently": "^10.0.5",
-    "react-devtools-core": "^8.0.0"
+    "react-devtools-core": "^8.0.0",
+    "typescript": "^5.9.3"
   }
 }
