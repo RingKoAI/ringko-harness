@@ -47,6 +47,10 @@ export interface RingkoConfig {
   workspace?: string;
   capabilities?: {
     network?: boolean;
+    /** Permit direct local/private network targets for webfetch. Off by default. */
+    privateNetwork?: boolean;
+    /** Built-in websearch service; defaults to Exa. */
+    websearchProvider?: "exa" | "parallel";
     shell?: boolean;
   };
   /** Legacy alias of `permission` (access mode). */

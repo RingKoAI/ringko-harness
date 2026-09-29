@@ -22,6 +22,8 @@ export interface McpServerTools {
 }
 
 const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_TOOL_PAGES = 32;
+const MAX_SERVER_TOOLS = 512;
 const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "ringko", version: "0.1.0" };
 
@@ -106,11 +108,15 @@ export class McpClient {
   async listTools(): Promise<McpTool[]> {
     const tools: McpTool[] = [];
     let cursor: string | undefined;
+    const seen = new Set<string>();
+    let pages = 0;
     do {
+      if (++pages > MAX_TOOL_PAGES) throw new Error("MCP tool listing exceeds 32 pages.");
       const result = (await this.request("tools/list", cursor === undefined ? {} : { cursor })) as
         | { tools?: Array<{ name?: unknown; description?: unknown; inputSchema?: unknown }>; nextCursor?: unknown }
         | undefined;
       for (const tool of result?.tools ?? []) {
+        if (tools.length >= MAX_SERVER_TOOLS) throw new Error("MCP server exposes more than 512 tools.");
         if (typeof tool.name !== "string" || tool.name.length === 0) continue;
         const schema =
           isRecord(tool.inputSchema) && tool.inputSchema.type === "object"
@@ -123,6 +129,7 @@ export class McpClient {
         });
       }
       cursor = typeof result?.nextCursor === "string" && result.nextCursor.length > 0 ? result.nextCursor : undefined;
+      if (cursor) { if (seen.has(cursor)) throw new Error("MCP tool listing repeats its cursor."); seen.add(cursor); }
     } while (cursor !== undefined);
     return tools;
   }

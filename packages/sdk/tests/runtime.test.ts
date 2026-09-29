@@ -152,3 +152,14 @@ it("fails closed when an explicit permission or workflow tool policy is malforme
     expect(() => runtime.createAgent({ workflow: "malformed" }, options)).toThrow("policy");
   } finally { await runtime.close(); }
 }));
+
+it("registers both network tools and enforces saved denial before provider access", async () => isolated(async directory => {
+  const runtime = new RuntimeManager(directory);
+  runtime.permissions.add("", { tool: "websearch", behavior: "deny" }, "saved");
+  const managed = runtime.createAgent({ capabilities: { network: true }, permission: "full" }, { model: async () => ({ content: "", toolCalls: [] }) });
+  try {
+    expect(managed.agent.tools.names()).toContain("webfetch");
+    expect(managed.agent.tools.names()).toContain("websearch");
+    await expect(managed.agent.tools.call("websearch", { query: "test" }, undefined, "full")).rejects.toThrow("Approval was not granted");
+  } finally { managed.close(); await runtime.close(); }
+}));

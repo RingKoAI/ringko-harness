@@ -53,6 +53,19 @@ afterAll(() => {
 });
 
 describe("mcp streamable http", () => {
+  it("rejects oversized responses and repeated tool listing cursors", async () => {
+    const fixture = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+      const message = await request.json() as { id?: string; method: string };
+      if (!message.id) return new Response(null, { status: 202 });
+      if (new URL(request.url).pathname === "/large") return new Response("x".repeat(1024 * 1024 + 1));
+      return Response.json({ jsonrpc: "2.0", id: message.id, result: message.method === "initialize" ? { serverInfo: {} } : { tools: [], nextCursor: "same" } });
+    } });
+    try {
+      await expect(openMcpServer("large", { url: `http://127.0.0.1:${fixture.port}/large` })).rejects.toThrow("1 MiB");
+      await expect(openMcpServer("loop", { url: `http://127.0.0.1:${fixture.port}/mcp` })).rejects.toThrow("repeats its cursor");
+    } finally { fixture.stop(true); }
+  });
+
   it("connects over HTTP and lists tools", async () => {
     const connection = await openMcpServer("http-echo", { type: "http", url: `${base}/mcp` });
     try {

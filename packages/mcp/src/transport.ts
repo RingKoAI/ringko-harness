@@ -1,5 +1,28 @@
 // MCP transports: stdio, legacy HTTP+SSE, and Streamable HTTP.
 import { writeDiagnostic } from "@ringko-ai/config";
+const MAX_RPC_RESPONSE_BYTES = 1024 * 1024;
+const HTTP_TIMEOUT_MS = 30_000;
+
+async function boundedResponse(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let complete = false;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) { complete = true; break; }
+      size += value.byteLength;
+      if (size > MAX_RPC_RESPONSE_BYTES) throw new Error("MCP response exceeds 1 MiB.");
+      chunks.push(value);
+    }
+    return new TextDecoder().decode(Buffer.concat(chunks, size));
+  } finally {
+    if (!complete) await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
 export interface JsonRpcMessage {
   jsonrpc: "2.0";
   id?: string | number;
@@ -26,27 +49,35 @@ async function readSse(
   let buffer = "";
   let event = "";
   let data = "";
+  let complete = false;
   const flush = (): void => {
     if (data.length > 0 || event.length > 0) onFrame(event, data);
     event = "";
     data = "";
   };
-  for (;;) {
-    if (signal?.aborted) break;
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let index = buffer.indexOf("\n");
-    while (index >= 0) {
-      const line = buffer.slice(0, index).replace(/\r$/, "");
-      buffer = buffer.slice(index + 1);
-      if (line.length === 0) flush();
-      else if (line.startsWith("event:")) event = line.slice(6).trim();
-      else if (line.startsWith("data:")) data += (data.length > 0 ? "\n" : "") + line.slice(5).trim();
-      index = buffer.indexOf("\n");
+  try {
+    for (;;) {
+      if (signal?.aborted) break;
+      const { value, done } = await reader.read();
+      if (done) { complete = true; break; }
+      buffer += decoder.decode(value, { stream: true });
+      if (buffer.length > MAX_RPC_RESPONSE_BYTES) throw new Error("MCP event exceeds 1 MiB.");
+      let index = buffer.indexOf("\n");
+      while (index >= 0) {
+        const line = buffer.slice(0, index).replace(/\r$/, "");
+        buffer = buffer.slice(index + 1);
+        if (line.length === 0) flush();
+        else if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) data += (data.length > 0 ? "\n" : "") + line.slice(5).trim();
+        if (data.length > MAX_RPC_RESPONSE_BYTES) throw new Error("MCP event exceeds 1 MiB.");
+        index = buffer.indexOf("\n");
+      }
     }
+    flush();
+  } finally {
+    if (!complete) await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
-  flush();
 }
 
 /** stdio transport: newline-delimited JSON-RPC over a child process. */
@@ -81,28 +112,32 @@ export function createStdioTransport(options: {
     } finally { reader.releaseLock(); }
   })();
   let handler: ((message: JsonRpcMessage) => void) | undefined;
-  void (async () => {
-    const reader = proc.stdout.getReader();
+  const stdoutReader = proc.stdout.getReader();
+  const stdoutTask = (async () => {
+    const reader = stdoutReader;
     const decoder = new TextDecoder();
     let buffer = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let index = buffer.indexOf("\n");
-      while (index >= 0) {
-        const line = buffer.slice(0, index).trim();
-        buffer = buffer.slice(index + 1);
-        if (line.length > 0 && handler) {
-          try {
-            handler(JSON.parse(line) as JsonRpcMessage);
-          } catch {
-            // ignore non-JSON stdout noise
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        if (buffer.length > MAX_RPC_RESPONSE_BYTES) throw new Error("MCP stdout exceeds 1 MiB without a complete frame.");
+        let index = buffer.indexOf("\n");
+        while (index >= 0) {
+          const line = buffer.slice(0, index).trim();
+          buffer = buffer.slice(index + 1);
+          if (line.length > 0 && handler) {
+            try { handler(JSON.parse(line) as JsonRpcMessage); }
+            catch { /* Ignore malformed stdout frames. */ }
           }
+          index = buffer.indexOf("\n");
         }
-        index = buffer.indexOf("\n");
       }
-    }
+    } catch (error) {
+      writeDiagnostic("mcp.stdout", error instanceof Error ? error.message : String(error));
+      proc.kill();
+    } finally { reader.releaseLock(); }
   })();
 
   return {
@@ -120,7 +155,8 @@ export function createStdioTransport(options: {
         // already gone
       }
       await stderrReader.cancel().catch(() => {});
-      await stderrTask;
+      await stdoutReader.cancel().catch(() => {});
+      await Promise.all([stderrTask, stdoutTask]);
     },
   };
 }
@@ -170,8 +206,10 @@ export function createSseTransport(url: string, headers: Record<string, string> 
   return {
     async send(message) {
       await ready;
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(HTTP_TIMEOUT_MS)]);
       const response = await fetch(postUrl, {
         method: "POST",
+        signal,
         headers: { "content-type": "application/json", accept: "application/json", ...headers },
         body: JSON.stringify(message),
       });
@@ -202,8 +240,10 @@ export function createHttpTransport(url: string, headers: Record<string, string>
 
   return {
     async send(message) {
+      const signal = AbortSignal.timeout(HTTP_TIMEOUT_MS);
       const response = await fetch(url, {
         method: "POST",
+        signal,
         headers: {
           "content-type": "application/json",
           accept: "application/json, text/event-stream",
@@ -216,17 +256,17 @@ export function createHttpTransport(url: string, headers: Record<string, string>
       if (sid) sessionId = sid;
       if (response.status === 202 || response.status === 204) return;
       if (!response.ok) {
-        const detail = await response.text().catch(() => "");
-        throw new Error(`MCP HTTP ${response.status}: ${detail.slice(0, 200)}`);
+        await response.body?.cancel().catch(() => {});
+        throw new Error(`MCP HTTP ${response.status}`);
       }
       const contentType = response.headers.get("content-type") ?? "";
       if (contentType.includes("text/event-stream") && response.body) {
         await readSse(response.body, (_event, data) => {
           if (data.length > 0) dispatch(data);
-        });
+        }, signal);
         return;
       }
-      dispatch(await response.text());
+      dispatch(await boundedResponse(response));
     },
     onMessage(next) {
       handler = next;

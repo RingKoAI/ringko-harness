@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
-import { instructionsText, loadInstructions, loadMcpServers, writeDiagnostic, type RingkoConfig } from "@ringko-ai/config";
-import { closeMcpConnections, openMcpServers, registerMcpTools } from "@ringko-ai/mcp";
+import { instructionsText, loadInstructions, writeDiagnostic, type RingkoConfig } from "@ringko-ai/config";
+import { registerMcpTools } from "@ringko-ai/mcp";
 import { EventBus, EventLog, Scheduler, createTimeSource } from "@ringko-ai/runtime";
 import { sessionTodos } from "@ringko-ai/session";
 import { createTodoStore, registerNetworkTools, registerSessionTools, registerShellTools, registerWorkspaceTools, type AskHandler, type TodoItem } from "@ringko-ai/tools";
@@ -9,6 +9,7 @@ import { abortable } from "@ringko-ai/harness";
 import { createRingKo, isAccessMode, type AgentEvent, type RingKo, type RingKoConfig as AgentConfig } from "./index.ts";
 import { registerRuntimeSkills } from "./skills.ts";
 import { PermissionManager } from "./permissions.ts";
+import { McpManager } from "./mcp-manager.ts";
 export type { PermissionRule } from "./permissions.ts";
 
 export interface RuntimeHost {
@@ -38,7 +39,10 @@ export function registerRuntimeTools(agent: RingKo, config: RingkoConfig, worksp
   });
   todos.todos = session ? sessionTodos(session.all()) : [];
   registerSessionTools(agent.tools, { todos, ask: host.ask ?? (async () => { throw new Error("Questions require an interactive host."); }) });
-  if (config.capabilities?.network) registerNetworkTools(agent.tools);
+  if (config.capabilities?.network) registerNetworkTools(agent.tools, {
+    allowPrivateHosts: config.capabilities.privateNetwork === true,
+    search: { provider: config.capabilities.websearchProvider },
+  });
   if (config.capabilities?.shell) registerShellTools(agent.tools, { cwd: workspace });
   registerRuntimeSkills(agent.tools, workspace);
   applyToolPolicy(agent, resolveWorkflow(config.workflow));
@@ -54,7 +58,7 @@ export class RuntimeManager {
   readonly scheduler: Scheduler;
   readonly permissions: PermissionManager;
   private readonly stopTime: () => void;
-  private mcp?: Promise<Awaited<ReturnType<typeof openMcpServers>>>;
+  private readonly mcp: McpManager;
   private readonly agents = new Set<() => void>();
   private closed = false;
   private closing?: Promise<void>;
@@ -63,27 +67,22 @@ export class RuntimeManager {
     if (typeof workspace !== "string" || !workspace.trim()) throw new TypeError("Runtime requires a workspace.");
     this.workspace = resolve(workspace);
     this.permissions = new PermissionManager(this.workspace);
+    this.mcp = new McpManager(this.workspace);
     this.log = log ?? new EventLog();
     this.scheduler = new Scheduler(this.log);
     this.stopTime = log ? () => {} : createTimeSource(this.log);
   }
 
-  connections(): Promise<Awaited<ReturnType<typeof openMcpServers>>> {
+  connections(): ReturnType<McpManager["start"]> {
     if (this.closed) return Promise.reject(new Error("Runtime is closed."));
-    return this.mcp ??= (async () => {
-      try {
-        const servers = loadMcpServers({ cwd: this.workspace });
-        return await openMcpServers(Object.fromEntries(servers.map(server => [server.name, server.config])));
-      } catch (error) {
-        return { connections: [], errors: [{ name: "configuration", message: error instanceof Error ? error.message : String(error) }] };
-      }
-    })();
+    return this.mcp.start();
   }
 
+  /** Begin MCP connections during host startup, before the first model run. */
+  start(): ReturnType<McpManager["start"]> { return this.connections(); }
+
   async resetMcp(): Promise<void> {
-    const old = this.mcp;
-    this.mcp = undefined;
-    if (old) await closeMcpConnections((await old).connections);
+    await this.mcp.reset();
   }
 
   createAgent(config: RingkoConfig, options: AgentConfig, host: RuntimeHost = {}): RuntimeAgent {
@@ -101,6 +100,7 @@ export class RuntimeManager {
     const permissionSession = options.session?.id ?? crypto.randomUUID();
     let running = false;
     let mcpToolNames: string[] = [];
+    const reportedErrors = new Map<string, string>();
     let workflowModel: Promise<Awaited<ReturnType<NonNullable<AgentConfig["resolveTaskModel"]>>>> | undefined;
     const agent = createRingKo({
       ...options, log: this.log, scheduler: this.scheduler, instructions,
@@ -139,9 +139,12 @@ export class RuntimeManager {
         for (const name of mcpToolNames) agent.tools.unregister(name);
         mcpToolNames = registerMcpTools(agent.tools, opened.connections);
         for (const error of opened.errors) {
-          writeDiagnostic(`mcp.${error.name}`, error.message);
-          host.report?.(`MCP ${error.name}: connection failed: ${error.message}`);
+          if (reportedErrors.get(error.name) !== error.message) {
+            host.report?.(`MCP ${error.name}: connection failed: ${error.message}`);
+            reportedErrors.set(error.name, error.message);
+          }
         }
+        for (const name of reportedErrors.keys()) if (!opened.errors.some(error => error.name === name)) reportedErrors.delete(name);
         applyToolPolicy(agent, workflow);
         await abortable(this.events.serial("run/before", { prompt, signal }), signal);
         applyToolPolicy(agent, workflow);
@@ -168,6 +171,6 @@ export class RuntimeManager {
     for (const task of this.scheduler.list()) this.scheduler.remove(task.id);
     for (const close of [...this.agents]) close();
     this.permissions.clearSessions();
-    return this.closing ??= this.resetMcp();
+    return this.closing ??= this.mcp.close();
   }
 }

@@ -9,10 +9,13 @@ call the manager's asynchronous `close()` when the workspace shuts down.
 
 All executing CLI, TUI and Web agents use the same assembly for project
 instructions, workflows, permission modes, files, session tools, optional shell
-and network capabilities, and installed skills. MCP tools initialize lazily
-before the first run; concurrent agents share the same connection promise.
+and network capabilities, and installed skills. Hosts prewarm MCP connections
+at startup; concurrent agents share each server's connection attempt. A failed
+server retries twice in the background (three attempts total) and then stops
+automatically until its configuration is reset or the workspace restarts.
 Individual server failures are reported while other capabilities remain usable.
-Resetting MCP configuration closes old connections and reconnects on the next run.
+Resetting MCP configuration closes old connections, clears retry counters and
+reconnects immediately. Active tool lists refresh at the next model run.
 
 Workflow deny rules override allow rules. Filtering runs before and after the
 `run/before` hooks and covers MCP tools as well as built-in tools. Workflow model
@@ -64,3 +67,20 @@ Session rules are cleared when the workspace runtime closes, when the TUI leaves
 that conversation, or when the Web host deletes its session. A running tool
 rechecks policy before execution; removing an allow rule during a pending call
 requires a fresh approval if the access mode would have required one.
+
+Enabling `capabilities.network` exposes `webfetch` and `websearch` through the
+same approval gate. `webfetch` accepts `url`, optional `format` (`markdown` by
+default, `text`, or `html`), and `timeout` (30 seconds by default, at most 120).
+It reads at most 5 MiB, does not follow redirects, and blocks literal private
+network addresses unless the host sets `capabilities.privateNetwork: true`.
+Hostnames that resolve to private addresses or change DNS answers remain a
+deployment consideration; run in a restricted network environment for
+untrusted workspaces. Binary/image responses are not supported by this tool.
+
+`websearch` uses the Exa MCP service by default; set
+`capabilities.websearchProvider: "parallel"` to select Parallel. Exa may require
+an `EXA_API_KEY` and Parallel requires `PARALLEL_API_KEY`; configure these as
+host environment variables, not tool arguments. Provider errors fail visibly.
+Search queries are the assessed permission target. Model input cannot override
+the provider endpoint or supply credentials. Both services are external; local
+tests use isolated HTTP fixtures and do not verify third-party availability.

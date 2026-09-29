@@ -57,6 +57,7 @@ import {
   setOAuthAccount,
   setToolAuth,
   updateOAuthCredential,
+  writeDiagnostic,
   type McpServerConfig,
   type ModelDefinition,
   type OAuthAccount,
@@ -257,6 +258,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   // Runtime event log + a time source; the model watches them via `subscribe`.
   const eventLog = new EventLog();
   const stopTimeSource = createTimeSource(eventLog, { intervalMs: 60_000 });
+  void runtimeFor(workspace).start().catch(error => writeDiagnostic("mcp.start", String(error)));
 
   function readConfig(): RingkoConfig | string {
     try {

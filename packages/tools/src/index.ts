@@ -8,6 +8,7 @@ import { createReadTool, type ReadInput, type ReadOutput } from "./read.ts";
 import { createShellTool, type ShellInput, type ShellOptions, type ShellOutput } from "./shell.ts";
 import { createTodoStore, createTodoTool, createTodoReadTool, type TodoInput, type TodoItem, type TodoOutput, type TodoStatus, type TodoStore } from "./todo.ts";
 import { createWebFetchTool, type WebFetchInput, type WebFetchOptions, type WebFetchOutput } from "./webfetch.ts";
+import { createWebSearchTool, type WebSearchInput, type WebSearchOptions, type WebSearchOutput } from "./websearch.ts";
 import { createWriteTool, type WriteInput, type WriteOutput } from "./write.ts";
 import { createWorkspace, type ResolvedTarget, type Workspace } from "./workspace.ts";
 
@@ -26,6 +27,7 @@ export {
   createTodoTool,
   createTodoReadTool,
   createWebFetchTool,
+  createWebSearchTool,
   createWriteTool,
 };
 export type {
@@ -55,6 +57,9 @@ export type {
   WebFetchInput,
   WebFetchOptions,
   WebFetchOutput,
+  WebSearchInput,
+  WebSearchOptions,
+  WebSearchOutput,
   WriteInput,
   WriteOutput,
 };
@@ -80,9 +85,9 @@ export function registerWorkspaceTools(registry: ToolRegistry, options: Workspac
   return workspace;
 }
 
-/** Register `webfetch` (outbound network; approval-required). */
-export function registerNetworkTools(registry: ToolRegistry, options: WebFetchOptions = {}): void {
-  registry.register(createWebFetchTool(options));
+/** Register the shared, approval-gated network tools. */
+export function registerNetworkTools(registry: ToolRegistry, options: WebFetchOptions & { search?: WebSearchOptions } = {}): void {
+  registry.registerAll([createWebFetchTool(options), createWebSearchTool(options.search)]);
 }
 
 /** Register `shell` (command execution; approval-required). */
