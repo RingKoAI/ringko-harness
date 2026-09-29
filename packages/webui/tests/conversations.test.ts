@@ -21,6 +21,8 @@ it('isolates simultaneous session streams, approvals, reasoning and tool events'
   expect(manager.get('a').partial).toBeNull()
   expect(manager.get('a').messages.at(-1)?.content).toBe('A result')
   expect(manager.get('b').messages).toHaveLength(1)
+  calls[0].handlers.onTool({ name: 'write', toolCallId: 'call-a', content: 'denied', error: true, turn: 1 })
+  expect(manager.get('a').messages.at(-1)).toMatchObject({ role: 'tool', toolCallId: 'call-a', failed: true, content: 'denied' })
 })
 it('queues editable messages in order and continues exactly once after completion', async () => {
   const { manager, calls } = fixture()

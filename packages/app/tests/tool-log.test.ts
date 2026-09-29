@@ -19,9 +19,12 @@ describe("session tool log API", () => {
       recordAssistantMessage(session, 1, "", [
         { id: "a", name: "read", arguments: { path: "a.txt" } },
         { id: "b", name: "write", arguments: { path: "b.txt" } },
+        { id: "c", name: "shell", arguments: { command: "blocked" } },
       ]);
       recordToolCall(session, 1, { id: "a", name: "read", arguments: { path: "a.txt" } });
       recordToolResult(session, 1, "a", "read", "contents", false);
+      recordToolCall(session, 1, { id: "c", name: "shell", arguments: { command: "blocked" } });
+      recordToolResult(session, 1, "c", "shell", "permission denied", true);
       session.appendEvent("task/started", { taskId: "child", parentCallId: "a", description: "Inspect", mode: "read" });
       session.appendEvent("task/completed", { taskId: "child", description: "Inspect", mode: "read", result: { content: "findings" } });
       session.close();
@@ -32,10 +35,12 @@ describe("session tool log API", () => {
       const first = await fetch(url, { headers: { authorization: "Bearer test-token" } });
       expect(first.status).toBe(200);
       const page = await first.json() as { total: number; entries: Array<{ callId: string; status: string }> };
-      expect(page.total).toBe(2);
-      expect(page.entries).toMatchObject([{ callId: "b", status: "pending" }]);
+      expect(page.total).toBe(3);
+      expect(page.entries).toMatchObject([{ callId: "c", status: "error" }]);
       const second = await fetch(`${url}&offset=1`, { headers: { authorization: "Bearer test-token" } });
-      expect((await second.json()).entries).toMatchObject([{ callId: "a", status: "success" }]);
+      expect((await second.json()).entries).toMatchObject([{ callId: "b", status: "pending" }]);
+      const third = await fetch(`${url}&offset=2`, { headers: { authorization: "Bearer test-token" } });
+      expect((await third.json()).entries).toMatchObject([{ callId: "a", status: "success" }]);
       const trajectoryUrl = `${server.url}/api/sessions/tool-log-test/trajectory`;
       const headers = { authorization: "Bearer test-token" };
       expect((await fetch(trajectoryUrl)).status).toBe(401);
@@ -50,6 +55,8 @@ describe("session tool log API", () => {
       expect((await fetch(`${server.url}/api/sessions/missing/trajectory`, { headers })).status).toBe(404);
       const detail = await (await fetch(`${server.url}/api/sessions/tool-log-test`, { headers })).json();
       expect(detail.tasks).toMatchObject([{ taskId: "child", mode: "read", status: "completed", content: "findings" }]);
+      expect(detail.messages).toContainEqual(expect.objectContaining({ role: "tool", toolCallId: "c", failed: true }));
+      expect(detail.messages).toContainEqual(expect.objectContaining({ role: "tool", toolCallId: "a", failed: false }));
       const stopUrl = `${server.url}/api/sessions/tool-log-test/stop`;
       expect((await fetch(stopUrl, { method: "POST" })).status).toBe(401);
       expect((await fetch(stopUrl, { method: "POST", headers })).status).toBe(404);

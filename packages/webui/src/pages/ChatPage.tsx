@@ -1,6 +1,6 @@
-import { Activity, ArrowUp, Brain, Check, Copy, GitBranch, ListTree, MessageSquare, Paperclip, Square, Terminal, ThumbsDown, ThumbsUp, User, Wrench, X } from 'lucide-react'
-import { useEffect, useRef, useState, type SetStateAction } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Activity, ArrowUp, Brain, Check, Copy, Folder, GitBranch, ListTree, MessageSquare, Paperclip, Square, Terminal, ThumbsDown, ThumbsUp, User, Wrench, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type SetStateAction } from 'react'
+import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   compact,
@@ -15,9 +15,10 @@ import {
   type ToolCall,
   type UploadedFile,
 } from '@/api'
+import { LandingGreeting } from '@/components/landing-greeting'
 import { AccessPicker } from '@/components/access-picker'
 import { QueuePanel } from '@/components/queue-panel'
-import { WorkspacePanel } from '@/components/workspace-panel'
+import type { RightSidebarTab } from '@/components/right-sidebar'
 import { ModePicker } from '@/components/mode-picker'
 import { ContextRingLabeled } from '@/components/context-ring'
 import { Markdown } from '@/components/markdown'
@@ -37,8 +38,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { useI18n, type MessageKey } from '@/i18n'
 import { useApp } from '@/store'
 import { cn } from '@/lib/utils'
+import { matchToolResults, toolCallTarget } from '@/lib/tool-activity'
 
-const SUGGESTIONS: MessageKey[] = ['chat.suggest.1', 'chat.suggest.2', 'chat.suggest.3']
 const COMMANDS: { name: string; label: MessageKey }[] = [
   { name: 'reload', label: 'command.reload' },
   { name: 'compact', label: 'command.compact' },
@@ -62,33 +63,49 @@ function toolSummary(t: Translate, name: string | undefined, content: string): s
   return first.length > 80 ? `${first.slice(0, 80)}…` : first
 }
 
-function ToolCallList({ calls, t }: { calls: readonly ToolCall[]; t: Translate }) {
+function ToolCallList({ calls, results, busy, showDetails, t }: { calls: readonly ToolCall[]; results?: ReadonlyMap<string, ServerMessage>; busy: boolean; showDetails: boolean; t: Translate }) {
   if (calls.length === 0) return null
   return (
     <div className="space-y-1">
-      {calls.map((call) => (
-        <details key={call.id} className="rounded-md border bg-muted/20">
-          <summary className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs">
-            <Wrench className="size-3 shrink-0" />
-            <span className="font-mono">{call.name}</span>
-            <span className="text-muted-foreground">{t('message.arguments')}</span>
-          </summary>
-          <pre className="overflow-x-auto px-3 pb-2 font-mono text-xs whitespace-pre-wrap text-muted-foreground">
-            {JSON.stringify(call.arguments ?? {}, null, 2)}
-          </pre>
-        </details>
-      ))}
+      {calls.map((call) => {
+        const result = results?.get(call.id)
+        const status = result?.failed ? t('message.failed') : result ? t('message.completed') : busy ? t('message.working') : t('message.unknown')
+        const target = toolCallTarget(call.arguments)
+        const summary = result ? toolSummary(t, call.name, result.content) : ''
+        const heading = <>
+          <Wrench className="size-3 shrink-0" aria-hidden="true" />
+          <span className="shrink-0 font-mono">{call.name}</span>
+          {target && <span className="min-w-0 truncate text-muted-foreground" title={target}>{target}</span>}
+          <span className={cn('ml-auto shrink-0', result?.failed ? 'text-destructive' : 'text-muted-foreground')}>{status}</span>
+        </>
+        return showDetails ? (
+          <details key={call.id} className="rounded-md border bg-muted/20 text-xs">
+            <summary className="flex min-w-0 cursor-pointer items-center gap-2 px-3 py-1.5">{heading}</summary>
+            <div className="space-y-2 border-t px-3 py-2">
+              <div className="text-muted-foreground">{t('message.arguments')}</div>
+              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all font-mono">{JSON.stringify(call.arguments ?? {}, null, 2)}</pre>
+              <div className="text-muted-foreground">{t('message.output')}</div>
+              <pre className={cn('max-h-80 overflow-auto whitespace-pre-wrap break-all font-mono', result?.failed && 'text-destructive')}>{result?.content ?? status}</pre>
+            </div>
+          </details>
+        ) : (
+          <div key={call.id} className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border bg-muted/20 px-3 py-1.5 text-xs">
+            {heading}
+            {result && <span className={cn('w-full truncate pl-5', result.failed ? 'text-destructive' : 'text-muted-foreground')}>{summary}</span>}
+          </div>
+        )
+      })}
     </div>
   )
 }
 
 function ToolResult({ message, t }: { message: ServerMessage; t: Translate }) {
   return (
-    <details className="rounded-md border bg-muted/20">
+    <details className={cn('rounded-md border bg-muted/20', message.failed && 'border-destructive/50')}>
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs">
         <Terminal className="size-3 shrink-0" />
         <span className="font-mono">{message.name}</span>
-        <span className="truncate text-muted-foreground">{toolSummary(t, message.name, message.content)}</span>
+        <span className={cn('truncate', message.failed ? 'text-destructive' : 'text-muted-foreground')}>{message.failed ? `${t('message.failed')} · ` : ''}{toolSummary(t, message.name, message.content)}</span>
       </summary>
       <pre className="max-h-80 overflow-auto px-3 pb-2 font-mono text-xs whitespace-pre-wrap text-muted-foreground">
         {message.content}
@@ -105,6 +122,8 @@ function MessageRow({
   onBranch,
   onFeedback,
   feedback,
+  toolResults,
+  busy,
 }: {
   message: ServerMessage
   index: number
@@ -113,6 +132,8 @@ function MessageRow({
   onBranch: (index: number) => void
   onFeedback: (index: number, value: 'up' | 'down') => void
   feedback?: 'up' | 'down'
+  toolResults?: ReadonlyMap<string, ServerMessage>
+  busy: boolean
 }) {
   const { t } = useI18n()
   const [copied, setCopied] = useState(false)
@@ -148,7 +169,7 @@ function MessageRow({
               <ToolResult message={message} t={t} />
             ) : (
               <p className="truncate text-xs text-muted-foreground">
-                <span className="font-mono">{message.name}</span> · {toolSummary(t, message.name, message.content)}
+                  <span className="font-mono">{message.name}</span> · {message.failed ? `${t('message.failed')} · ` : ''}{toolSummary(t, message.name, message.content)}
               </p>
             )
           ) : isUser ? (
@@ -157,7 +178,7 @@ function MessageRow({
             <Markdown content={message.content} />
           )
         ) : null}
-        {showTools && message.toolCalls && message.toolCalls.length > 0 ? <ToolCallList calls={message.toolCalls} t={t} /> : null}
+        {message.toolCalls && message.toolCalls.length > 0 ? <ToolCallList calls={message.toolCalls} results={toolResults} busy={busy} showDetails={showTools} t={t} /> : null}
         {!isTool ? (
           <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
             {!isUser && message.content ? (
@@ -213,6 +234,7 @@ export function ChatPage() {
   const app = useApp()
   const navigate = useNavigate()
   const { id } = useParams<{ id: string }>()
+  const { openRightSidebar } = useOutletContext<{ openRightSidebar(tab: RightSidebarTab): void }>()
   const draft = app.draft
   const setDraft = app.setDraft
   const [attachmentDrafts, setAttachmentDrafts] = useState<Record<string, UploadedFile[]>>({})
@@ -221,7 +243,6 @@ export function ChatPage() {
   const setAttachments = (value: SetStateAction<UploadedFile[]>) => setAttachmentDrafts(previous => ({ ...previous, [attachmentKey]: typeof value === 'function' ? value(previous[attachmentKey] ?? []) : value }))
   const [context, setContext] = useState<{ used: number; limit: number } | null>(null)
   const [toolLogOpen, setToolLogOpen] = useState(false)
-  const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [view, setView] = useState<'chat' | 'trajectory'>('chat')
   const [feedback, setFeedback] = useState<Record<number, 'up' | 'down'>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -326,6 +347,7 @@ export function ChatPage() {
 
   const showThinking = app.info?.expandThinking ?? false
   const showTools = app.info?.expandTools ?? false
+  const toolActivity = useMemo(() => matchToolResults(app.messages), [app.messages])
 
   async function branch(index: number): Promise<void> {
     const current = app.sessionId
@@ -355,6 +377,8 @@ export function ChatPage() {
     )
   }
   const empty = app.messages.length === 0
+  const landing = empty && view === 'chat'
+  const workspaceLabel = app.info?.project?.name ?? app.info?.workspace?.split(/[\\/]/).filter(Boolean).at(-1) ?? t('workspace.title')
   const commandHints =
     draft.startsWith('/') && !draft.includes(' ') ? COMMANDS.filter((command) => command.name.startsWith(draft.slice(1))) : []
 
@@ -363,35 +387,11 @@ export function ChatPage() {
       <div className="flex shrink-0 gap-1 border-b px-3 py-2">
         <Button size="sm" variant={view === 'chat' ? 'secondary' : 'ghost'} aria-pressed={view === 'chat'} onClick={() => setView('chat')}><MessageSquare />{t('trajectory.chat')}</Button>
         <Button size="sm" variant={view === 'trajectory' ? 'secondary' : 'ghost'} aria-pressed={view === 'trajectory'} onClick={() => setView('trajectory')}><Activity />{t('trajectory.title')}</Button>
-        <Button size="sm" variant="ghost" onClick={() => setWorkspaceOpen(true)}><ListTree />{t('workspace.title')}</Button>
+        <Button size="sm" variant="ghost" onClick={() => openRightSidebar('files')}><ListTree />{t('workspace.title')}</Button>
       </div>
-      {view === 'trajectory' ? <TrajectoryView key={app.sessionId ?? 'new'} sessionId={app.sessionId} /> : <ScrollArea className="min-h-0 flex-1">
-        {empty ? (
-          <div className="flex h-full min-h-[60vh] flex-col items-center justify-center gap-6 px-6 text-center">
-            <div className="grid size-12 place-items-center rounded-2xl bg-primary text-lg font-semibold text-primary-foreground shadow-sm">
-              R
-            </div>
-            <div className="space-y-1">
-              <h2 className="text-xl font-semibold tracking-tight">{t('chat.emptyTitle')}</h2>
-              <p className="text-sm text-muted-foreground">{t('message.empty')}</p>
-            </div>
-            <div className="flex flex-wrap justify-center gap-2">
-              {SUGGESTIONS.map((key) => (
-                <Button
-                  key={key}
-                  variant="outline"
-                  size="sm"
-                  className="rounded-full font-normal text-muted-foreground"
-                  onClick={() => setDraft(t(key))}
-                >
-                  {t(key)}
-                </Button>
-              ))}
-            </div>
-          </div>
-        ) : (
+      {view === 'trajectory' ? <TrajectoryView key={app.sessionId ?? 'new'} sessionId={app.sessionId} /> : !empty ? <ScrollArea className="min-h-0 flex-1">
           <div className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
-            {app.messages.map((message, index) => message.role === 'system' ? null : (
+            {app.messages.map((message, index) => message.role === 'system' || toolActivity.attached.has(index) ? null : (
               <MessageRow
                 key={index}
                 message={message}
@@ -401,6 +401,8 @@ export function ChatPage() {
                 onBranch={branch}
                 onFeedback={rate}
                 feedback={feedback[index]}
+                toolResults={toolActivity.results.get(index)}
+                busy={app.busy}
               />
             ))}
             <TaskPanel />
@@ -416,14 +418,28 @@ export function ChatPage() {
               </div>
             ) : null}
           </div>
-        )}
-      </ScrollArea>}
+      </ScrollArea> : null}
 
-      <div className="shrink-0 border-t bg-background/60 p-3 backdrop-blur sm:p-4">
+      <div className={cn(landing
+        ? 'flex min-h-0 flex-1 flex-col justify-center overflow-y-auto px-4 py-8 sm:px-8'
+        : 'shrink-0 border-t bg-background/60 p-3 backdrop-blur sm:p-4')}>
+        {landing ? <div className="mx-auto mb-6 flex w-full max-w-[850px] flex-col gap-6">
+          <div className="flex items-center justify-center gap-3">
+            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-lg font-semibold text-primary-foreground" aria-hidden="true">R</span>
+            <LandingGreeting />
+            <Badge variant="secondary" className="text-[10px]">RingKo</Badge>
+          </div>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <Button variant="ghost" size="sm" className="min-w-0 max-w-full text-muted-foreground" onClick={() => openRightSidebar('files')} title={app.info?.workspace}>
+              <Folder className="shrink-0" /><span className="truncate">{workspaceLabel}</span>
+            </Button>
+            <ModePicker />
+          </div>
+        </div> : null}
         <TodoPanel />
         <QuestionPanel />
         <QueuePanel key={app.sessionId ?? 'new'} />
-        <div className="mx-auto max-w-3xl rounded-2xl border bg-card shadow-sm transition-all focus-within:ring-2 focus-within:ring-ring/40">
+        <div className={cn("mx-auto w-full rounded-2xl border bg-card shadow-sm transition-all focus-within:ring-2 focus-within:ring-ring/40", landing ? "max-w-[850px]" : "max-w-3xl")}>
           {commandHints.length > 0 ? (
             <div className="flex flex-col gap-0.5 px-2 pt-2">
               {commandHints.map((command) => (
@@ -465,15 +481,16 @@ export function ChatPage() {
                 submit()
               }
             }}
-            rows={1}
+            rows={landing ? 2 : 1}
+            aria-label={t('composer.placeholder')}
             placeholder={t('composer.placeholder')}
             className="min-h-11 resize-none border-0 bg-transparent px-4 pt-3 shadow-none focus-visible:ring-0"
           />
-          <div className="flex items-center justify-between gap-2 px-2 pt-1 pb-2">
-            <div className="flex min-w-0 items-center gap-1">
-              <ModelPicker />
+          <div className="flex flex-wrap items-center justify-between gap-2 px-2 pt-1 pb-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-1">
+              {!landing ? <ModelPicker /> : null}
               <ThinkingPicker />
-              <ModePicker />
+              {!landing ? <ModePicker /> : null}
               <AccessPicker />
               <Button
                 variant="ghost"
@@ -524,7 +541,8 @@ export function ChatPage() {
                 }}
               />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
+              {landing ? <ModelPicker /> : null}
               {(() => {
                 const usage = context ?? app.info?.context
                 return usage ? <ContextRingLabeled used={usage.used} limit={usage.limit} /> : null
@@ -550,10 +568,9 @@ export function ChatPage() {
             </div>
           </div>
         </div>
-        <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-muted-foreground">{t('composer.hint')}</p>
+        {!landing ? <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-muted-foreground">{t('composer.hint')}</p> : null}
       </div>
       <ToolLogSheet open={toolLogOpen} onOpenChange={setToolLogOpen} sessionId={app.sessionId} busy={app.busy} />
-      {workspaceOpen ? <WorkspacePanel onClose={() => setWorkspaceOpen(false)} /> : null}
     </>
   )
 }

@@ -53,6 +53,9 @@ importers:
       '@ringko-ai/workflow':
         specifier: workspace:*
         version: link:../workflow
+      node-pty:
+        specifier: ^1.1.0
+        version: 1.1.0
 
   packages/auth:
     dependencies:
@@ -140,6 +143,9 @@ importers:
       ink-text-input:
         specifier: ^6.0.0
         version: 6.0.0(ink@7.1.1(@types/react@19.3.0)(react-devtools-core@8.0.0)(react@19.3.0))(react@19.3.0)
+      marked:
+        specifier: ^16.4.2
+        version: 16.4.2
       react:
         specifier: ^19.3.0
         version: 19.3.0
@@ -172,12 +178,21 @@ importers:
       '@ringko-ai/harness':
         specifier: workspace:*
         version: link:../harness
+      '@ringko-ai/mcp':
+        specifier: workspace:*
+        version: link:../mcp
       '@ringko-ai/runtime':
         specifier: workspace:*
         version: link:../runtime
       '@ringko-ai/session':
         specifier: workspace:*
         version: link:../session
+      '@ringko-ai/tools':
+        specifier: workspace:*
+        version: link:../tools
+      '@ringko-ai/workflow':
+        specifier: workspace:*
+        version: link:../workflow
 
   packages/session:
     dependencies:
@@ -226,6 +241,12 @@ importers:
       '@ringko-ai/harness':
         specifier: workspace:*
         version: link:../harness
+      '@xterm/addon-fit':
+        specifier: ^0.11.0
+        version: 0.11.0
+      '@xterm/xterm':
+        specifier: ^6.0.0
+        version: 6.0.0
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -1807,6 +1828,12 @@ packages:
   '@workflow/serde@4.1.0':
     resolution: {integrity: sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ==}
 
+  '@xterm/addon-fit@0.11.0':
+    resolution: {integrity: sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==}
+
+  '@xterm/xterm@6.0.0':
+    resolution: {integrity: sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==}
+
   accepts@2.0.0:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
     engines: {node: '>= 0.6'}
@@ -3221,6 +3248,12 @@ packages:
     peerDependencies:
       react: ^16.8 || ^17 || ^18 || ^19 || ^19.0.0-rc
       react-dom: ^16.8 || ^17 || ^18 || ^19 || ^19.0.0-rc
+
+  node-addon-api@7.1.1:
+    resolution: {integrity: sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==}
+
+  node-pty@1.1.0:
+    resolution: {integrity: sha512-20JqtutY6JPXTUnL0ij1uad7Qe1baT46lyolh2sSENDd4sTzKZ4nmAFkeAARDKwmlLjPx6XKRlwRUxwjOy+lUg==}
 
   node-releases@2.0.57:
     resolution: {integrity: sha512-kQK9LGGFiHtrWiNhZtA7Qbw17AQz+dmsEKODRIVTXA9+e5MS/2gZEBhYJt13GrAz5/IOZKddH/0Z3TP/Zgo+yw==}
@@ -5586,6 +5619,10 @@ snapshots:
 
   '@workflow/serde@4.1.0': {}
 
+  '@xterm/addon-fit@0.11.0': {}
+
+  '@xterm/xterm@6.0.0': {}
+
   accepts@2.0.0:
     dependencies:
       mime-types: 3.0.2
@@ -7134,6 +7171,12 @@ snapshots:
     dependencies:
       react: 19.3.0
       react-dom: 19.3.0(react@19.3.0)
+
+  node-addon-api@7.1.1: {}
+
+  node-pty@1.1.0:
+    dependencies:
+      node-addon-api: 7.1.1
 
   node-releases@2.0.57: {}
 

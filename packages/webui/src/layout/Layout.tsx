@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Folder, FolderPlus, MessageSquare, MoreHorizontal, Pencil, Plus, Settings as SettingsIcon, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, Folder, FolderPlus, MessageSquare, MoreHorizontal, PanelRight, Pencil, Plus, Settings as SettingsIcon, Trash2, Wrench } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { DirectoryBrowser } from '@/components/directory-browser'
+import { RightSidebar, type RightSidebarTab } from '@/components/right-sidebar'
 import { SettingsDialog } from '@/components/settings-dialog'
 import {
   Dialog,
@@ -83,6 +84,8 @@ export function Layout() {
   const [projectData, setProjectData] = useState<ProjectsResponse | null>(null)
   const [projectBusy, setProjectBusy] = useState(false)
   const [projectLoadError, setProjectLoadError] = useState(false)
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(false)
+  const [rightSidebarTab, setRightSidebarTab] = useState<RightSidebarTab>('files')
 
   const needsLogin = app.info?.auth.required === true && getToken() === null
   const loadProjects = useCallback(() => {
@@ -104,6 +107,10 @@ export function Layout() {
   if (needsLogin && location.pathname !== '/auth/login') return <Navigate to="/auth/login" replace />
 
   const visible = app.sessions.filter((session) => showArchived || !session.archived)
+  function openRightSidebar(tab: RightSidebarTab): void {
+    setRightSidebarTab(tab)
+    setRightSidebarOpen(true)
+  }
 
   async function run(action: () => Promise<unknown>): Promise<void> {
     try {
@@ -180,41 +187,48 @@ export function Layout() {
 
   return (
     <SidebarProvider>
-      <Sidebar>
+      <Sidebar collapsible="icon">
         <SidebarHeader>
+          <div className="flex items-center gap-1 group-data-[collapsible=icon]:justify-center">
+            <SidebarMenu className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  size="lg"
+                  onClick={() => {
+                    app.newChat()
+                    navigate('/')
+                  }}
+                >
+                  <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground">R</div>
+                  <div className="flex min-w-0 flex-col gap-0.5 leading-none">
+                    <span className="font-medium">{t('app.name')}</span>
+                    <span className="text-xs text-muted-foreground">{app.info?.model ?? t('header.noModel')}</span>
+                  </div>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+            <SidebarTrigger className="shrink-0" />
+          </div>
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
-                size="lg"
+                tooltip={t('sidebar.new')}
                 onClick={() => {
                   app.newChat()
                   navigate('/')
                 }}
               >
-                <div className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground">R</div>
-                <div className="flex flex-col gap-0.5 leading-none">
-                  <span className="font-medium">{t('app.name')}</span>
-                  <span className="text-xs text-muted-foreground">{app.info?.model ?? t('header.noModel')}</span>
-                </div>
+                <Plus />
+                <span>{t('sidebar.new')}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton tooltip={t('projects.add')} onClick={() => void pickProject()}>
+                <FolderPlus />
+                <span>{t('projects.add')}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
-          <Button
-            variant="outline"
-            size="sm"
-            className="justify-start"
-            onClick={() => {
-              app.newChat()
-              navigate('/')
-            }}
-          >
-            <Plus data-icon="inline-start" />
-            {t('sidebar.new')}
-          </Button>
-          <Button variant="outline" size="sm" className="justify-start" onClick={() => void pickProject()}>
-            <FolderPlus data-icon="inline-start" />
-            {t('projects.add')}
-          </Button>
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
@@ -223,7 +237,7 @@ export function Layout() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-6"
+                className="size-6 group-data-[collapsible=icon]:hidden"
                 title={t('projects.add')}
                 onClick={() => void pickProject()}
               >
@@ -246,10 +260,11 @@ export function Layout() {
                       isActive={project.id === projectData.current}
                       disabled={projectBusy}
                       title={project.path}
+                      tooltip={`${project.name} · ${project.path}`}
                       onClick={() => void switchProject(project.id)}
                     >
                       <Folder />
-                      <span className="min-w-0 flex-1">
+                      <span className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
                         <span className="block truncate text-xs">{project.name}</span>
                         <span className="block truncate text-[10px] text-muted-foreground">{project.path}</span>
                       </span>
@@ -265,7 +280,7 @@ export function Layout() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-6"
+                className="size-6 group-data-[collapsible=icon]:hidden"
                 title={showArchived ? t('session.hideArchived') : t('session.showArchived')}
                 onClick={() => setShowArchived((value) => !value)}
               >
@@ -281,13 +296,14 @@ export function Layout() {
                     <SidebarMenuButton
                       isActive={session.id === app.sessionId && location.pathname === '/'}
                       className={session.archived ? 'opacity-60' : undefined}
+                      tooltip={session.title ?? t('sidebar.untitled')}
                       onClick={() => {
                         app.openSession(session.id)
                         navigate(`/${session.id}`)
                       }}
                     >
                       <MessageSquare />
-                      <span className="min-w-0 flex-1">
+                      <span className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
                         <span className="block truncate text-xs">
                           {session.title ?? t('sidebar.untitled')}
                           {app.runningSessions.includes(session.id) ? <span className="ml-2 text-primary"> · {t('session.running')}</span> : null}
@@ -333,7 +349,7 @@ export function Layout() {
         <SidebarFooter>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton asChild isActive={location.pathname === '/'}>
+              <SidebarMenuButton asChild isActive={location.pathname === '/'} tooltip={t('nav.chat')}>
                 <NavLink to="/">
                   <MessageSquare />
                   <span>{t('nav.chat')}</span>
@@ -342,19 +358,27 @@ export function Layout() {
             </SidebarMenuItem>
             <SidebarMenuItem>
               <SettingsDialog>
-                <SidebarMenuButton>
+                <SidebarMenuButton tooltip={t('nav.settings')}>
                   <SettingsIcon />
                   <span>{t('nav.settings')}</span>
                 </SidebarMenuButton>
               </SettingsDialog>
             </SidebarMenuItem>
           </SidebarMenu>
+          <div
+            className="flex min-h-8 items-center gap-2 rounded-md px-2 text-xs text-muted-foreground group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+            title={app.info ? `${t('header.tools', { count: app.info.tools.length })} · ${app.info.access.label}` : undefined}
+          >
+            <Wrench className="size-4 shrink-0" />
+            <span className="truncate group-data-[collapsible=icon]:hidden">
+              {app.info ? `${t('header.tools', { count: app.info.tools.length })} · ${app.info.access.label}` : ''}
+            </span>
+          </div>
         </SidebarFooter>
       </Sidebar>
 
       <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-          <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-1 h-4" />
           <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             <Folder className="size-3.5 shrink-0" />
@@ -362,14 +386,26 @@ export function Layout() {
               {app.info?.project ? `${app.info.project.name} · ${app.info.workspace}` : (app.info?.workspace ?? '')}
             </span>
           </span>
-          <div className="ml-auto flex shrink-0 items-center gap-1">
-            <span className="text-xs text-muted-foreground">
-              {app.info ? `${t('header.tools', { count: app.info.tools.length })} · ${app.info.access.label}` : ''}
-            </span>
-          </div>
+          <Button
+            className="ml-auto"
+            variant={rightSidebarOpen ? 'secondary' : 'ghost'}
+            size="icon-sm"
+            aria-label={rightSidebarOpen ? t('rightSidebar.close') : t('rightSidebar.title')}
+            aria-expanded={rightSidebarOpen}
+            title={rightSidebarOpen ? t('rightSidebar.close') : t('rightSidebar.title')}
+            onClick={() => setRightSidebarOpen((open) => !open)}
+          >
+            <PanelRight />
+          </Button>
         </header>
-        <Outlet />
+        <Outlet context={{ openRightSidebar }} />
       </SidebarInset>
+      <RightSidebar
+        open={rightSidebarOpen}
+        tab={rightSidebarTab}
+        onTabChange={setRightSidebarTab}
+        onClose={() => setRightSidebarOpen(false)}
+      />
 
       <AlertDialog open={app.approval !== null}>
         <AlertDialogContent>
@@ -380,6 +416,8 @@ export function Layout() {
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => app.decide(false)}>{t('approval.deny')}</AlertDialogCancel>
             <AlertDialogAction onClick={() => app.decide(true)}>{t('approval.approve')}</AlertDialogAction>
+            <AlertDialogAction onClick={() => app.decide(true, 'session')}>{t('approval.session')}</AlertDialogAction>
+            <AlertDialogAction onClick={() => app.decide(true, 'saved')}>{t('approval.saved')}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

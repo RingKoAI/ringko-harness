@@ -1,7 +1,7 @@
 import { useTheme } from 'next-themes'
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { setModel } from '@/api'
+import { fetchPermissionRules, removePermissionRule, setModel, type PermissionRule } from '@/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -23,6 +23,7 @@ const PAGES: { slug: string; label: MessageKey }[] = [
   { slug: 'models', label: 'settings.models' },
   { slug: 'connectors', label: 'settings.connectors' },
   { slug: 'skills', label: 'settings.skills' },
+  { slug: 'permissions', label: 'settings.permissions' },
   { slug: 'about', label: 'settings.about' },
 ]
 
@@ -148,6 +149,66 @@ function ModelsPage() {
   )
 }
 
+function PermissionsPage() {
+  const { t } = useI18n()
+  const workspace = useApp().info?.workspace
+  const [rules, setRules] = useState<PermissionRule[]>([])
+  const [loadedWorkspace, setLoadedWorkspace] = useState<string | null>(null)
+  const [pending, setPending] = useState<PermissionRule | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    setRules([])
+    setLoadedWorkspace(null)
+    setPending(null)
+    setError(null)
+    fetchPermissionRules().then(result => { if (active) { setRules(result.rules); setLoadedWorkspace(result.workspace) } })
+      .catch((cause: unknown) => { if (active) setError(cause instanceof Error ? cause.message : String(cause)) })
+    return () => { active = false }
+  }, [workspace])
+
+  async function remove(rule: PermissionRule): Promise<void> {
+    if (!loadedWorkspace || loadedWorkspace !== workspace) { setError(t('permissions.workspaceChanged')); return }
+    setBusy(true)
+    try {
+      await removePermissionRule(loadedWorkspace, rule)
+      setRules((current) => current.filter(item => !(item.tool === rule.tool && item.target === rule.target && item.behavior === rule.behavior)))
+      setPending(null)
+      setError(null)
+      toast.success(t('permissions.removed'))
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <Card>
+      <CardHeader><CardTitle>{t('settings.permissions')}</CardTitle></CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">{t('permissions.hint')}</p>
+        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+        {loadedWorkspace && !rules.length && !error && <p className="text-sm text-muted-foreground">{t('permissions.empty')}</p>}
+        {rules.map(rule => (
+          <div key={`${rule.behavior}\0${rule.tool}\0${rule.target ?? ''}`} className="flex flex-wrap items-center gap-3 rounded-lg border p-3">
+            <Badge variant="secondary">{rule.behavior}</Badge>
+            <div className="min-w-0 flex-1 break-all font-mono text-xs">
+              <span>{rule.tool}</span>
+              {rule.target !== undefined && <div className="text-muted-foreground">{rule.target}</div>}
+            </div>
+            {pending?.tool === rule.tool && pending.target === rule.target && pending.behavior === rule.behavior ? (
+              <div className="flex gap-2">
+                <Button size="sm" variant="destructive" disabled={busy} onClick={() => void remove(rule)}>{t('permissions.confirm')}</Button>
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => setPending(null)}>{t('permissions.cancel')}</Button>
+              </div>
+            ) : <Button size="sm" variant="outline" disabled={busy} onClick={() => setPending(rule)}>{t('permissions.remove')}</Button>}
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  )
+}
+
 function AboutPage() {
   const { t } = useI18n()
   return (
@@ -190,6 +251,8 @@ export function SettingsPanel({
       <ConnectorsPage />
     ) : active === 'skills' ? (
       <SkillsPage />
+    ) : active === 'permissions' ? (
+      <PermissionsPage />
     ) : active === 'about' ? (
       <AboutPage />
     ) : (

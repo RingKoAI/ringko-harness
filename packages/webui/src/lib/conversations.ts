@@ -92,7 +92,7 @@ export class Conversations {
           return { partial: { ...partial, [key]: (partial[key] + delta.text).slice(0, CONVERSATION_LIMITS.partial) } }
         }),
         onAssistant: message => update(state => ({ partial: null, messages: [...state.messages, { role: 'assistant', content: message.content, reasoning: message.reasoning ?? undefined, toolCalls: message.toolCalls }] })),
-        onTool: message => update(state => ({ messages: [...state.messages, { role: 'tool', name: message.name, content: message.content }] })),
+        onTool: message => update(state => ({ messages: [...state.messages, { role: 'tool', name: message.name, content: message.content, ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}), failed: message.error }] })),
         onApproval: approval => update(() => ({ approval })),
         onApprovalClosed: key => update(state => ({ approval: state.approval?.id === key ? null : state.approval })),
         onAsk: question => update(() => ({ question })),

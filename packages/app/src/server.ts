@@ -27,14 +27,8 @@ import {
   type RingKo,
 } from "@ringko-ai/sdk";
 import {
-  createTodoStore,
-  registerSessionTools,
   AskManager,
   type AskHandler,
-  type TodoItem,
-  registerNetworkTools,
-  registerShellTools,
-  registerWorkspaceTools,
 } from "@ringko-ai/tools";
 import {
   createSkill,
@@ -42,10 +36,8 @@ import {
   discoverSkills,
   getOAuthAccount,
   getToolAuth,
-  instructionsText,
   loadAuth,
   loadConfig,
-  loadInstructions,
   loadMcpServerMap,
   loadMcpServers,
   loadProjects,
@@ -73,13 +65,10 @@ import {
 } from "@ringko-ai/config";
 import {
   authorizeMcpServer,
-  closeMcpConnections,
   openMcpServer,
-  openMcpServers,
-  registerMcpTools,
   type McpConnection,
 } from "@ringko-ai/mcp";
-import { listWorkflows, resolveWorkflow, workflowInstructions } from "@ringko-ai/workflow";
+import { listWorkflows, resolveWorkflow } from "@ringko-ai/workflow";
 import { EventLog, createTimeSource } from "@ringko-ai/runtime";
 import {
   SessionStore,
@@ -101,6 +90,7 @@ import {
 } from "@ringko-ai/session";
 import { loadModel } from "./model.ts";
 import { WorkspaceReview } from "./workspace-review.ts";
+import { RuntimeManager, registerRuntimeTools, type RuntimeAgent } from "@ringko-ai/sdk/runtime";
 
 export interface ServerOptions {
   port?: number;
@@ -133,6 +123,29 @@ const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_WEBUI_DIR = resolve(import.meta.dir, "../../webui/dist");
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_JSON_BYTES = 1_048_576;
+const MAX_TERMINAL_SESSIONS = 4;
+const TERMINAL_SESSION_TTL_MS = 30 * 60 * 1000;
+
+interface TerminalSocketData {
+  terminalId: string;
+}
+
+interface TerminalSession {
+  terminal: InteractiveTerminal;
+  socket?: Bun.ServerWebSocket<TerminalSocketData>;
+  exited: boolean;
+  pendingOutput: string;
+  cleanupTimer?: ReturnType<typeof setTimeout>;
+}
+
+interface InteractiveTerminal {
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  kill(): void;
+  onData(handler: (data: string) => void): void;
+  onError(handler: (message: string) => void): void;
+  onExit(handler: (event: { exitCode: number; signal?: number }) => void): void;
+}
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -162,16 +175,8 @@ function registerTools(
   ringko: RingKo,
   config: RingkoConfig,
   workspace: string,
-  onTodo?: (items: unknown) => void,
-  ask?: AskHandler,
-  todos?: TodoItem[],
 ): void {
-  registerWorkspaceTools(ringko.tools, { workspace });
-  const todoStore = createTodoStore(onTodo ? items => onTodo(items) : undefined);
-  todoStore.todos = todos ?? [];
-  registerSessionTools(ringko.tools, { todos: todoStore, ask: ask ?? (async () => { throw new Error("No interactive question handler."); }) });
-  if (config.capabilities?.network) registerNetworkTools(ringko.tools);
-  if (config.capabilities?.shell) registerShellTools(ringko.tools, { cwd: workspace });
+  registerRuntimeTools(ringko, config, workspace);
 }
 
 async function readJson<T>(request: Request): Promise<T | undefined> {
@@ -199,10 +204,11 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   let workspace = resolve(options.workspace ?? process.cwd());
   const webuiDir = resolve(options.webuiDir ?? DEFAULT_WEBUI_DIR);
   let store = new SessionStore({ cwd: workspace });
-  const approvals = new Map<string, (approved: boolean) => void>();
+  const approvals = new Map<string, (approved: boolean, scope?: "session" | "saved") => void>();
   const questions = new Map<string, AskManager>();
   const activeAgents = new Map<string, RingKo>();
   const activeRuns = new Map<string, AbortController>();
+  const terminalSessions = new Map<string, TerminalSession>();
   const baseWorkspace = workspace;
   let projects = (() => {
     try {
@@ -232,30 +238,20 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
   // Connected MCP servers for the active workspace (lazily established, cached).
-  let mcpCache: { cwd: string; connections: McpConnection[]; errors: { name: string; message: string }[] } | null = null;
+  const runtimes = new Map<string, RuntimeManager>();
+  function runtimeFor(cwd: string): RuntimeManager {
+    const path = resolve(cwd);
+    let runtime = runtimes.get(path);
+    if (!runtime) { runtime = new RuntimeManager(path, eventLog); runtimes.set(path, runtime); }
+    return runtime;
+  }
 
   async function mcpConnections(cwd: string): Promise<{ connections: McpConnection[]; errors: { name: string; message: string }[] }> {
-    if (mcpCache?.cwd === cwd) return mcpCache;
-    if (mcpCache) {
-      await closeMcpConnections(mcpCache.connections).catch(() => {});
-      mcpCache = null;
-    }
-    const map: Record<string, McpServerConfig> = {};
-    try {
-      for (const server of loadMcpServers({ cwd })) map[server.name] = server.config;
-    } catch {
-      // invalid config: connect nothing
-    }
-    const opened = await openMcpServers(map);
-    mcpCache = { cwd, connections: opened.connections, errors: opened.errors };
-    return mcpCache;
+    return await runtimeFor(cwd).connections();
   }
 
   function resetMcp(): void {
-    if (!mcpCache) return;
-    const current = mcpCache.connections;
-    mcpCache = null;
-    void closeMcpConnections(current).catch(() => {});
+    for (const runtime of runtimes.values()) void runtime.resetMcp().catch(() => {});
   }
 
   // Runtime event log + a time source; the model watches them via `subscribe`.
@@ -1019,11 +1015,16 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   function handleSession(id: string): Response {
     try {
       const events = store.open(id, "read").all();
+      const failedCalls = new Set(events.filter(event => event.type === "tool/result")
+        .flatMap(event => {
+          const data = event.data as { failed?: unknown; toolCallId?: unknown } | null;
+          return data?.failed === true && typeof data.toolCallId === "string" ? [data.toolCallId] : [];
+        }));
       return json({
         id,
         title: sessionTitle(events) ?? null,
         archived: sessionArchived(events),
-        messages: toChatMessages(events),
+        messages: toChatMessages(events).map(message => message.role === "tool" ? { ...message, failed: message.toolCallId ? failedCalls.has(message.toolCallId) : false } : message),
         tasks: taskSummaries(events, activeRuns.has(id)),
         todos: sessionTodos(events),
         jobs: sessionJobs(events, activeRuns.has(id)),
@@ -1083,7 +1084,9 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
 
   function handleDeleteSession(id: string): Response {
     try {
-      return store.delete(id) ? json({ ok: true }) : json({ error: "Unknown session." }, 404);
+      if (!store.delete(id)) return json({ error: "Unknown session." }, 404);
+      runtimeFor(workspace).permissions.clearSession(id);
+      return json({ ok: true });
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Cannot delete session." }, 500);
     }
@@ -1127,13 +1130,33 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
   async function handleApproval(request: Request): Promise<Response> {
-    const body = await readJson<{ id?: string; approved?: boolean }>(request);
-    if (!body?.id) return json({ error: "id required" }, 400);
+    const body = await readJson<{ id?: string; approved?: boolean; scope?: "session" | "saved" }>(request);
+    if (typeof body?.id !== "string" || !body.id || body.id.length > 128) return json({ error: "valid id required" }, 400);
+    if (typeof body.approved !== "boolean" || (body.scope !== undefined && body.scope !== "session" && body.scope !== "saved")) return json({ error: "Invalid approval decision." }, 400);
     const resolveApproval = approvals.get(body.id);
     if (!resolveApproval) return json({ error: "no pending approval" }, 404);
     approvals.delete(body.id);
-    resolveApproval(Boolean(body.approved));
+    resolveApproval(body.approved, body.scope);
     return json({ ok: true });
+  }
+
+  function handlePermissionRules(): Response {
+    try { return json({ workspace, rules: runtimeFor(workspace).permissions.list("", "saved") }); }
+    catch (error) { return json({ error: error instanceof Error ? error.message : "Cannot load permission rules." }, 500); }
+  }
+
+  async function handleRemovePermissionRule(request: Request): Promise<Response> {
+    const body = await readJson<{ workspace?: unknown; tool?: unknown; target?: unknown; behavior?: unknown }>(request);
+    if (!body || typeof body !== "object" || Array.isArray(body) ||
+      typeof body.tool !== "string" || typeof body.behavior !== "string" || typeof body.workspace !== "string") return json({ error: "Invalid permission rule." }, 400);
+    if (body.workspace !== workspace) return json({ error: "Workspace changed; refresh permissions." }, 409);
+    try {
+      const removed = runtimeFor(workspace).permissions.remove("", { tool: body.tool, behavior: body.behavior as "allow" | "deny" | "ask", target: body.target as string | undefined }, "saved");
+      return removed ? json({ ok: true }) : json({ error: "Permission rule not found." }, 404);
+    } catch (error) {
+      if (error instanceof TypeError) return json({ error: "Invalid permission rule." }, 400);
+      return json({ error: error instanceof Error ? error.message : "Cannot update permission rules." }, 500);
+    }
   }
 
   async function handleChat(request: Request): Promise<Response> {
@@ -1178,6 +1201,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     activeRuns.set(session.id, abort);
     let closed = false;
     const pendingApprovals = new Set<string>();
+    let managed: RuntimeAgent | undefined;
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const send = (event: string, data: unknown): void => {
@@ -1190,16 +1214,11 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
             if (event.type === "requested") { questions.set(event.id, asker); send("ask", event); }
             else { questions.delete(event.id); send("ask_closed", { id: event.id }); }
           });
-          const workflow = resolveWorkflow(config.workflow);
-          const instructions = [instructionsText(loadInstructions({ cwd: workspace })), workflowInstructions(workflow)]
-            .filter((part) => part.length > 0)
-            .join("\n\n");
-          const ringko = createRingKo({
+          managed = runtimeFor(workspace).createAgent(config, {
             model: model.client,
             onDelta: delta => send("delta", delta),
             task: true,
             log: eventLog,
-            ...(instructions ? { instructions } : {}),
             taskModels: configuredModelIds(config),
             resolveTaskModel: async id => { const built = loadModel({ ...config, model: id }); if (typeof built === "string") throw new Error(built); return built.client; },
             onJobEvent: event => send("job", event),
@@ -1221,7 +1240,11 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
               send("approval", { id, toolName: approval.toolName, riskLevel: approval.riskLevel, reason: approval.reason, target: approval.target ?? null });
               return await new Promise<boolean>((resolveApproval) => {
                 const approvalSignal = approval.signal ?? abort.signal;
-                const finish = (approved: boolean) => {
+                let settled = false;
+                const finish = (approved: boolean, scope?: "session" | "saved") => {
+                  if (settled) return;
+                  settled = true;
+                  if (approved && scope) approval.remember?.(scope);
                   clearTimeout(timer);
                   approvals.delete(id); pendingApprovals.delete(id);
                   send("approval_closed", { id });
@@ -1237,7 +1260,6 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
               });
             },
             onEvent: (event) => {
-              eventLog.append("session", { type: event.type, turn: event.turn, toolName: event.toolName ?? null });
               if (event.type === "model") {
                 send("assistant", {
                   turn: event.turn,
@@ -1249,25 +1271,21 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
                 send("tool", {
                   turn: event.turn,
                   name: event.toolName ?? event.message.name ?? "tool",
+                  toolCallId: event.message.toolCallId ?? null,
                   content: event.message.content,
                   error: event.type === "tool_error",
                 });
               }
             },
-          });
+          }, { ask: asker.request, onTodo: items => send("todo", { items }), report: message => send("notice", { message }) });
+          const ringko = managed.agent;
           activeAgents.set(session.id, ringko);
-          registerTools(ringko, config, workspace, items => { session.appendEvent("session/todo", { todos: items }); session.flush(); send("todo", { items }); }, asker.request, sessionTodos(session.all()));
-          try {
-            const mcp = await mcpConnections(workspace);
-            registerMcpTools(ringko.tools, mcp.connections);
-          } catch {
-            // MCP is best-effort; a failed connect must not block the run
-          }
           const result = await ringko.run(prompt, { signal: abort.signal });
           send("done", { sessionId: session.id, content: result.content, turns: result.turns });
         } catch (error) {
           send("error", { message: error instanceof Error ? error.message : "Run failed." });
         } finally {
+          managed?.close();
           request.signal.removeEventListener("abort", requestAbort);
           activeRuns.delete(session.id);
           activeAgents.delete(session.id);
@@ -1330,17 +1348,274 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     }
   }
 
-  const server = Bun.serve({
+  function terminalOriginAllowed(request: Request): boolean {
+    const origin = request.headers.get("origin");
+    if (!origin) return true;
+    try {
+      return new URL(origin).origin === new URL(request.url).origin;
+    } catch {
+      return false;
+    }
+  }
+
+  function removeTerminal(id: string, terminate: boolean): void {
+    const session = terminalSessions.get(id);
+    if (!session) return;
+    terminalSessions.delete(id);
+    if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
+    if (terminate && !session.exited) session.terminal.kill();
+  }
+
+  function scheduleTerminalCleanup(id: string): void {
+    const session = terminalSessions.get(id);
+    if (!session) return;
+    session.cleanupTimer = setTimeout(() => removeTerminal(id, true), TERMINAL_SESSION_TTL_MS);
+    session.cleanupTimer.unref?.();
+  }
+
+  function startInteractiveTerminal(
+    shell: string,
+    args: string[],
+    cwd: string,
+    cols: number,
+    rows: number,
+  ): InteractiveTerminal {
+    const nodePath = Bun.which("node");
+    if (!nodePath) throw new Error("Interactive terminals require Node.js in PATH.");
+    const bridgePath = join(import.meta.dir, "terminal-bridge.mjs");
+    const child = Bun.spawn([nodePath, bridgePath], {
+      cwd,
+      env: { ...process.env },
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    let dataHandler: (data: string) => void = () => {};
+    let errorHandler: (message: string) => void = () => {};
+    let exitHandler: (event: { exitCode: number; signal?: number }) => void = () => {};
+    let exitReceived = false;
+
+    const sendControl = (message: Record<string, unknown>): void => {
+      try {
+        child.stdin.write(`${JSON.stringify(message)}\n`);
+        child.stdin.flush();
+      } catch (cause) {
+        errorHandler(cause instanceof Error ? cause.message : String(cause));
+      }
+    };
+
+    const terminal: InteractiveTerminal = {
+      write: (data) => sendControl({ type: "input", data }),
+      resize: (nextCols, nextRows) => sendControl({ type: "resize", cols: nextCols, rows: nextRows }),
+      kill: () => {
+        sendControl({ type: "dispose" });
+        const forceKill = setTimeout(() => child.kill(), 1_500);
+        forceKill.unref?.();
+      },
+      onData: (handler) => { dataHandler = handler; },
+      onError: (handler) => { errorHandler = handler; },
+      onExit: (handler) => { exitHandler = handler; },
+    };
+
+    void new Response(child.stderr).text().then((stderr) => {
+      if (stderr.trim() && !exitReceived) errorHandler(stderr.trim());
+    });
+
+    void (async () => {
+      const reader = child.stdout.getReader();
+      const decoder = new TextDecoder();
+      let pending = "";
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          pending += decoder.decode(value, { stream: true });
+          let newline = pending.indexOf("\n");
+          while (newline !== -1) {
+            const line = pending.slice(0, newline);
+            pending = pending.slice(newline + 1);
+            if (line) {
+              const event = JSON.parse(line) as { type?: unknown; data?: unknown; message?: unknown; exitCode?: unknown; signal?: unknown };
+              if (event.type === "output" && typeof event.data === "string") dataHandler(event.data);
+              else if (event.type === "error" && typeof event.message === "string") errorHandler(event.message);
+              else if (event.type === "exit") {
+                exitReceived = true;
+                exitHandler({
+                  exitCode: typeof event.exitCode === "number" ? event.exitCode : 1,
+                  ...(typeof event.signal === "number" ? { signal: event.signal } : {}),
+                });
+              }
+            }
+            newline = pending.indexOf("\n");
+          }
+        }
+        pending += decoder.decode();
+        if (pending.trim()) throw new Error("Terminal bridge ended with an incomplete event.");
+      } catch (cause) {
+        errorHandler(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        reader.releaseLock();
+        const exitCode = await child.exited;
+        if (!exitReceived) exitHandler({ exitCode });
+      }
+    })();
+
+    sendControl({ type: "start", shell, args, cwd, cols, rows });
+    return terminal;
+  }
+
+  async function handleCreateTerminal(request: Request): Promise<Response> {
+    if (!terminalOriginAllowed(request)) return json({ error: "Terminal requests must come from this server's origin." }, 403);
+    if (terminalSessions.size >= MAX_TERMINAL_SESSIONS) {
+      return json({ error: `At most ${MAX_TERMINAL_SESSIONS} terminal sessions may be active.` }, 429);
+    }
+    let body: { cols?: unknown; rows?: unknown } | undefined;
+    try {
+      const parsed: unknown = await request.json();
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return json({ error: "Terminal dimensions must be an object." }, 400);
+      }
+      body = parsed as { cols?: unknown; rows?: unknown };
+    } catch {
+      return json({ error: "Invalid terminal request." }, 400);
+    }
+    const cols = body.cols === undefined ? 80 : body.cols;
+    const rows = body.rows === undefined ? 24 : body.rows;
+    if (
+      typeof cols !== "number" || !Number.isInteger(cols) || cols < 20 || cols > 300 ||
+      typeof rows !== "number" || !Number.isInteger(rows) || rows < 5 || rows > 120
+    ) {
+      return json({ error: "Terminal dimensions are outside the supported range." }, 400);
+    }
+
+    const shell = process.platform === "win32"
+      ? process.env.COMSPEC ?? "powershell.exe"
+      : process.env.SHELL ?? "/bin/bash";
+    const args = process.platform === "win32"
+      ? (shell.toLowerCase().includes("powershell") ? ["-NoLogo", "-NoExit"] : [])
+      : ["-i"];
+    let terminal: InteractiveTerminal;
+    try {
+      terminal = startInteractiveTerminal(shell, args, workspace, cols, rows);
+    } catch (cause) {
+      return json({ error: cause instanceof Error ? cause.message : "Could not start a terminal." }, 500);
+    }
+
+    const id = randomUUID();
+    const session: TerminalSession = { terminal, exited: false, pendingOutput: "" };
+    terminalSessions.set(id, session);
+    terminal.onData((data) => {
+      if (session.socket?.readyState === 1) {
+        session.socket.send(JSON.stringify({ type: "output", data }));
+      } else if (session.pendingOutput.length < 1_000_000) {
+        session.pendingOutput = `${session.pendingOutput}${data}`.slice(-1_000_000);
+      }
+    });
+    terminal.onError((message) => {
+      session.socket?.send(JSON.stringify({ type: "error", message }));
+    });
+    terminal.onExit(({ exitCode, signal }) => {
+      session.exited = true;
+      session.socket?.send(JSON.stringify({ type: "exit", exitCode, signal }));
+      scheduleTerminalCleanup(id);
+    });
+    scheduleTerminalCleanup(id);
+    return json({ id });
+  }
+
+  const server = Bun.serve<TerminalSocketData>({
     hostname: host,
     port,
     idleTimeout: 255,
+    websocket: {
+      maxPayloadLength: 32 * 1024,
+      open(socket) {
+        const terminalId = socket.data?.terminalId;
+        const session = terminalId ? terminalSessions.get(terminalId) : undefined;
+        if (!session) {
+          socket.close(1008, "Terminal session no longer exists.");
+          return;
+        }
+        if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
+        session.cleanupTimer = undefined;
+        session.socket = socket;
+        if (session.pendingOutput) {
+          socket.send(JSON.stringify({ type: "output", data: session.pendingOutput }));
+          session.pendingOutput = "";
+        }
+      },
+      message(socket, message) {
+        const terminalId = socket.data?.terminalId;
+        const session = terminalId ? terminalSessions.get(terminalId) : undefined;
+        if (!terminalId || !session || typeof message !== "string") {
+          socket.close(1008, "Invalid terminal message.");
+          return;
+        }
+        let input: { type?: unknown; data?: unknown; cols?: unknown; rows?: unknown };
+        try {
+          const parsed: unknown = JSON.parse(message);
+          if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new TypeError();
+          input = parsed as typeof input;
+        } catch {
+          socket.close(1008, "Malformed terminal message.");
+          return;
+        }
+        if (input.type === "input" && typeof input.data === "string" && input.data.length <= 16_384) {
+          if (!session.exited) session.terminal.write(input.data);
+          return;
+        }
+        if (
+          input.type === "resize" &&
+          typeof input.cols === "number" && Number.isInteger(input.cols) && input.cols >= 20 && input.cols <= 300 &&
+          typeof input.rows === "number" && Number.isInteger(input.rows) && input.rows >= 5 && input.rows <= 120
+        ) {
+          if (!session.exited) session.terminal.resize(input.cols, input.rows);
+          return;
+        }
+        if (input.type === "dispose") {
+          removeTerminal(terminalId, true);
+          socket.close(1000, "Terminal closed.");
+          return;
+        }
+        socket.close(1008, "Unsupported terminal message.");
+      },
+      close(socket) {
+        const terminalId = socket.data?.terminalId;
+        const session = terminalId ? terminalSessions.get(terminalId) : undefined;
+        if (terminalId && session?.socket === socket) {
+          session.socket = undefined;
+          scheduleTerminalCleanup(terminalId);
+        }
+      },
+    },
     async fetch(request) {
       const url = new URL(request.url);
       if (url.pathname === "/api/info") return await handleInfo();
-      if (url.pathname.startsWith("/api/") && options.authToken) {
+      const terminalSocketRequest =
+        request.method === "GET" &&
+        url.pathname.startsWith("/api/terminal/") &&
+        url.pathname.endsWith("/socket");
+      if (url.pathname.startsWith("/api/") && options.authToken && !terminalSocketRequest) {
         if (request.headers.get("authorization") !== `Bearer ${options.authToken}`) {
           return json({ error: "unauthorized" }, 401);
         }
+      }
+      if (url.pathname === "/api/terminal" && request.method === "POST") {
+        return await handleCreateTerminal(request);
+      }
+      if (url.pathname.startsWith("/api/terminal/") && request.method === "DELETE") {
+        const id = url.pathname.slice("/api/terminal/".length);
+        if (!id || id.includes("/")) return json({ error: "Invalid terminal session." }, 400);
+        removeTerminal(id, true);
+        return json({ ok: true });
+      }
+      if (url.pathname.startsWith("/api/terminal/") && url.pathname.endsWith("/socket") && request.method === "GET") {
+        if (!terminalOriginAllowed(request)) return json({ error: "Terminal sockets must come from this server's origin." }, 403);
+        const id = url.pathname.slice("/api/terminal/".length, -"/socket".length);
+        const session = terminalSessions.get(id);
+        if (!session || session.socket || session.exited) return json({ error: "Terminal session is unavailable." }, 404);
+        if (server.upgrade(request, { data: { terminalId: id } })) return undefined;
+        return json({ error: "Could not establish terminal socket." }, 400);
       }
       if (url.pathname.startsWith("/api/workspace/") && request.method === "GET") {
         const review = new WorkspaceReview(workspace);
@@ -1389,6 +1664,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname === "/api/compact" && request.method === "POST") return await handleCompact(request);
       if (url.pathname === "/api/access" && request.method === "POST") return await handleSetAccess(request);
       if (url.pathname === "/api/permission" && request.method === "POST") return await handleSetAccess(request);
+      if (url.pathname === "/api/permissions" && request.method === "GET") return handlePermissionRules();
+      if (url.pathname === "/api/permissions" && request.method === "DELETE") return await handleRemovePermissionRule(request);
       if (url.pathname === "/api/mode" && request.method === "POST") return await handleSetMode(request);
       if (url.pathname === "/api/upload" && request.method === "POST") return await handleUpload(request);
       if (url.pathname === "/api/sessions" && request.method === "GET") return handleSessions();
@@ -1461,6 +1738,6 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   return {
     url: `http://${host}:${boundPort}`,
     port: boundPort,
-    stop: () => { stopTimeSource(); for (const run of activeRuns.values()) run.abort(); void closeMcpConnections(mcpCache?.connections ?? []).catch(() => {}); server.stop(true); },
+    stop: () => { stopTimeSource(); for (const run of activeRuns.values()) run.abort(); for (const id of terminalSessions.keys()) removeTerminal(id, true); for (const runtime of runtimes.values()) void runtime.close().catch(() => {}); server.stop(true); },
   };
 }

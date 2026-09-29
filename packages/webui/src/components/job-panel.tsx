@@ -3,11 +3,11 @@ import { useApp } from '@/store'
 import { useI18n } from '@/i18n'
 import { Button } from '@/components/ui/button'
 
-export function JobPanel() {
+export function JobPanel({ emptyContent }: { emptyContent?: string } = {}) {
   const { jobs: allJobs, controlJob } = useApp()
   const jobs = allJobs.filter(job => job.kind === 'shell')
   const { t } = useI18n()
-  if (!jobs.length) return null
+  if (!jobs.length) return emptyContent ? <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">{emptyContent}</p> : null
   return <section aria-label={t('job.title')} className="space-y-2">
     <h3 className="text-sm font-medium">{t('job.title')}</h3>
     {jobs.map(job => <details key={job.jobId} className="rounded-lg border bg-muted/20">

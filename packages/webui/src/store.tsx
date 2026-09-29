@@ -7,7 +7,7 @@ export interface AppState extends Conversation {
   info: Info | null; unauthorized: boolean; sessions: SessionMeta[]; sessionId: string | undefined
   refreshInfo(): void; refreshSessions(): void; clearSession(): void
   answer(output?: QuestionOutput): void; controlJob(id: string, action: 'status' | 'cancel' | 'background'): void
-  send(prompt: string, attachments?: string[]): void; stop(): void; decide(approved: boolean): void
+  send(prompt: string, attachments?: string[]): void; stop(): void; decide(approved: boolean, scope?: 'session' | 'saved'): void
   openSession(id: string): void; newChat(): void; setDraft(value: string): void
   editQueued(id: string, prompt: string): void; removeQueued(id: string): void; resumeQueue(): void
   runningSessions: string[]
@@ -65,9 +65,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     conversations.stop(id); void stopSession(id).catch(reportError)
   }, [conversations])
   const answer = useCallback((output?: QuestionOutput) => { const id = selected.current; const question = id ? conversations.get(id).question : null; if (question) void answerQuestion(question.id, output).catch(reportError) }, [conversations])
-  const decide = useCallback((approved: boolean) => {
+  const decide = useCallback((approved: boolean, scope?: 'session' | 'saved') => {
     const id = selected.current; const approval = id ? conversations.get(id).approval : null
-    if (id && approval) void respondApproval(approval.id, approved).then(() => { if (conversations.get(id).approval?.id === approval.id) conversations.patch(id, { approval: null }) }).catch(reportError)
+    if (id && approval) void respondApproval(approval.id, approved, scope).then(() => { if (conversations.get(id).approval?.id === approval.id) conversations.patch(id, { approval: null }) }).catch(reportError)
   }, [conversations])
   const controlJob = useCallback((jobId: string, action: 'status' | 'cancel' | 'background') => {
     const id = selected.current; if (!id) return
