@@ -28,6 +28,15 @@ binary (only the offline `echo` provider is). See
 Without an interactive approval prompt the CLI denies risky operations, so it
 fails closed; workspace reads and directory listings do not require approval.
 
+## Local shell commands
+
+In the TUI, enter `!git status` or another `!command` to execute it directly in
+the active workspace. These explicit human commands do not call the model or
+use its tool approval policy. They retain the shell's five-minute timeout,
+bounded output and process-tree cancellation through Esc or Ctrl+C.
+Results appear in a tool block; Ctrl+O expands stdout/stderr. Commands and their
+output are not automatically added to model context or durable session history.
+
 ## Build
 
 ```sh

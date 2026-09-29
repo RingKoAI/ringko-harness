@@ -16,6 +16,23 @@ export function cleanTerminalText(text: string): string {
     .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "");
   /* eslint-enable no-control-regex */
 }
+
+/** Fit one physical terminal row, accounting for wide glyphs and graphemes. */
+export function fitTerminalLine(text: string, columns: number): string {
+  const width = Math.max(0, Math.floor(columns));
+  const label = cleanTerminalText(text).replace(/\s+/g, " ").trim();
+  if (!width) return "";
+  if (stringWidth(label) <= width) return label;
+  let result = "";
+  let used = 0;
+  for (const char of graphemes(label)) {
+    const cells = stringWidth(char);
+    if (used + cells > width - 1) break;
+    result += char;
+    used += cells;
+  }
+  return result + "…";
+}
 export interface EditorState { text: string; cursor: number }
 export type EditorAction =
   | { type: "insert" | "replace"; text: string }

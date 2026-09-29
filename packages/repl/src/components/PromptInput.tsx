@@ -1,7 +1,7 @@
 import { Box, Text, useApp, useInput, usePaste, useStdout } from "ink";
 import { Fragment, useState } from "react";
 import { commandGroup, filterCommands } from "../commands.ts";
-import { edit, editorLines, graphemes, HISTORY_LIMIT, type EditorState } from "../editor.ts";
+import { edit, editorLines, fitTerminalLine, graphemes, HISTORY_LIMIT, type EditorState } from "../editor.ts";
 import { shortcut, type Shortcut } from "../keybindings.ts";
 import { theme } from "../theme.ts";
 import { truncate } from "../state.ts";
@@ -14,11 +14,12 @@ export interface PromptInputProps {
   onSubmit: (value: string) => void;
   onShortcut: (action: Shortcut) => void;
   onInterrupt: () => void;
+  maxEditorLines?: number;
 }
 const MAX_SUGGESTIONS = 6;
 const MAX_EDITOR_LINES = 5;
 
-export function PromptInput({ running, editor, onEdit, history, onSubmit, onShortcut, onInterrupt }: PromptInputProps) {
+export function PromptInput({ running, editor, onEdit, history, onSubmit, onShortcut, onInterrupt, maxEditorLines = MAX_EDITOR_LINES }: PromptInputProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [selected, setSelected] = useState(0);
@@ -86,7 +87,7 @@ export function PromptInput({ running, editor, onEdit, history, onSubmit, onShor
     else if (!key.meta && input) change({ type: "insert", text: input });
   });
 
-  const lines = editorLines(editor, (stdout.columns ?? 80) - 6, MAX_EDITOR_LINES);
+  const lines = editorLines(editor, Math.max(1, (stdout.columns ?? 80) - 4), Math.max(1, maxEditorLines));
   return <Box flexDirection="column" flexShrink={0}>
     {suggestions.length ? <Box flexDirection="column" paddingX={1}>
       {suggestions.map((command, index) => <Fragment key={command.name}>
@@ -97,11 +98,10 @@ export function PromptInput({ running, editor, onEdit, history, onSubmit, onShor
       </Box></Fragment>)}
       <Text color={theme.dim}>{truncate("Up/Down select · Tab complete · Enter run", width)}</Text>
     </Box> : null}
-    <Box borderStyle="round" borderColor={running ? theme.permission : theme.brand} paddingX={1}>
+    <Box borderStyle="single" borderLeft={false} borderRight={false} borderColor={running ? theme.permission : theme.brand} paddingX={1}>
       <Text color={theme.brand}>{"> "}</Text>
       <Box flexGrow={1} flexDirection="column">
-        {lines.map((line, index) => <Text key={index}>{line.before}{line.cursor !== undefined ? <Text inverse>{line.cursor}</Text> : null}{line.after}</Text>)}
-        {!value ? <Text color={theme.dim}>{running ? "Working. You can prepare your next message; Esc interrupts." : "Message or /command"}</Text> : null}
+        {!value ? <Text><Text inverse> </Text><Text color={theme.dim}>{fitTerminalLine(running ? "Working · Esc interrupts" : "Message, /command or !shell command", Math.max(1, (stdout.columns ?? 80) - 5))}</Text></Text> : lines.map((line, index) => <Text key={index}>{line.before}{line.cursor !== undefined ? <Text inverse>{line.cursor}</Text> : null}{line.after}</Text>)}
       </Box>
     </Box>
     <Text color={theme.dim}>{truncate(`${running ? "Esc interrupt" : "Enter send"} · Alt+Enter newline · Up/Down history · Ctrl+L models`, width)}</Text>

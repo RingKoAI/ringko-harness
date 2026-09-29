@@ -3,6 +3,7 @@ import { createElement } from "react";
 import type { ModelClient } from "@ringko-ai/sdk";
 import type { RingkoConfig } from "@ringko-ai/config";
 import { Repl } from "./app.tsx";
+import { isolateTerminalDiagnostics } from "./diagnostics.ts";
 
 export interface LaunchReplOptions {
   model: ModelClient;
@@ -23,17 +24,26 @@ export interface LaunchReplOptions {
 
 /** Render the interactive REPL and resolve with the final session id on exit. */
 export async function launchRepl(options: LaunchReplOptions): Promise<string | undefined> {
-  let lastSessionId: string | undefined;
-  const app = render(
-    createElement(Repl, {
-      ...options,
-      onSession: (id: string) => {
-        lastSessionId = id;
-      },
-    }),
-    // Ctrl+C is handled in-app (clear input); exit via /exit.
-    { exitOnCtrlC: false },
-  );
-  await app.waitUntilExit();
-  return lastSessionId;
+    let lastSessionId: string | undefined;
+    const restoreDiagnostics = isolateTerminalDiagnostics();
+    try {
+    const app = render(
+      createElement(Repl, {
+        ...options,
+        onSession: (id: string) => {
+          lastSessionId = id;
+        },
+      }),
+      // Ctrl+C is handled in-app (clear input); exit via /exit.
+      { exitOnCtrlC: false, alternateScreen: true, incrementalRendering: true, patchConsole: false },
+    );
+    try {
+      await app.waitUntilExit();
+      return lastSessionId;
+    } finally {
+      app.cleanup();
+    }
+    } finally {
+      restoreDiagnostics();
+    }
 }

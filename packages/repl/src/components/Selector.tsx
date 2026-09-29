@@ -1,8 +1,7 @@
 import { Box, Text, useInput, usePaste, useStdout } from "ink";
 import { Fragment, useMemo, useState } from "react";
 import { filterItems, type SelectorItem } from "../selection.ts";
-import { cleanTerminalText, graphemes } from "../editor.ts";
-import { truncate } from "../state.ts";
+import { cleanTerminalText, fitTerminalLine as truncate, graphemes } from "../editor.ts";
 import { theme } from "../theme.ts";
 
 export type { SelectorItem } from "../selection.ts";

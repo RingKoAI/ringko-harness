@@ -2,6 +2,11 @@ import { describe, expect, it } from "bun:test";
 import { filterCommands, findCommand, parseInput } from "../src/commands.ts";
 
 describe("parseInput", () => {
+  it("routes leading bang commands without changing interior exclamation marks", () => {
+    expect(parseInput(" !git status ")).toEqual({ kind: "shell", value: "git status" });
+    expect(parseInput("!")).toEqual({ kind: "shell", value: "" });
+    expect(parseInput("hello!")).toEqual({ kind: "prompt", value: "hello!" });
+  });
   it("treats plain text as a prompt", () => {
     expect(parseInput("hello world")).toEqual({ kind: "prompt", value: "hello world" });
   });

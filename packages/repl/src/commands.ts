@@ -4,6 +4,7 @@ import { SHORTCUT_HELP } from "./keybindings.ts";
 
 export type ParsedInput =
   | { kind: "prompt"; value: string }
+  | { kind: "shell"; value: string }
   | { kind: "command"; name: string; arg: string }
   | { kind: "unknown"; name: string };
 
@@ -17,6 +18,8 @@ export interface SlashContext {
   workspace: string;
   sessionId?: string;
   toolNames(): string[];
+  managePermissions?(): void;
+  showTodos?(): void;
   /** Connect to / list providers. */
   connect(arg: string): void | Promise<void>;
   /** Sign in to a provider via OAuth (default: openai). */
@@ -42,6 +45,8 @@ export interface SlashCommand {
 
 export function buildCommands(): SlashCommand[] {
   return [
+    { name: "todos", description: "browse all todo items", run: ctx => ctx.showTodos?.() },
+    { name: "permissions", description: "view and remove tool permission rules", run: ctx => ctx.managePermissions?.() },
     { name: "help", aliases: ["?"], description: "show this help", run: (ctx) => ctx.print(helpText()) },
     { name: "shortcuts", aliases: ["keys"], description: "show keyboard shortcuts", run: ctx => ctx.print(SHORTCUT_HELP) },
     { name: "clear", description: "clear the transcript", run: (ctx) => ctx.clear() },
@@ -111,7 +116,7 @@ export function buildCommands(): SlashCommand[] {
       name: "skills",
       description: "list installed skills",
       run: (ctx) => {
-        const skills = discoverSkills();
+        const skills = discoverSkills({ cwd: ctx.workspace });
         ctx.print(skills.length ? skills.map((skill) => `${skill.name} (${skill.source})`).join(", ") : "(no skills)");
       },
     },
@@ -120,7 +125,7 @@ export function buildCommands(): SlashCommand[] {
       description: "list configured MCP servers",
       run: (ctx) => {
         try {
-          const servers = loadMcpServers();
+          const servers = loadMcpServers({ cwd: ctx.workspace });
           ctx.print(servers.length ? servers.map((server) => server.name).join(", ") : "(no MCP servers)");
         } catch (error) {
           ctx.print((error as Error).message);
@@ -135,7 +140,7 @@ const COMMANDS = buildCommands();
 export function commandGroup(name: string): string {
   if (["new", "resume", "session", "clear", "compact"].includes(name)) return "Session";
   if (["connect", "login", "model", "effort", "thinking"].includes(name)) return "Model & providers";
-  if (["workspace", "tools", "skills", "mcp"].includes(name)) return "Workspace";
+  if (["workspace", "tools", "skills", "mcp", "permissions"].includes(name)) return "Workspace";
   return "Help & application";
 }
 
@@ -164,6 +169,7 @@ export function filterCommands(query: string): SlashCommand[] {
 
 export function parseInput(input: string): ParsedInput {
   const trimmed = input.trim();
+  if (trimmed.startsWith("!")) return { kind: "shell", value: trimmed.slice(1).trim() };
   if (!trimmed.startsWith("/")) return { kind: "prompt", value: input };
   const rest = trimmed.slice(1);
   const space = rest.search(/\s/);
@@ -180,6 +186,6 @@ export function helpText(): string {
     const names = [command.name, ...(command.aliases ?? [])].join(", ");
     lines.push(`  /${names.padEnd(width + 4)} ${command.description}`);
   }
-  lines.push("", "Type a message to run the agent; risky tools ask for approval (y/n).");
+  lines.push("", "!command runs a local shell command directly; Esc interrupts. Output is not sent to the model.", "Type a message to run the agent; risky tools ask for approval (y/n).");
   return lines.join("\n");
 }

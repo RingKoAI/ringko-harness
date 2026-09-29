@@ -1,11 +1,7 @@
 import { createRingKo, access, type ApprovalHandler, type ChatMessage, type RingKo } from "@ringko-ai/sdk";
-import {
-  createTodoStore,
-  registerSessionTools,
-  registerNetworkTools,
-  registerShellTools,
-  registerWorkspaceTools,
-} from "@ringko-ai/tools";
+import { resumeHint } from "./resume-hint.ts";
+import { RuntimeManager, registerRuntimeTools } from "@ringko-ai/sdk/runtime";
+import { resolve } from "node:path";
 import {
   applyProxyEnv,
   configuredModelIds,
@@ -44,7 +40,6 @@ import {
   recordSessionModel,
   sessionModel,
   toChatMessages,
-  sessionTodos,
   type SessionHandle,
 } from "@ringko-ai/session";
 import { discoverProviderModels, loadProviderModel } from "./provider.ts";
@@ -182,12 +177,7 @@ function readConfig(parsed: ParsedArgs, io: CliIo): RingkoConfig | undefined {
 }
 
 function registerTools(ringko: RingKo, config: RingkoConfig, workspace: string, session?: SessionHandle): void {
-  registerWorkspaceTools(ringko.tools, { workspace });
-  const todos = createTodoStore(items => { if (session) { session.appendEvent("session/todo", { todos: items }); session.flush(); } });
-  todos.todos = session ? sessionTodos(session.all()) : [];
-  registerSessionTools(ringko.tools, { todos, ask: async () => { throw new Error("ask requires an interactive host; use ringko tui or Web chat."); } });
-  if (config.capabilities?.network) registerNetworkTools(ringko.tools);
-  if (config.capabilities?.shell) registerShellTools(ringko.tools, { cwd: workspace });
+  registerRuntimeTools(ringko, config, workspace, {}, session);
 }
 
 async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
@@ -240,7 +230,9 @@ async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   const selection = selectModel(prioritized, override);
   recordSessionModel(session, selectionLabel(selection));
 
-  const ringko = createRingKo({
+  const runtime = new RuntimeManager(workspace);
+  try {
+  const managed = runtime.createAgent(config, {
     model,
     task: true,
     taskModels: configuredModelIds(config),
@@ -250,15 +242,15 @@ async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
     history,
     ...(config.mode === "approval" || config.mode === "assist" || config.mode === "full" ? { accessMode: config.mode } : {}),
     ...(selection ? { modelId: selection.model.id } : {}),
-  });
-  registerTools(ringko, config, workspace, session);
+  }, { report: message => io.err(message) });
+  const ringko = managed.agent;
 
-  try {
     const result = await ringko.run(prompt);
     io.out(result.content);
     io.err(`session ${session.id}`);
     return 0;
   } finally {
+    await runtime.close();
     session.close();
   }
 }
@@ -314,7 +306,9 @@ async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
     ...(selection ? { modelId: selection.model.id } : {}),
     ...(smallModel ? { smallModel } : {}),
   });
-  if (sessionId) io.err(`session ${sessionId}`);
+  if (sessionId && store.list().some(session => session.id === sessionId)) {
+    io.out(resumeHint(sessionId, resolve(workspace), process.argv[1]));
+  }
   return 0;
 }
 
@@ -725,7 +719,11 @@ if (import.meta.main) {
   void runCli(process.argv.slice(2), {
     out: (line) => process.stdout.write(`${line}\n`),
     err: (line) => process.stderr.write(`${line}\n`),
-  }).then((code) => {
+  }).then(async (code) => {
+    // Flush the resume hint before process.exit can discard pending output.
+    await Promise.all([process.stdout, process.stderr].map(stream => new Promise<void>(resolve => {
+      if (stream.destroyed) resolve(); else stream.write("", () => resolve());
+    })));
     process.exit(code);
   });
 }
