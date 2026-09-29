@@ -1,4 +1,5 @@
 // MCP transports: stdio, legacy HTTP+SSE, and Streamable HTTP.
+import { writeDiagnostic } from "@ringko-ai/config";
 export interface JsonRpcMessage {
   jsonrpc: "2.0";
   id?: string | number;
@@ -54,14 +55,31 @@ export function createStdioTransport(options: {
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
+  diagnosticName?: string;
 }): Transport {
   const proc = Bun.spawn([options.command, ...(options.args ?? [])], {
     cwd: options.cwd,
     env: { ...process.env, ...options.env },
     stdin: "pipe",
     stdout: "pipe",
-    stderr: "inherit",
+    stderr: "pipe",
   });
+  const stderrReader = proc.stderr.getReader();
+  const stderrTask = (async () => {
+    const reader = stderrReader;
+    const decoder = new TextDecoder();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        writeDiagnostic(`mcp.${options.diagnosticName ?? "stdio"}`, decoder.decode(value, { stream: true }));
+      }
+      const tail = decoder.decode();
+      if (tail) writeDiagnostic(`mcp.${options.diagnosticName ?? "stdio"}`, tail);
+    } catch (error) {
+      writeDiagnostic("mcp.stderr", error instanceof Error ? error.message : String(error));
+    } finally { reader.releaseLock(); }
+  })();
   let handler: ((message: JsonRpcMessage) => void) | undefined;
   void (async () => {
     const reader = proc.stdout.getReader();
@@ -101,6 +119,8 @@ export function createStdioTransport(options: {
       } catch {
         // already gone
       }
+      await stderrReader.cancel().catch(() => {});
+      await stderrTask;
     },
   };
 }

@@ -158,6 +158,7 @@ export function createTransport(name: string, config: McpServerConfig): Transpor
   const headers = { ...storedHeaders(name), ...stringMap(config.headers) };
   if (typeof config.command === "string" && config.command.trim().length > 0) {
     return createStdioTransport({
+      diagnosticName: name,
       command: config.command,
       args: Array.isArray(config.args) ? config.args.map((arg) => String(arg)) : [],
       env: stringMap(config.env),

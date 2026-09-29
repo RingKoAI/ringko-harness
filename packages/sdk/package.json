@@ -5,13 +5,17 @@
   "type": "module",
   "license": "Apache-2.0",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./runtime": "./src/runtime.ts"
   },
   "scripts": {
     "test": "bun test tests"
   },
   "dependencies": {
     "@ringko-ai/config": "workspace:*",
+    "@ringko-ai/mcp": "workspace:*",
+    "@ringko-ai/tools": "workspace:*",
+    "@ringko-ai/workflow": "workspace:*",
     "@ringko-ai/harness": "workspace:*",
     "@ringko-ai/runtime": "workspace:*",
     "@ringko-ai/session": "workspace:*"

@@ -11,3 +11,4 @@ export * from "./skills.ts";
 export * from "./mcp.ts";
 export * from "./instructions.ts";
 export { configuredModelIds } from "./task-models.ts";
+export * from "./diagnostics.ts";

@@ -10,6 +10,7 @@ import { abortable } from "./cancellation.ts";
 import type { JobManager } from "./jobs.ts";
 
 export interface ToolExecutionContext {
+  permissionCheck?: PermissionCheck;
   signal?: AbortSignal;
   callId?: string;
   /** Supplied by the harness, never parsed from model arguments. */
@@ -28,6 +29,8 @@ export interface ToolRiskAssessment {
 }
 
 export interface ToolApprovalRequest {
+  ruleRequired?: boolean;
+  remember?: (scope: "session" | "saved") => void;
   toolName: string;
   riskKind: RiskKind;
   reason: string;
@@ -38,6 +41,7 @@ export interface ToolApprovalRequest {
 }
 
 export type ApprovalHandler = (request: ToolApprovalRequest) => Promise<boolean>;
+export type PermissionCheck = (request: { toolName: string; target?: string; input: unknown; signal?: AbortSignal }) => Promise<"allow" | "deny" | "ask" | "default">;
 
 /** How a tool participates in same-turn scheduling. */
 export type ToolConcurrency = "parallel" | "exclusive";
@@ -201,7 +205,13 @@ async function executeToolUnlocked<Input, Output>(
   ) {
     throw new TypeError(`Tool "${tool.name}" returned an invalid risk assessment.`);
   }
-  const decision = gate(
+  const policy = context?.permissionCheck
+    ? await context.permissionCheck({ toolName: tool.name, target: risk.target, input, signal: context.signal })
+    : "default";
+  context?.signal?.throwIfAborted();
+  if (policy === "deny") throw new ToolApprovalRejectedError(tool.name);
+  if (!["allow", "ask", "default"].includes(policy)) throw new TypeError("Invalid permission decision.");
+  let decision = gate(
     {
       kind: risk.kind,
       riskLevel: risk.level,
@@ -212,13 +222,16 @@ async function executeToolUnlocked<Input, Output>(
     mode,
   );
 
-  if (decision.approvalRequired) {
+  if (policy === "ask") decision = gate({ kind: "shell", description: "Explicit permission rule requires confirmation." }, "approval");
+  let approved = false;
+  if (policy !== "allow" && decision.approvalRequired) {
     if (!requestApproval) {
       throw new ApprovalHandlerUnavailableError(tool.name, decision);
     }
 
-    const approved = await abortable(requestApproval({
+    approved = await abortable(requestApproval({
       toolName: tool.name,
+      ruleRequired: policy === "ask",
       riskKind: risk.kind,
       reason: decision.reason ?? risk.reason,
       riskLevel: decision.riskLevel,
@@ -232,6 +245,14 @@ async function executeToolUnlocked<Input, Output>(
   }
 
   context?.signal?.throwIfAborted();
+  if (context?.permissionCheck) {
+    const current = await context.permissionCheck({ toolName: tool.name, target: risk.target, input, signal: context.signal });
+    if (current !== "allow" && current !== "deny" && current !== "ask" && current !== "default") throw new TypeError("Invalid permission decision.");
+    // A policy change that introduces an unmet approval must be retried, never executed under stale authorization.
+    if (current === "deny" || (current === "ask" && policy !== "ask") ||
+      (current === "default" && policy === "allow" && decision.approvalRequired)) throw new ToolApprovalRejectedError(tool.name);
+  }
+  context?.signal?.throwIfAborted();
   return tool.execute(input, { ...context, requestApproval, accessMode: mode, approvedTarget: risk.target });
 }
 
@@ -242,6 +263,8 @@ async function executeToolUnlocked<Input, Output>(
  * captured in a closure and never returned.
  */
 export class ToolRegistry {
+  private permissionCheck?: PermissionCheck;
+  setPermissionCheck(check: PermissionCheck): void { this.permissionCheck = check; }
   private readonly tools = new Map<string, RegisteredTool>();
 
   register<Input, Output>(tool: ToolDefinition<Input, Output>): void {
@@ -322,6 +345,6 @@ export class ToolRegistry {
     if (!tool) {
       throw new UnknownToolError(toolName);
     }
-    return tool.invoke(input, requestApproval, mode, context);
+    return tool.invoke(input, requestApproval, mode, { ...context, permissionCheck: this.permissionCheck ?? context?.permissionCheck });
   }
 }

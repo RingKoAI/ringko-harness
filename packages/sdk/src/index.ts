@@ -110,6 +110,8 @@ export interface RingKoConfig {
   session?: SessionHandle;
   /** Optional runtime event log; enables the `subscribe` tool (topics: time/job/session). */
   log?: EventLog;
+  /** Host-owned scheduler shared by agents in one runtime. */
+  scheduler?: Scheduler;
   /** Prior conversation to continue from (resume). */
   history?: readonly ChatMessage[];
   /** Model id sent in requests; recorded as the session's invocation history. */
@@ -199,7 +201,7 @@ export function createRingKo(config: RingKoConfig): RingKo {
   tools.registerAll(jobs.tools());
   if (config.log) {
     tools.register(createSubscribeTool(config.log));
-    tools.register(createScheduleTool(new Scheduler(config.log)));
+    tools.register(createScheduleTool(config.scheduler ?? new Scheduler(config.log)));
   }
   const tasks = config.task ? new TaskManager({ model: recordingModel, modelId: config.modelId, models: config.taskModels, resolveModel: config.resolveTaskModel, tools, onEvent: event => {
     if (session) { session.appendEvent(`task/${event.type}`, event); session.flush(); }

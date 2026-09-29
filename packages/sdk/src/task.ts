@@ -96,7 +96,7 @@ export class TaskManager {
             // Recheck membership at the dispatch boundary. Model arguments cannot elevate mode.
             const capability = this.options.tools.get(tool.name)?.taskAccess;
             if (input.mode !== "full" && capability !== "read" && !(input.mode === "write" && capability === "write")) throw new Error("Task capability denied.");
-            const approve = input.mode === "write" ? async (request: Parameters<NonNullable<ToolExecutionContext["requestApproval"]>>[0]) => request.riskKind === "workspace_write" ? true : await context.requestApproval?.(request) === true : context.requestApproval;
+            const approve = input.mode === "write" ? async (request: Parameters<NonNullable<ToolExecutionContext["requestApproval"]>>[0]) => request.riskKind === "workspace_write" && !request.ruleRequired ? true : await context.requestApproval?.(request) === true : context.requestApproval;
             return this.options.tools.call(tool.name, value, approve, input.mode === "full" ? "full" : context.accessMode, { signal: controller.signal, callId: childContext?.callId, jobs: context.jobs });
           },
         }));

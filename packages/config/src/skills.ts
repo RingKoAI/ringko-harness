@@ -4,11 +4,12 @@
 // at least a `name` (and usually a `description`). RingKo scans
 // `~/.ringko/skills` and `~/.agents/skills` (and the singular `skill` alias);
 // ringko-specific skills take precedence over shared ones with the same name.
-import { mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { agentsRoot, projectSkillsDirs, ringkoRoot, SKILLS_DIR_NAMES, skillsDirs } from "./paths.ts";
 
 export const SKILL_FILE_NAME = "SKILL.md";
+const SKILL_METADATA_BYTES = 16 * 1024;
 
 export type SkillSource = "project" | "ringko" | "agents";
 export type SkillScope = "project" | "global";
@@ -91,7 +92,12 @@ export function discoverSkills(options: DiscoverSkillsOptions = {}): Skill[] {
       }
       let text: string;
       try {
-        text = readFileSync(skillFile, "utf8");
+        const descriptor = openSync(skillFile, "r");
+        try {
+          const buffer = Buffer.alloc(SKILL_METADATA_BYTES);
+          const bytes = readSync(descriptor, buffer, 0, buffer.length, 0);
+          text = buffer.subarray(0, bytes).toString("utf8");
+        } finally { closeSync(descriptor); }
       } catch {
         continue;
       }
