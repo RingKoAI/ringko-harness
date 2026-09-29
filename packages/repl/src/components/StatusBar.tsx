@@ -20,7 +20,7 @@ function formatCwd(path: string): string {
   return path;
 }
 
-const HINTS = "Ctrl+L models · Ctrl+O tools · /shortcuts";
+const HINTS = "Ctrl+L models · Ctrl+O tools · Ctrl+G agents · /shortcuts";
 
 export function StatusBar({ modelLabel, workspace, title, columns = 80, compact = false }: StatusBarProps) {
   const line1 = title ? `${formatCwd(workspace)} • ${title}` : formatCwd(workspace);

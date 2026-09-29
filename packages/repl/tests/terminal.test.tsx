@@ -190,17 +190,54 @@ describe("terminal component interactions", () => {
     const model: ModelClient = async request => { captured.push([...request.messages]); return { content: "offline answer", toolCalls: [] }; };
     const app = render(<Repl workspace={root} model={model} modelLabel="Echo/alpha" config={{ model: "Echo/alpha", providers: [{ name: "Echo", type: "echo", models: [{ name: "alpha", id: "alpha" }, { name: "beta", id: "beta" }] }] }} createModel={async () => model} />, { stdin: io.input as unknown as NodeJS.ReadStream, stdout: io.output as unknown as NodeJS.WriteStream, stderr: io.output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
     try {
+      await settle(); expect(io.read()).toContain("What would you like to work on?");
+      const beforeFirstPrompt = io.read().length;
       await settle(); io.input.write("first"); await settle(); io.input.write("\r"); await settle();
       expect(captured).toHaveLength(1);
+      expect(io.read().slice(beforeFirstPrompt).split("\u001b[?2026h").at(-1)).not.toContain("What would you like to work on?");
       io.input.write("\x10"); await settle();
       io.input.write("second"); await settle(); io.input.write("\r"); await settle();
       expect(captured[1].some(message => message.content === "first")).toBe(true);
+      const beforeNewSession = io.read().length;
       io.input.write("/new"); await settle(); io.input.write("\r"); await settle();
+      expect(io.read().slice(beforeNewSession)).toContain("What would you like to work on?");
       io.input.write("third"); await settle(); io.input.write("\r"); await settle();
       expect(captured[2].map(message => message.content)).toEqual(["third"]);
     } finally {
       app.unmount(); io.input.destroy(); io.output.destroy();
       if (previousHome === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("switches between main and a delegated task tree without mixing transcripts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "rkh-subagent-view-"));
+    const oldHome = process.env.RINGKO_HOME; process.env.RINGKO_HOME = root;
+    const io = terminal();
+    const model: ModelClient = async request => {
+      const last = request.messages.at(-1);
+      if (request.messages.some(message => message.role === "user" && message.content === "Inspect files")) return { content: "child findings", toolCalls: [] };
+      if (last?.role === "tool") return { content: "main result", toolCalls: [] };
+      return { content: "", toolCalls: [{ id: "delegation", name: "task", arguments: { description: "Inspect files", prompt: "Inspect files", mode: "read" } }] };
+    };
+    const app = render(<Repl workspace={root} model={model} modelLabel="test" config={{}} />, { stdin: io.input as unknown as NodeJS.ReadStream, stdout: io.output as unknown as NodeJS.WriteStream, stderr: io.output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
+    try {
+      await settle(); io.input.write("delegate"); await settle(); io.input.write("\r");
+      await settle(); await settle(); await settle();
+      expect(io.read()).toContain("Main · 1 subagent");
+      const beforePicker = io.read().length;
+      io.input.write("\x07"); await settle();
+      expect(io.read().slice(beforePicker)).toContain("Main / Subagent views");
+      io.input.write("\x1b[B"); await settle(); io.input.write("\r"); await settle();
+      const subFrame = io.read().split("\u001b[?2026h").at(-1) ?? "";
+      expect(subFrame).toContain("child findings");
+      expect(subFrame).not.toContain("main result");
+      io.input.write("\x07"); await settle(); io.input.write("\x1b[A"); await settle(); io.input.write("\r"); await settle();
+      const mainFrame = io.read().split("\u001b[?2026h").at(-1) ?? "";
+      expect(mainFrame).toContain("main result");
+      expect(mainFrame).not.toContain("child findings");
+    } finally {
+      app.unmount(); io.input.destroy(); io.output.destroy();
+      if (oldHome === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = oldHome;
       rmSync(root, { recursive: true, force: true });
     }
   });

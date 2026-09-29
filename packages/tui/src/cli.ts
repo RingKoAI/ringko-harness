@@ -31,6 +31,7 @@ import {
   settingsPath,
   unsetConfigValue,
   upsertProviderModels,
+  writeDiagnostic,
   type RingkoConfig,
 } from "@ringko-ai/config";
 import { loginGoogle, loginAnthropic, loginGitHubCopilot, loginOpenAiBrowser, loginOpenAiDevice, loginXaiDevice, openBrowser } from "@ringko-ai/auth";
@@ -231,6 +232,7 @@ async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   recordSessionModel(session, selectionLabel(selection));
 
   const runtime = new RuntimeManager(workspace);
+  void runtime.start().catch(error => writeDiagnostic("mcp.start", String(error)));
   try {
   const managed = runtime.createAgent(config, {
     model,

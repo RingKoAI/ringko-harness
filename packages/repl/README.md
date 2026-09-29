@@ -4,7 +4,8 @@ Interactive terminal UI for RingKo, built with Ink and React.
 
 ## Layout
 
-The screen contains a compact header, a scrollable transcript, a live operation
+The startup screen clears on the first submitted prompt or local command; `/new`
+restores it for a fresh session. The active conversation contains a scrollable transcript, a live operation
 indicator, tool approvals, a bounded editor or selector, and a model/status footer.
 
 - `/model` opens model search grouped by provider; `/connect` browses providers.
@@ -13,6 +14,10 @@ indicator, tool approvals, a bounded editor or selector, and a model/status foot
 - Prompt history retains the last 100 entries in memory. A draft survives selector
   navigation and history browsing. Multiline paste does not submit automatically.
 - PgUp/PgDn browse wrapped transcript rows. Ctrl+O expands tool output.
+- `/agents` or Ctrl+G selects Main or a Subagent view. A bounded tree shows
+  delegated task status; child tool calls and responses remain in their own
+  transcript. The most recent 32 tasks are restored from session events on
+  resume; session history itself remains unchanged.
 - Risky tool calls require explicit approval; the harness remains the execution boundary.
 - Conversation records are stored in `~/.ringko/sessions`.
 
@@ -28,6 +33,7 @@ Use `/shortcuts` to see the complete help. Main Pi-style bindings:
 | Ctrl+O / Ctrl+T | Toggle tool output / thinking |
 | Ctrl+X | Copy last answer |
 | Ctrl+R | Resume session picker |
+| Ctrl+G | Main / Subagent task views |
 | Shift+Enter / Alt+Enter | Insert newline |
 | Esc | Interrupt run or close selector |
 | Ctrl+C | Clear draft or interrupt |

@@ -7,6 +7,7 @@ import {
   type TodoItem,
 } from "@ringko-ai/tools";
 import { TodoPanel } from "./components/TodoPanel.tsx";
+import { TaskTree } from "./components/TaskTree.tsx";
 import {
   SessionStore,
   recordSessionModel,
@@ -26,6 +27,7 @@ import {
   selectModel,
   setOAuthAccount,
   upsertProviderModels,
+  writeDiagnostic,
   type RingkoConfig,
 } from "@ringko-ai/config";
 import { discoverModels } from "@ringko-ai/providers";
@@ -52,6 +54,7 @@ import { RuntimeManager } from "@ringko-ai/sdk/runtime";
 import type { PermissionRule } from "@ringko-ai/sdk/runtime";
 import { terminalLayout } from "./terminal-layout.ts";
 import { fitTerminalLine } from "./editor.ts";
+import { applyTaskView, restoreTaskViews, type SubagentView } from "./subagent-view.ts";
 
 export interface ReplProps {
   model: ModelClient;
@@ -137,6 +140,9 @@ export function Repl(props: ReplProps) {
   const [modelLabelText, setModelLabelText] = useState(props.modelLabel);
   const [config, setConfig] = useState<RingkoConfig>(props.config);
   const [items, setItems] = useState<ReplItem[]>([]);
+  const [sessionStarted, setSessionStarted] = useState(false);
+  const [taskViews, setTaskViews] = useState<SubagentView[]>([]);
+  const [viewedTaskId, setViewedTaskId] = useState<string>();
   const [running, setRunning] = useState(false);
   const [switching, setSwitching] = useState(false);
   const busyRef = useRef(false);
@@ -184,7 +190,10 @@ export function Repl(props: ReplProps) {
       runtimeRef.current?.permissions.clearSession(sessionRef.current?.id ?? "");
       sessionRef.current = session;
       historyRef.current = toChatMessages(events);
+      setSessionStarted(historyRef.current.some(message => message.role !== "system"));
       setItems(messagesToItems(historyRef.current, events));
+      setTaskViews(restoreTaskViews(events));
+      setViewedTaskId(undefined);
       setScrollOffset(0);
       setHistory(historyRef.current.filter(message => message.role === "user").map(message => message.content).slice(-HISTORY_LIMIT));
       setTodos(sessionTodos(events));
@@ -217,11 +226,30 @@ export function Repl(props: ReplProps) {
     });
   }, [workspace, resumeSession, print]);
 
+  const openTaskPicker = useCallback((): void => {
+    if (!taskViews.length) { print("No subagent tasks in this session."); return; }
+    setPicker({
+      title: "Main / Subagent views",
+      items: [
+        { value: "main", label: "Main conversation", group: "Main", current: viewedTaskId === undefined },
+        ...taskViews.map((task, index) => ({
+          value: task.id, label: `${index === taskViews.length - 1 ? "└─" : "├─"} ${task.description}`,
+          description: `${task.model} · ${task.mode} · ${task.status}${task.reason ? ` · ${task.reason}` : ""}`,
+          group: "Subagents", current: viewedTaskId === task.id,
+        })),
+      ],
+      onSelect: id => { setViewedTaskId(id === "main" ? undefined : id); setScrollOffset(0); setPicker(null); },
+    });
+  }, [taskViews, viewedTaskId, print]);
+
   useEffect(() => {
     const store = new SessionStore({ cwd: workspace });
     const activate = (session: SessionHandle, history: ChatMessage[], level: string) => {
       historyRef.current = history;
+      setSessionStarted(history.some(message => message.role !== "system"));
       setItems(messagesToItems(history, session.all()));
+      setTaskViews(restoreTaskViews(session.all()));
+      setViewedTaskId(undefined);
       setTodos(sessionTodos(session.all()));
       setJobs([]);
       setHistory(history.filter(message => message.role === "user").map(message => message.content).slice(-HISTORY_LIMIT));
@@ -273,6 +301,7 @@ export function Repl(props: ReplProps) {
   useEffect(() => {
     const runtime = new RuntimeManager(workspace);
     runtimeRef.current = runtime;
+    void runtime.start().catch(error => writeDiagnostic("mcp.start", String(error)));
     return () => {
       runtimeRef.current = null;
       void runtime.close().catch(error => print(`Runtime cleanup failed: ${String(error)}`));
@@ -303,7 +332,7 @@ export function Repl(props: ReplProps) {
       },
       ...(config.mode === "approval" || config.mode === "assist" || config.mode === "full" ? { accessMode: config.mode } : {}),
       onTaskEvent: event => {
-        if (event.type !== "event") print(`task ${event.taskId.slice(0, 8)} [${event.mode}] ${event.model} ${event.type}: ${event.description}${event.reason ? ` (${event.reason})` : ""}`);
+        if (sessionRef.current?.id === session.id) setTaskViews(previous => applyTaskView(previous, event));
       },
       session,
       requestApproval: (request) => new Promise<boolean>((resolve) => {
@@ -686,6 +715,9 @@ export function Repl(props: ReplProps) {
         runtimeRef.current?.permissions.clearSession(sessionRef.current?.id ?? "");
         sessionRef.current = session;
         historyRef.current = [];
+        setSessionStarted(false);
+        setTaskViews([]);
+        setViewedTaskId(undefined);
         setItems([]); setHistory([]); setTodos([]); setTitle(undefined); setScrollOffset(0);
         titledRef.current = false;
         setSessionId(session.id);
@@ -735,6 +767,7 @@ export function Repl(props: ReplProps) {
       login,
       pickModel,
       pickSession: openSessionPicker,
+      pickAgent: openTaskPicker,
       pickThinking,
       toggleThinking,
       compact,
@@ -749,6 +782,7 @@ export function Repl(props: ReplProps) {
       login,
       pickModel,
       openSessionPicker,
+      openTaskPicker,
       pickThinking,
       toggleThinking,
       compact,
@@ -765,6 +799,7 @@ export function Repl(props: ReplProps) {
     const parsed = parseInput(input);
     if (parsed.kind === "shell") {
       if (!parsed.value) { print("Usage: !command (for example !git status)"); return; }
+      setSessionStarted(true);
       const id = nextId();
       const controller = new AbortController();
       busyRef.current = true;
@@ -802,6 +837,7 @@ export function Repl(props: ReplProps) {
     const ringko = ringkoRef.current;
     if (!ringko) return;
     busyRef.current = true;
+    setSessionStarted(true);
     setItems((previous) => [...previous, userItem(parsed.value)]);
     setRunning(true);
     const controller = new AbortController();
@@ -861,6 +897,7 @@ export function Repl(props: ReplProps) {
     }
     if (switching && action !== "copy") { print("wait for the current configuration operation."); return; }
     if (action === "thinking") { toggleThinking(""); return; }
+    if (action === "agents") { openTaskPicker(); return; }
     if (action === "tools") {
       const value = !expandTools;
       setExpandTools(value);
@@ -870,7 +907,8 @@ export function Repl(props: ReplProps) {
       return;
     }
     if (action === "copy") {
-      const last = [...items].reverse().find(item => item.kind === "assistant");
+      const visible = taskViews.find(task => task.id === viewedTaskId)?.items ?? items;
+      const last = [...visible].reverse().find(item => item.kind === "assistant");
       if (last) { copyToClipboard(last.text); print("last answer sent to clipboard."); }
       else print("no assistant answer to copy.");
       return;
@@ -891,12 +929,15 @@ export function Repl(props: ReplProps) {
 
   const modal = Boolean(pending || question?.input || authBox || picker);
   const layout = terminalLayout(size.rows, modal);
+  const selectedTask = taskViews.find(task => task.id === viewedTaskId);
+  const visibleItems = selectedTask?.items ?? items;
   return (
     <Box flexDirection="column" width={size.columns} height={layout.height}>
-      <Banner modelLabel={modelLabelText} workspace={workspace} />
-      <Box ref={transcriptBox} flexDirection="column" flexGrow={1} flexShrink={1} minHeight={0} justifyContent={items.length === 0 ? "flex-start" : "flex-end"} overflowY="hidden">
-        <Transcript items={items} expandThinking={expandThinking} expandTools={expandTools} columns={size.columns} rows={Math.floor(transcriptSize.height)} offset={scrollOffset} onOffset={setScrollOffset} />
-        {items.length === 0 ? <Box flexDirection="column" paddingX={2} marginTop={1} marginBottom={1}>
+      {!sessionStarted ? <Banner modelLabel={modelLabelText} workspace={workspace} /> : null}
+      {!modal && taskViews.length > 0 ? <TaskTree tasks={taskViews} selectedId={selectedTask?.id} columns={size.columns} /> : null}
+      <Box ref={transcriptBox} flexDirection="column" flexGrow={1} flexShrink={1} minHeight={0} justifyContent={!sessionStarted ? "flex-start" : "flex-end"} overflowY="hidden">
+        <Transcript items={visibleItems} expandThinking={expandThinking} expandTools={expandTools} columns={size.columns} rows={Math.floor(transcriptSize.height)} offset={scrollOffset} onOffset={setScrollOffset} />
+        {!sessionStarted ? <Box flexDirection="column" paddingX={2} marginTop={1} marginBottom={1}>
           <Text bold color={theme.brand}>What would you like to work on?</Text>
           <Text color={theme.dim}>/connect providers · /model models · /resume sessions</Text>
           <Text color={theme.dim}>Ctrl+L models · Shift+Tab effort · /shortcuts keyboard help</Text>
@@ -926,7 +967,7 @@ export function Repl(props: ReplProps) {
       <StatusBar
         modelLabel={thinking === "off" ? `${modelLabelText} • thinking off` : `${modelLabelText} • ${thinking}`}
         workspace={workspace}
-        title={title}
+        title={selectedTask ? `Subagent: ${selectedTask.description}` : title}
         columns={size.columns}
         compact={layout.compact || modal}
       />
