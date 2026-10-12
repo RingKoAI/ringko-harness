@@ -10,6 +10,8 @@ import { createShellTool } from "../src/shell.ts";
 
 const cwd = process.cwd();
 const echo = "echo ringko";
+// Windows/Bun process startup and tree termination can exceed the default budget.
+const PROCESS_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 5_000;
 
 describe("shell tool", () => {
   it("streams background output and retrieves its result by job id", async () => {
@@ -30,7 +32,7 @@ describe("shell tool", () => {
     if (!("jobId" in output)) throw new Error("Expected background job id.");
     jobs.cancel(output.jobId); await jobs.settle();
     expect(jobs.get(output.jobId).status).toBe("cancelled");
-  }, 5000);
+  }, PROCESS_TEST_TIMEOUT_MS);
 
   it("preserves nonzero foreground exit codes and marks the job as failed", async () => {
     const jobs = new JobManager();
@@ -43,7 +45,7 @@ describe("shell tool", () => {
     const command = process.platform === "win32" ? 'ping -n 30 127.0.0.1 > nul' : 'sleep 30';
     const output = await executeTool(createShellTool({ cwd }), { command, timeout: 30 }, async () => true);
     expect(output).toMatchObject({ timedOut: true });
-  }, 5000);
+  }, PROCESS_TEST_TIMEOUT_MS);
   it("fails closed without an approval handler", async () => {
     const tool = createShellTool({ cwd });
     await expect(executeTool(tool, { command: echo })).rejects.toBeInstanceOf(ApprovalHandlerUnavailableError);

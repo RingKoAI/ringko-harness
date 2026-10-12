@@ -1,6 +1,8 @@
 import { expect, it } from "bun:test";
 import { runLocalShell } from "../src/local-shell.ts";
 import { toolOutputText, toolResultSummary } from "../src/state.ts";
+// Bun's Windows child-process startup/termination can exceed the 5s default.
+const SHELL_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 5_000;
 
 it("executes explicit shell commands and retains nonzero exit status", async () => {
   const success = await runLocalShell("echo rkh-shell-ok", process.cwd());
@@ -10,7 +12,7 @@ it("executes explicit shell commands and retains nonzero exit status", async () 
   expect(failure.exitCode).toBe(7);
   expect(toolResultSummary({ id: 1, kind: "tool", toolName: "shell", failed: true, text: JSON.stringify(failure) })).toBe("Exit 7");
   expect(toolOutputText({ id: 1, kind: "tool", toolName: "shell", text: JSON.stringify(success) })).toContain("rkh-shell-ok");
-});
+}, SHELL_TEST_TIMEOUT_MS);
 
 it("rejects empty or excessive commands and pre-aborted execution", async () => {
   await expect(runLocalShell("", process.cwd())).rejects.toThrow("non-empty");
@@ -26,4 +28,4 @@ it("interrupts a running foreground command", async () => {
   const timer = setTimeout(() => controller.abort(), 100);
   try { await expect(pending).rejects.toThrow(); }
   finally { clearTimeout(timer); }
-});
+}, SHELL_TEST_TIMEOUT_MS);

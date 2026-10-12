@@ -15,7 +15,7 @@ it("starts an authenticated interactive PTY and streams command output over WebS
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ cols: 80, rows: 24 }),
-    }, 15_000);
+    });
     expect(unauthorized.status).toBe(401);
 
     const headers = {
@@ -98,4 +98,4 @@ it("starts an authenticated interactive PTY and streams command output over WebS
     else process.env.RINGKO_HOME = previousHome;
     rmSync(root, { recursive: true, force: true });
   }
-});
+}, process.platform === "win32" ? 30_000 : 15_000);
