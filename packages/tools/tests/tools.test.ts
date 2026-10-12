@@ -143,6 +143,42 @@ describe("grep", () => {
   it("finds matching lines", async () => {
     await writeFile(join(dir, "a.txt"), "apple\nbanana\napricot");
     const output = await executeTool(createGrepTool(createWorkspace(dir)), { pattern: "^ap" }, never);
-    expect(output.matches.map((match) => match.line)).toEqual([1, 3]);
+    expect(output.matches?.map((match) => match.line)).toEqual([1, 3]);
+  });
+
+  it("searches a single file path directly", async () => {
+    await writeFile(join(dir, "a.txt"), "one\nmatch here\nthree");
+    const output = await executeTool(createGrepTool(createWorkspace(dir)), { pattern: "match", path: "a.txt" }, never);
+    expect(output.matches).toEqual([{ file: "a.txt", line: 2, text: "match here" }]);
+  });
+
+  it("walks directories, honors glob and skips ignored trees", async () => {
+    await mkdir(join(dir, "src"), { recursive: true });
+    await mkdir(join(dir, "node_modules", "pkg"), { recursive: true });
+    await writeFile(join(dir, "src", "keep.ts"), "needle\nother");
+    await writeFile(join(dir, "src", "skip.md"), "needle");
+    await writeFile(join(dir, "node_modules", "pkg", "index.js"), "needle");
+    const output = await executeTool(createGrepTool(createWorkspace(dir)), { pattern: "needle", glob: "**/*.ts" }, never);
+    expect(output.matches).toEqual([{ file: "src/keep.ts", line: 1, text: "needle" }]);
+  });
+
+  it("supports files_with_matches and count output modes and case-insensitivity", async () => {
+    await writeFile(join(dir, "a.txt"), "Hello\nhello\nworld");
+    await writeFile(join(dir, "b.txt"), "WORLD");
+    const tool = createGrepTool(createWorkspace(dir));
+    expect(await executeTool(tool, { pattern: "hello", case_insensitive: true, output_mode: "files_with_matches" }, never))
+      .toMatchObject({ output_mode: "files_with_matches", files: ["a.txt"] });
+    expect(await executeTool(tool, { pattern: "hello", case_insensitive: true, output_mode: "count" }, never))
+      .toMatchObject({ output_mode: "count", counts: [{ file: "a.txt", count: 2 }] });
+  });
+
+  it("truncates at head_limit, rejects bad regex and reports missing paths", async () => {
+    await writeFile(join(dir, "a.txt"), Array.from({ length: 10 }, () => "hit").join("\n"));
+    const tool = createGrepTool(createWorkspace(dir));
+    const limited = await executeTool(tool, { pattern: "hit", head_limit: 3 }, never);
+    expect(limited.matches).toHaveLength(3);
+    expect(limited.truncated).toBe(true);
+    await expect(executeTool(tool, { pattern: "(" }, never)).rejects.toThrow("Invalid regular expression");
+    await expect(executeTool(tool, { pattern: "x", path: "missing.txt" }, never)).rejects.toThrow("Path not found");
   });
 });
