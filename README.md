@@ -11,6 +11,8 @@ Code extension, desktop app).
 - **`packages/session`** — event-sourced session storage (`~/.ringko/sessions`).
 - **`packages/providers`** — AI SDK-backed model providers (OpenAI, Anthropic).
 - **`packages/repl`** — interactive Ink terminal UI (`ringko tui`).
+- **`packages/protocol` / `client`** — platform-neutral wire contracts and shared HTTP/SSE client.
+- **`packages/app/src/services`** — backend-owned synchronization and in-flight run state.
 - **`packages/tui` / `webui` / `app` / `code`** — the user-facing surfaces.
 
 Every tool invocation passes through the harness approval gate; hosts supply the
@@ -20,6 +22,26 @@ In the Web UI, open a session and select **Tool call log** beside the composer
 controls to inspect recorded call arguments, results, status, and timestamps.
 Older sessions without separate `tool/call` events remain readable. The log is
 available through `GET /api/sessions/:id/tool-log` in pages of up to 100 calls.
+
+### Shared terminal/browser sessions
+
+`ringko tui` automatically starts or reuses a local backend for the canonical
+workspace/config pair. Open the printed backend URL in a browser, then select
+the same session in both clients (`ringko tui -s <id>`). Messages, partial output,
+tool activity, approvals, questions, todos and running state synchronize.
+Disconnecting a client does not cancel a run; use the client's explicit stop action.
+Concurrent submissions to a busy session return HTTP 409.
+
+```sh
+pnpm dev:tui                      # run from the repository workspace
+bun packages/tui/src/cli.ts service status
+bun packages/tui/src/cli.ts service stop
+# Optional manual backend and explicit connection:
+bun packages/tui/src/cli.ts serve --shared --workspace /path/to/project --port 8787
+bun packages/tui/src/cli.ts tui --workspace /path/to/project --server http://127.0.0.1:8787
+```
+
+See [shared backend architecture and limitations](docs/SHARED-BACKEND.md).
 
 ### Delegated tasks
 

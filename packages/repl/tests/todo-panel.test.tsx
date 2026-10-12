@@ -43,20 +43,20 @@ describe("TodoPanel", () => {
       { content: "Run tests", activeForm: "Running tests", status: "in_progress" },
       { content: "Ship changes", activeForm: "Shipping changes", status: "pending" },
     ]);
-    expect(text).toContain("Todos 1/3 done");
+    expect(text).toContain("3 tasks (1 done, 1 in progress, 1 open)");
     expect(text).toContain("✔ Write code");
     expect(text).toContain("▪ Running tests");
     expect(text).toContain("▫ Ship changes");
     expect(text).not.toContain("Writing code");
     expect(text).not.toContain("Shipping changes");
-    expect(await display([{ content: "Finished", status: "completed" }])).toContain("Todos 1/1 done");
+    expect(await display([{ content: "Finished", status: "completed" }])).toContain("1 task (1 done, 0 open)");
   });
 
   it("cleans untrusted labels and fits wide text within narrow columns", async () => {
     const text = await display([
       { content: "汉字汉字汉字汉字汉字\nNEXT\x1b[31mRED\x1b]0;malicious\x07", status: "in_progress", activeForm: "🔧汉字汉字汉字汉字汉字\nNEXT\x1b[31mRED\x1b]0;malicious\x07" },
     ], 18);
-    expect(text).toContain("Todos 0/1 done");
+    expect(text).toContain("1 task (0 done");
     expect(text).toContain("▪ 🔧汉字");
     expect(text).toContain("…");
     expect(text).not.toContain("NEXT");

@@ -2,10 +2,12 @@ import { render } from "ink";
 import { createElement } from "react";
 import type { ModelClient } from "@ringko-ai/sdk";
 import type { RingkoConfig } from "@ringko-ai/config";
+import type { BackendClient } from "@ringko-ai/client";
 import { Repl } from "./app.tsx";
 import { isolateTerminalDiagnostics } from "./diagnostics.ts";
 
 export interface LaunchReplOptions {
+  backend?: BackendClient;
   model: ModelClient;
   modelLabel: string;
   config: RingkoConfig;

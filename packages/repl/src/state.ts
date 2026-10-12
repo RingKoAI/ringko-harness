@@ -102,10 +102,21 @@ export function toolResultSummary(item: ReplItem): string | undefined {
       const record = parsed as Record<string, unknown>;
       if (typeof record.exitCode === "number" || record.exitCode === null) return `Exit ${record.exitCode ?? "unknown"}${record.timedOut === true ? " (timed out)" : ""}${record.truncated === true ? " (truncated)" : ""}`;
       if (item.failed) return truncate(item.text, 160) || "Tool failed";
-      if (item.toolName && QUIET_TOOLS.has(item.toolName) && Array.isArray(record.matches)) {
-        const count = record.matches.length;
-        const unit = item.toolName === "glob" ? "file" : "match";
-        return `${count} ${unit}${count === 1 ? "" : "s"}${record.truncated === true ? " (truncated)" : ""}`;
+      if (item.toolName && QUIET_TOOLS.has(item.toolName)) {
+        const truncated = record.truncated === true ? " (truncated)" : "";
+        if (Array.isArray(record.matches)) {
+          const count = record.matches.length;
+          const unit = item.toolName === "glob" ? "file" : "match";
+          return `${count} ${unit}${count === 1 ? "" : "s"}${truncated}`;
+        }
+        if (Array.isArray(record.files)) {
+          const count = record.files.length;
+          return `${count} file${count === 1 ? "" : "s"} matched${truncated}`;
+        }
+        if (Array.isArray(record.counts)) {
+          const count = record.counts.reduce((sum, entry) => sum + (typeof (entry as { count?: unknown }).count === "number" ? (entry as { count: number }).count : 0), 0);
+          return `${count} match${count === 1 ? "" : "es"} in ${record.counts.length} file${record.counts.length === 1 ? "" : "s"}${truncated}`;
+        }
       }
       if (typeof record.jobId === "string") return `Background job ${truncate(record.jobId, 64)}`;
       if (typeof record.content === "string") return `${record.content.split("\n").length} lines${record.truncated === true ? " (truncated)" : ""}`;

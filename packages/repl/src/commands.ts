@@ -30,6 +30,10 @@ export interface SlashContext {
   pickSession(): void | Promise<void>;
   /** Open the main/subagent task view picker. */
   pickAgent?(): void;
+  /** Start a self-referential loop: `<prompt> [--max-iterations N] [--completion-promise TEXT]`. */
+  startLoop?(arg: string): void;
+  /** Stop the active loop. */
+  cancelLoop?(): void;
   /** Set the reasoning depth (effort); no argument opens a selector. */
   pickThinking(arg: string): void | Promise<void>;
   /** Toggle whether model reasoning is shown (arg: on|off). */
@@ -49,6 +53,8 @@ export function buildCommands(): SlashCommand[] {
   return [
     { name: "todos", description: "browse all todo items", run: ctx => ctx.showTodos?.() },
     { name: "agents", description: "switch between main and subagent task views", run: ctx => ctx.pickAgent?.() },
+    { name: "loop", description: "repeat a prompt until a completion promise or max iterations", run: (ctx, arg) => ctx.startLoop?.(arg) },
+    { name: "cancel-loop", aliases: ["stop-loop"], description: "stop the active loop", run: ctx => ctx.cancelLoop?.() },
     { name: "permissions", description: "view and remove tool permission rules", run: ctx => ctx.managePermissions?.() },
     { name: "help", aliases: ["?"], description: "show this help", run: (ctx) => ctx.print(helpText()) },
     { name: "shortcuts", aliases: ["keys"], description: "show keyboard shortcuts", run: ctx => ctx.print(SHORTCUT_HELP) },
@@ -141,7 +147,7 @@ export function buildCommands(): SlashCommand[] {
 const COMMANDS = buildCommands();
 
 export function commandGroup(name: string): string {
-  if (["new", "resume", "session", "clear", "compact"].includes(name)) return "Session";
+  if (["new", "resume", "session", "clear", "compact", "loop", "cancel-loop", "stop-loop"].includes(name)) return "Session";
   if (["connect", "login", "model", "effort", "thinking"].includes(name)) return "Model & providers";
   if (["workspace", "tools", "skills", "mcp", "permissions", "agents"].includes(name)) return "Workspace";
   return "Help & application";

@@ -1,7 +1,9 @@
-import { createRingKo, access, type ApprovalHandler, type ChatMessage, type RingKo } from "@ringko-ai/sdk";
+import { createRingKo, access, loopPrompt, promiseText, type ApprovalHandler, type ChatMessage, type RingKo } from "@ringko-ai/sdk";
 import { resumeHint } from "./resume-hint.ts";
 import { RuntimeManager, registerRuntimeTools } from "@ringko-ai/sdk/runtime";
 import { resolve } from "node:path";
+import { connectBackend } from "./backend.ts";
+import type { BackendClient } from "@ringko-ai/client";
 import {
   applyProxyEnv,
   configuredModelIds,
@@ -59,7 +61,10 @@ Usage:
 
 Commands:
   run <prompt>         Run the agent
+  loop <prompt>        Repeat a prompt until --completion-promise or --max-iterations
   tui                  Interactive terminal UI
+  serve                Start the shared HTTP backend (TUI starts one automatically)
+  service start|status|stop  Manage the shared backend of this workspace
   tools                List the registered tools
   skills               List installed skills (~/.ringko/skills, ~/.agents/skills)
   skills create <name> [description]  Create a skill
@@ -88,6 +93,11 @@ Options:
   --resume, -c         Continue the most recent session
   -s, --session [id]   Continue a session; omit the id for a session picker (TUI)
   --workspace <dir>    Workspace root for file tools (default: current directory)
+  --server <url>       Connect to an existing local backend (or RINGKO_SERVER)
+  --port <number>      (serve) HTTP port (default: 8787)
+  --shared             (serve) Pin the backend to the launch workspace
+  --max-iterations <n>   (loop) Stop after n iterations; 0 = unlimited (default)
+  --completion-promise <text>  (loop) Stop when a reply contains <promise>text</promise>
 
 Providers are introduced through configuration; the config names a provider
 module that is imported at run time. See docs/PROVIDERS.md.
@@ -112,6 +122,7 @@ interface ReplModule {
     modelId?: string;
     pickSession?: boolean;
     smallModel?: import("@ringko-ai/sdk").ModelClient;
+    backend?: BackendClient;
   }): Promise<string | undefined>;
 }
 
@@ -125,6 +136,9 @@ interface ParsedArgs {
   resume?: boolean;
   session?: string;
   sessionPicker?: boolean;
+  server?: string;
+  port?: number;
+  shared?: boolean;
 }
 
 function parseArgs(argv: readonly string[]): ParsedArgs {
@@ -137,8 +151,19 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let resume: boolean | undefined;
   let session: string | undefined;
   let sessionPicker: boolean | undefined;
+  let server: string | undefined;
+  let port: number | undefined;
+  let shared: boolean | undefined;
   for (let i = 0; i < rest.length; i += 1) {
     const arg = rest[i];
+    if (arg === "--shared") { shared = true; continue; }
+    if (arg === "--server" || arg === "--port") {
+      const value = rest[++i];
+      if (!value || value.startsWith("--")) throw new TypeError(`Missing value for ${arg}.`);
+      if (arg === "--server") server = value;
+      else { port = Number(value); if (!/^\d+$/.test(value) || !Number.isInteger(port) || port < 1 || port > 65535) throw new TypeError("Port must be an integer from 1 to 65535."); }
+      continue;
+    }
     if (arg === "--resume" || arg === "-c" || arg === "--continue") {
       resume = true;
       continue;
@@ -165,7 +190,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       positionals.push(arg);
     }
   }
-  return { command, positionals, config, provider, model, workspace, resume, session, sessionPicker };
+  return { command, positionals, config, provider, model, workspace, resume, session, sessionPicker, server, port, shared };
 }
 
 function readConfig(parsed: ParsedArgs, io: CliIo): RingkoConfig | undefined {
@@ -181,10 +206,12 @@ function registerTools(ringko: RingKo, config: RingkoConfig, workspace: string, 
   registerRuntimeTools(ringko, config, workspace, {}, session);
 }
 
-async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
+interface CliLoop { maxIterations: number; completionPromise?: string }
+
+async function runCommand(parsed: ParsedArgs, io: CliIo, loop?: CliLoop): Promise<number> {
   const prompt = parsed.positionals.join(" ").trim();
   if (prompt.length === 0) {
-    io.err('run requires a prompt, e.g. `ringko run "hello"`.');
+    io.err(loop ? 'loop requires a prompt, e.g. `ringko loop "fix tests" --max-iterations 10`.' : 'run requires a prompt, e.g. `ringko run "hello"`.');
     return 1;
   }
 
@@ -247,14 +274,60 @@ async function runCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   }, { report: message => io.err(message) });
   const ringko = managed.agent;
 
-    const result = await ringko.run(prompt);
-    io.out(result.content);
+    if (!loop) {
+      const result = await ringko.run(prompt);
+      io.out(result.content);
+    } else {
+      const options = { prompt, maxIterations: loop.maxIterations, ...(loop.completionPromise !== undefined ? { completionPromise: loop.completionPromise } : {}) };
+      const text = loopPrompt(options);
+      io.err(`loop started (${loop.maxIterations > 0 ? `max ${loop.maxIterations}` : "unlimited"}${loop.completionPromise ? `, promise "${loop.completionPromise}"` : ""}).`);
+      for (let iteration = 1; ; iteration += 1) {
+        io.err(`loop iteration ${iteration}`);
+        const result = await ringko.run(text);
+        if (loop.completionPromise && promiseText(result.content) === loop.completionPromise) {
+          io.out(result.content);
+          io.err(`loop complete after ${iteration} iteration(s).`);
+          break;
+        }
+        if (loop.maxIterations > 0 && iteration >= loop.maxIterations) {
+          io.out(result.content);
+          io.err(`loop stopped at its ${loop.maxIterations}-iteration limit.`);
+          break;
+        }
+      }
+    }
     io.err(`session ${session.id}`);
     return 0;
   } finally {
     await runtime.close();
     session.close();
   }
+}
+
+async function loopCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
+  const parts: string[] = [];
+  let maxIterations = 0;
+  let completionPromise: string | undefined;
+  const tokens = parsed.positionals;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    if (token === "--max-iterations") {
+      const value = tokens[index + 1];
+      if (value === undefined || !/^\d+$/.test(value)) { io.err("--max-iterations must be a non-negative integer."); return 2; }
+      maxIterations = Number(value);
+      index += 1;
+      continue;
+    }
+    if (token === "--completion-promise") {
+      const value = tokens[index + 1];
+      if (value === undefined || value.length === 0) { io.err("--completion-promise requires text."); return 2; }
+      completionPromise = value;
+      index += 1;
+      continue;
+    }
+    parts.push(token);
+  }
+  return runCommand({ ...parsed, positionals: parts }, io, { maxIterations, ...(completionPromise !== undefined ? { completionPromise } : {}) });
 }
 
 async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
@@ -265,30 +338,19 @@ async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   const config = readConfig(parsed, io);
   if (!config) return 2;
   const workspace = parsed.workspace ?? config.workspace ?? process.cwd();
-  const store = new SessionStore({ cwd: workspace });
-  const override = {
-    ...(parsed.provider ? { provider: parsed.provider } : {}),
-    ...(parsed.model ? { model: parsed.model } : {}),
-  };
-  const hasOverride = Boolean(parsed.provider || parsed.model);
-  const resumeSessionId = parsed.session ?? (parsed.resume ? store.list()[0]?.id : undefined);
-  const resumedModel = resumeSessionId ? sessionModel(store.open(resumeSessionId, "read").all()) : undefined;
-  const chosen = hasOverride ? undefined : resumedModel ?? latestSessionModel(store) ?? config.model;
-  const prioritized: RingkoConfig = chosen ? { ...config, model: chosen } : config;
-
-  const model = await loadProviderModel(prioritized, override);
-  if (typeof model === "string") {
-    io.err(model);
-    return 1;
+  let connection: Awaited<ReturnType<typeof connectBackend>>;
+  try { connection = await connectBackend({ workspace, configPath: parsed.config, url: parsed.server }); }
+  catch (error) { io.err(error instanceof Error ? error.message : "Cannot connect backend."); return 1; }
+  const backend = connection.client;
+  io.out(`Shared backend: ${connection.url}`);
+  const sessions = await backend.sessions();
+  const resumeSessionId = parsed.session ?? (parsed.resume ? sessions[0]?.id : undefined);
+  if (parsed.model || parsed.provider) {
+    const selection = selectModel(config, { ...(parsed.provider ? { provider: parsed.provider } : {}), ...(parsed.model ? { model: parsed.model } : {}) });
+    if (!selection) { io.err("Unknown model/provider override."); return 2; }
+    await backend.request("/api/model", { model: `${selection.provider.name}/${selection.model.id}` });
   }
-  const selection = selectModel(prioritized, override);
-  const modelLabel = selectionLabel(selection);
-
-  let smallModel: import("@ringko-ai/sdk").ModelClient | undefined;
-  if (config.small_model) {
-    const built = await loadProviderModel({ ...config, model: config.small_model });
-    if (typeof built === "function") smallModel = built;
-  }
+  const info = await backend.request<{ model: string | null; modelId: string | null }>("/api/info");
 
   let repl: ReplModule;
   try {
@@ -298,19 +360,33 @@ async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
     return 1;
   }
   const sessionId = await repl.launchRepl({
-    model,
-    modelLabel,
+    // Compatibility for embedded REPL hosts; the shared TUI never invokes this model.
+    model: async () => { throw new Error("Model execution belongs to the shared backend."); },
+    modelLabel: info.model ?? "No model configured",
     config,
-    workspace,
-    createModel: (nextConfig) => loadProviderModel(nextConfig),
+    workspace: connection.workspace,
+    backend,
     ...(resumeSessionId ? { resumeSessionId } : {}),
     ...(parsed.sessionPicker ? { pickSession: true } : {}),
-    ...(selection ? { modelId: selection.model.id } : {}),
-    ...(smallModel ? { smallModel } : {}),
+    ...(info.modelId ? { modelId: info.modelId } : {}),
   });
-  if (sessionId && store.list().some(session => session.id === sessionId)) {
+  if (sessionId && (await backend.sessions()).some(session => session.id === sessionId)) {
     io.out(resumeHint(sessionId, resolve(workspace), process.argv[1]));
   }
+  return 0;
+}
+
+async function serveCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
+  const { startServer } = await import("@ringko-ai/app");
+  let server;
+  try {
+    server = startServer({ workspace: resolve(parsed.workspace ?? process.cwd()), port: parsed.port, configPath: parsed.config, shared: parsed.shared, authToken: process.env.RINGKO_WEB_TOKEN?.trim() });
+  } catch (error) { io.err(error instanceof Error ? error.message : "Backend startup failed."); return 1; }
+  io.out(`RingKo backend / WebUI: ${server.url}`);
+  await new Promise<void>(finish => {
+    const shutdown = () => { process.off("SIGINT", shutdown); process.off("SIGTERM", shutdown); server.stop(); finish(); };
+    process.once("SIGINT", shutdown); process.once("SIGTERM", shutdown);
+  });
   return 0;
 }
 
@@ -706,10 +782,25 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       return authCommand(parsed, io);
     case "tui":
       return tuiCommand(parsed, io);
+    case "serve":
+      return serveCommand(parsed, io);
+    case "service": {
+      const action = parsed.positionals[0] ?? "status";
+      if (action !== "start" && action !== "status" && action !== "stop") { io.err("Usage: ringko service start|status|stop"); return 2; }
+      try {
+        const config = readConfig(parsed, io); if (!config) return 2;
+        const connection = await connectBackend({ workspace: parsed.workspace ?? config.workspace ?? process.cwd(), configPath: parsed.config, url: parsed.server, startIfMissing: action === "start" });
+        if (action === "stop") { await connection.client.request("/api/backend/stop", {}); io.out("Shared backend stopped."); }
+        else io.out(`Shared backend: ${connection.url}\nWorkspace: ${connection.workspace}`);
+        return 0;
+      } catch (error) { io.err(error instanceof Error ? error.message : "Service request failed."); return 1; }
+    }
     case "config":
       return configCommand(parsed, io);
     case "run":
       return runCommand(parsed, io);
+    case "loop":
+      return loopCommand(parsed, io);
     default:
       io.err(`Unknown command: ${parsed.command}`);
       io.err(USAGE);

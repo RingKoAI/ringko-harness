@@ -10,6 +10,8 @@ export interface StatusBarProps {
   title?: string;
   columns?: number;
   compact?: boolean;
+  /** Active self-referential loop status (iteration / promise). */
+  loop?: string;
 }
 
 /** Collapse the home directory to `~` (like the pi footer). */
@@ -22,10 +24,11 @@ function formatCwd(path: string): string {
 
 const HINTS = "Ctrl+L models · Ctrl+O tools · Ctrl+G agents · /shortcuts";
 
-export function StatusBar({ modelLabel, workspace, title, columns = 80, compact = false }: StatusBarProps) {
+export function StatusBar({ modelLabel, workspace, title, columns = 80, compact = false, loop }: StatusBarProps) {
   const line1 = title ? `${formatCwd(workspace)} • ${title}` : formatCwd(workspace);
   return (
     <Box flexDirection="column" flexShrink={0}>
+      {loop ? <Text color={theme.permission}>{fitTerminalLine(loop, columns)}</Text> : null}
       <Text color={theme.dim}>{fitTerminalLine(`${modelLabel} · ${line1}`, columns)}</Text>
       {!compact && columns >= 60 ? <Text color={theme.dim}>{fitTerminalLine(HINTS, columns)}</Text> : null}
     </Box>

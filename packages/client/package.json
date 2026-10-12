@@ -1,0 +1,10 @@
+{
+  "name": "@ringko-ai/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": { ".": "./src/index.ts", "./local": "./src/local.ts" },
+  "scripts": { "test": "bun test tests" },
+  "dependencies": { "@ringko-ai/protocol": "workspace:*" }
+}

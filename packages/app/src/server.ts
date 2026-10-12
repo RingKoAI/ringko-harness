@@ -2,7 +2,7 @@
 // small REST surface: info, sessions, a streaming chat endpoint, and a tool
 // approval endpoint. Static assets from @ringko-ai/webui are served as well.
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
@@ -22,12 +22,18 @@ import {
   access,
   estimateMessagesTokens,
   estimateToolsTokens,
+  generateSessionMeta,
   isAccessMode,
+  loopPrompt,
+  parseLoopArgs,
+  promiseText,
   type ChatMessage,
+  type LoopOptions,
   type RingKo,
 } from "@ringko-ai/sdk";
 import {
   AskManager,
+  createShellTool,
   type AskHandler,
 } from "@ringko-ai/tools";
 import {
@@ -73,11 +79,19 @@ import { listWorkflows, resolveWorkflow } from "@ringko-ai/workflow";
 import { EventLog, createTimeSource } from "@ringko-ai/runtime";
 import {
   SessionStore,
+  forkSession,
   recordFeedback,
   recordSessionArchived,
   recordSessionTitle,
+  recordUserMessage,
+  recordAssistantMessage,
+  recordSessionModel,
+  recordSessionThinking,
+  recordToolCall,
+  recordToolResult,
   sessionArchived,
   sessionFeedback,
+  sessionSummary,
   sessionTitle,
   toolLogEntries,
   trajectoryPage,
@@ -92,6 +106,9 @@ import {
 import { loadModel } from "./model.ts";
 import { WorkspaceReview } from "./workspace-review.ts";
 import { RuntimeManager, registerRuntimeTools, type RuntimeAgent } from "@ringko-ai/sdk/runtime";
+import { PROTOCOL_VERSION } from "@ringko-ai/protocol";
+import { SyncManager } from "./services/sync.ts";
+import { RunStateManager } from "./services/runs.ts";
 
 export interface ServerOptions {
   port?: number;
@@ -111,6 +128,8 @@ export interface ServerOptions {
    * the server is unauthenticated.
    */
   authToken?: string;
+  /** Auto-shared services stay pinned to one workspace; clients never silently switch tools' cwd. */
+  shared?: boolean;
 }
 
 export interface RingkoServer {
@@ -124,6 +143,8 @@ const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_WEBUI_DIR = resolve(import.meta.dir, "../../webui/dist");
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_JSON_BYTES = 1_048_576;
+const MAX_ACTIVE_RUNS = 8;
+const META_TIMEOUT_MS = 30_000;
 const MAX_TERMINAL_SESSIONS = 4;
 const TERMINAL_SESSION_TTL_MS = 30 * 60 * 1000;
 
@@ -200,15 +221,33 @@ async function readJson<T>(request: Request): Promise<T | undefined> {
 /** Start the local server. Throws if the port is unavailable. */
 export function startServer(options: ServerOptions = {}): RingkoServer {
   const host = options.host ?? process.env.RINGKO_HOST ?? DEFAULT_HOST;
+  const loopback = ["127.0.0.1", "localhost", "::1"].includes(host);
+  if (options.shared && !loopback) throw new Error("Shared backends only support loopback hosts. Unset RINGKO_HOST or use 127.0.0.1.");
   const configuredPort = Number(process.env.RINGKO_PORT);
   const port = options.port ?? (Number.isInteger(configuredPort) && configuredPort > 0 ? configuredPort : DEFAULT_PORT);
   let workspace = resolve(options.workspace ?? process.cwd());
-  const webuiDir = resolve(options.webuiDir ?? DEFAULT_WEBUI_DIR);
+  const webuiDir = resolve(options.webuiDir ?? process.env.RINGKO_WEBUI_DIR ?? (existsSync(join(DEFAULT_WEBUI_DIR, "index.html")) ? DEFAULT_WEBUI_DIR : join(dirname(process.execPath), "webui")));
   let store = new SessionStore({ cwd: workspace });
   const approvals = new Map<string, (approved: boolean, scope?: "session" | "saved") => void>();
   const questions = new Map<string, AskManager>();
   const activeAgents = new Map<string, RingKo>();
   const activeRuns = new Map<string, AbortController>();
+  const activeHandles = new Map<string, SessionHandle>();
+  const sync = new SyncManager();
+  const runStates = new RunStateManager();
+  // Single-threaded reservation: persistence validation and ownership happen without an await boundary.
+  function beginRun(session: SessionHandle, record: () => void): AbortController {
+    try { record(); session.flush(); }
+    catch (error) {
+      try { session.close(); } catch (failure) { writeDiagnostic("session.close", String(failure)); }
+      throw error;
+    }
+    const controller = new AbortController();
+    activeRuns.set(session.id, controller); activeHandles.set(session.id, session); runStates.begin(session.id);
+    writeDiagnostic("backend.run.start", JSON.stringify({ sessionId: session.id }));
+    sync.publish("session", session.id);
+    return controller;
+  }
   const terminalSessions = new Map<string, TerminalSession>();
   const baseWorkspace = workspace;
   let projects = (() => {
@@ -220,7 +259,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   })();
   // Start in the active project's workspace when one is registered and exists.
   const activeProject = projects.current ? projects.projects.find((entry) => entry.id === projects.current) : undefined;
-  if (activeProject) {
+  if (activeProject && !options.shared && !options.workspace) {
     try {
       if (statSync(activeProject.path).isDirectory()) workspace = resolve(activeProject.path);
     } catch {
@@ -230,12 +269,15 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   store = new SessionStore({ cwd: workspace });
 
   function activateProject(id: string | undefined): void {
+    if (options.shared) throw new Error("This shared backend is pinned to its workspace. Start a client in the other workspace instead.");
+    if (activeRuns.size) throw new Error("Cannot switch workspace while sessions are running.");
     projects = id ? { projects: projects.projects, current: id } : { projects: projects.projects };
     saveProjects(projects);
     const active = id ? projects.projects.find((entry) => entry.id === id) : undefined;
     workspace = active ? resolve(active.path) : baseWorkspace;
     store = new SessionStore({ cwd: workspace });
     resetMcp();
+    sync.publish("workspace");
   }
 
   // Connected MCP servers for the active workspace (lazily established, cached).
@@ -271,7 +313,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   async function handleInfo(): Promise<Response> {
     const config = readConfig();
     if (typeof config === "string") return json({ error: config }, 500);
-    const model = loadModel(config);
+    const model = await loadModel(config);
     const tools = createRingKo({ task: true, log: eventLog, model: async () => ({ content: "", toolCalls: [] }) });
     registerTools(tools, config, workspace);
     const accessMode = isAccessMode(config.permission)
@@ -283,6 +325,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     const activeId = projects.current;
     const active = activeId ? projects.projects.find((entry) => entry.id === activeId) : undefined;
     return json({
+      backend: { protocol: PROTOCOL_VERSION, instance: sync.instance },
       workspace,
       project: active ? { id: active.id, name: active.name } : null,
       auth: { required: Boolean(options.authToken) },
@@ -780,19 +823,6 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     }
   }
 
-  /** The seq of the transcript message at `index` (user/assistant/tool). */
-  function messageSeqAt(events: readonly SessionEvent[], index: number): number {
-    let seen = -1;
-    for (const event of events) {
-      if (event.type === "session/compaction") { seen = -1; continue; }
-      if (event.type !== "user/message" && event.type !== "assistant/message" && event.type !== "tool/result") continue;
-      seen += 1;
-      if (seen === index) return event.seq;
-    }
-    return events.at(-1)?.seq ?? -1;
-  }
-
-  /** Fork a session: copy the event prefix up to a message index into a child session. */
   /** Get a session's ratings keyed by transcript message index. */
   function handleGetFeedback(id: string): Response {
     try {
@@ -827,44 +857,23 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     return json({ ok: true });
   }
 
+  /** Fork a session: copy the event prefix up to a message index into a child session. */
   async function handleForkSession(id: string, request: Request): Promise<Response> {
-    let events: readonly SessionEvent[];
     try {
-      events = store.open(id, "read").all();
+      store.open(id, "read");
     } catch {
       return json({ error: "Unknown session." }, 404);
     }
-    if (events.length === 0) return json({ error: "Nothing to branch." }, 400);
     const body = await readJson<{ index?: unknown }>(request);
-    const index = typeof body?.index === "number" && Number.isInteger(body.index) && body.index >= 0 ? body.index : Number.MAX_SAFE_INTEGER;
-    const cutoff = messageSeqAt(events, index);
-    const child = store.create({ cwd: workspace, parentSession: id });
+    const index = typeof body?.index === "number" && Number.isInteger(body.index) && body.index >= 0 ? body.index : undefined;
     try {
-      child.append(
-        events
-          .filter((event) => event.seq <= cutoff)
-          .map((event) => ({ type: event.type, ...(event.data !== undefined ? { data: event.data } : {}), time: event.time })),
-      );
-      child.flush();
-    } finally {
-      child.close();
+      return json({ sessionId: forkSession(store, id, { cwd: workspace, index }) });
+    } catch (error) {
+      if (error instanceof Error && error.message === "Nothing to branch.") return json({ error: "Nothing to branch." }, 400);
+      return json({ error: "Could not fork session." }, 500);
     }
-    return json({ sessionId: child.id });
   }
 
-  /** A session's title, or its first user message truncated as a fallback. */
-  function sessionLabel(id: string): string | null {
-    try {
-      const events = store.open(id, "read").all();
-      const title = sessionTitle(events);
-      if (title && title.trim().length > 0) return title;
-      const firstUser = toChatMessages(events).find((message) => message.role === "user");
-      const text = firstUser?.content.trim();
-      return text && text.length > 0 ? text.slice(0, 60) : null;
-    } catch {
-      return null;
-    }
-  }
 
   async function handleSetAccess(request: Request): Promise<Response> {
     const body = await readJson<{ mode?: unknown; permission?: unknown }>(request);
@@ -936,14 +945,16 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     const body = await readJson<{ sessionId?: unknown; instructions?: unknown }>(request);
     const sessionId = typeof body?.sessionId === "string" ? body.sessionId : "";
     if (sessionId.length === 0) return json({ error: "sessionId is required." }, 400);
+    if (activeRuns.has(sessionId)) return json({ error: "Session is busy." }, 409);
     const config = readConfig();
     if (typeof config === "string") return json({ error: config }, 500);
-    const model = loadModel(config);
+    const model = await loadModel(config);
     if (typeof model === "string") return json({ error: model }, 400);
-    const small = config.small_model ? loadModel({ ...config, model: config.small_model }) : undefined;
+    const small = config.small_model ? await loadModel({ ...config, model: config.small_model }) : undefined;
     let session: SessionHandle;
     let history: ChatMessage[] = [];
     try {
+      if (activeRuns.has(sessionId)) return json({ error: "Session is busy." }, 409);
       history = toChatMessages(store.open(sessionId, "read").all());
       session = store.open(sessionId, "write");
     } catch {
@@ -989,15 +1000,31 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     return await handleInfo();
   }
 
+  /** A session's title, or its first user message truncated as a fallback. */
+  function sessionTitleView(events: readonly SessionEvent[]): string | null {
+    const recorded = sessionTitle(events);
+    if (recorded && recorded.trim().length > 0) return recorded;
+    const firstUser = toChatMessages(events).find((message) => message.role === "user");
+    const text = firstUser?.content.trim();
+    return text && text.length > 0 ? text.slice(0, 60) : null;
+  }
+
   function handleSessions(): Response {
     return json(
-      store.list().map((meta) => ({
-        id: meta.id,
-        createdAt: meta.header.createdAt,
-        cwd: meta.header.cwd ?? null,
-        title: sessionLabel(meta.id),
-        archived: sessionArchived(store.open(meta.id, "read").all()),
-      })),
+      store.list().map((meta) => {
+        let title: string | null = null;
+        let summary: string | null = null;
+        let archived = false;
+        try {
+          const events = store.open(meta.id, "read").all();
+          title = sessionTitleView(events);
+          summary = sessionSummary(events) ?? null;
+          archived = sessionArchived(events);
+        } catch {
+          // unreadable session log: report it without a label
+        }
+        return { id: meta.id, createdAt: meta.header.createdAt, cwd: meta.header.cwd ?? null, title, summary, archived, ...(activeRuns.has(meta.id) ? { busy: true } : {}) };
+      }),
     );
   }
 
@@ -1005,6 +1032,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     const session = store.create();
     const id = session.id;
     session.close();
+    sync.publish("session", id);
     const meta = store.list().find((entry) => entry.id === id);
     return json({
       id,
@@ -1025,6 +1053,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       return json({
         id,
         title: sessionTitle(events) ?? null,
+        summary: sessionSummary(events) ?? null,
         archived: sessionArchived(events),
         messages: toChatMessages(events).map(message => message.role === "tool" ? { ...message, failed: message.toolCallId ? failedCalls.has(message.toolCallId) : false } : message),
         tasks: taskSummaries(events, activeRuns.has(id)),
@@ -1034,6 +1063,24 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Unknown session." }, 404);
     }
+  }
+
+  function handleSnapshot(id: string): Response {
+    try {
+      const events = [...(activeHandles.get(id)?.all() ?? store.open(id, "read").all())];
+      const state = runStates.get(id);
+      const busy = activeRuns.has(id);
+      const lastRunEvent = [...events].reverse().find(event => event.type === "run/error" || event.type === "run/started");
+      return json({
+        id, instance: sync.instance, revision: sync.revision,
+        title: sessionTitle(events) ?? null, summary: sessionSummary(events) ?? null, archived: sessionArchived(events),
+        messages: toChatMessages(events), events, busy,
+        tasks: taskSummaries(events, busy), todos: sessionTodos(events), jobs: sessionJobs(events, busy),
+        approvals: [...(state?.approvals.values() ?? [])], questions: [...(state?.questions.values() ?? [])],
+        partial: state?.partial ?? null, loop: state?.loop ?? null,
+        error: state?.error ?? runStates.error(id) ?? (busy || lastRunEvent?.type !== "run/error" ? null : (lastRunEvent.data as { message?: string } | undefined)?.message ?? null),
+      });
+    } catch { return json({ error: "Unknown session." }, 404); }
   }
 
   /** Most recent tool calls from the session event log, including legacy calls. */
@@ -1066,10 +1113,10 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
   /** Estimated context usage for a session: transcript + tool schemas vs the model window. */
-  function handleContext(id: string): Response {
+  async function handleContext(id: string): Promise<Response> {
     const config = readConfig();
     if (typeof config === "string") return json({ error: config }, 500);
-    const model = loadModel(config);
+    const model = await loadModel(config);
     if (typeof model === "string") return json({ error: model }, 400);
     const limit = model.selection.model.maxInputTokens ?? 128_000;
     let used: number;
@@ -1085,9 +1132,11 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
   function handleDeleteSession(id: string): Response {
+    if (activeRuns.has(id)) return json({ error: "Cannot delete a running session." }, 409);
     try {
       if (!store.delete(id)) return json({ error: "Unknown session." }, 404);
       runtimeFor(workspace).permissions.clearSession(id);
+      sync.publish("session", id);
       return json({ ok: true });
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Cannot delete session." }, 500);
@@ -1097,7 +1146,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   async function handleRenameSession(id: string, request: Request): Promise<Response> {
     const body = await readJson<{ title?: unknown }>(request);
     const title = typeof body?.title === "string" ? body.title.trim() : "";
-    if (title.length === 0) return json({ error: "title is required." }, 400);
+    if (title.length === 0 || title.length > 512) return json({ error: "title is required (at most 512 characters)." }, 400);
+    if (activeRuns.has(id)) return json({ error: "Cannot rename a running session." }, 409);
     let session: SessionHandle;
     try {
       session = store.open(id, "write");
@@ -1110,10 +1160,12 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     } finally {
       session.close();
     }
+    sync.publish("session", id);
     return json({ id, title });
   }
 
   async function handleArchiveSession(id: string, request: Request): Promise<Response> {
+    if (activeRuns.has(id)) return json({ error: "Cannot archive a running session." }, 409);
     const body = await readJson<{ archived?: unknown }>(request);
     const archived = body?.archived === undefined ? true : Boolean(body.archived);
     let session: SessionHandle;
@@ -1128,6 +1180,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     } finally {
       session.close();
     }
+    sync.publish("session", id);
     return json({ id, archived });
   }
 
@@ -1139,21 +1192,28 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     if (!resolveApproval) return json({ error: "no pending approval" }, 404);
     approvals.delete(body.id);
     resolveApproval(body.approved, body.scope);
+    writeDiagnostic("backend.approval", JSON.stringify({ approvalId: body.id, approved: body.approved, scope: body.scope ?? "once" }));
     return json({ ok: true });
   }
 
-  function handlePermissionRules(): Response {
-    try { return json({ workspace, rules: runtimeFor(workspace).permissions.list("", "saved") }); }
+  function handlePermissionRules(url: URL): Response {
+    const id = url.searchParams.get("sessionId") ?? "";
+    if (id.length > 128) return json({ error: "Invalid session id." }, 400);
+    try { return json({ workspace, rules: runtimeFor(workspace).permissions.list("", "saved"), sessionRules: runtimeFor(workspace).permissions.list(id, "session") }); }
     catch (error) { return json({ error: error instanceof Error ? error.message : "Cannot load permission rules." }, 500); }
   }
 
   async function handleRemovePermissionRule(request: Request): Promise<Response> {
-    const body = await readJson<{ workspace?: unknown; tool?: unknown; target?: unknown; behavior?: unknown }>(request);
+    const body = await readJson<{ workspace?: unknown; tool?: unknown; target?: unknown; behavior?: unknown; sessionId?: unknown; scope?: unknown }>(request);
     if (!body || typeof body !== "object" || Array.isArray(body) ||
       typeof body.tool !== "string" || typeof body.behavior !== "string" || typeof body.workspace !== "string") return json({ error: "Invalid permission rule." }, 400);
     if (body.workspace !== workspace) return json({ error: "Workspace changed; refresh permissions." }, 409);
+    const scope = body.scope ?? "saved";
+    if (scope !== "saved" && scope !== "session") return json({ error: "Invalid permission scope." }, 400);
+    const id = typeof body.sessionId === "string" ? body.sessionId : "";
+    if (id.length > 128 || (scope === "session" && !id)) return json({ error: "Invalid session id." }, 400);
     try {
-      const removed = runtimeFor(workspace).permissions.remove("", { tool: body.tool, behavior: body.behavior as "allow" | "deny" | "ask", target: body.target as string | undefined }, "saved");
+      const removed = runtimeFor(workspace).permissions.remove(id, { tool: body.tool, behavior: body.behavior as "allow" | "deny" | "ask", target: body.target as string | undefined }, scope);
       return removed ? json({ ok: true }) : json({ error: "Permission rule not found." }, 404);
     } catch (error) {
       if (error instanceof TypeError) return json({ error: "Invalid permission rule." }, 400);
@@ -1161,10 +1221,46 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     }
   }
 
-  async function handleChat(request: Request): Promise<Response> {
-    const body = await readJson<{ prompt?: string; sessionId?: string; attachments?: unknown }>(request);
+  async function handleShell(id: string, request: Request): Promise<Response> {
+    const body = await readJson<{ command?: unknown }>(request);
+    if (typeof body?.command !== "string" || !body.command.trim() || body.command.length > 16384) return json({ error: "A shell command of at most 16384 characters is required." }, 400);
+    if (activeRuns.has(id)) return json({ error: "Session is busy." }, 409);
+    if (activeRuns.size >= MAX_ACTIVE_RUNS) return json({ error: "Too many active sessions." }, 429);
+    let session: SessionHandle;
+    try { session = store.open(id, "write"); } catch { return json({ error: "Unknown or locked session." }, 404); }
+    const call = { id: randomUUID(), name: "shell", arguments: { command: body.command } };
+    const abort = beginRun(session, () => {
+      session.appendEvent("run/started", { kind: "shell" });
+      recordUserMessage(session, `!${body.command}`); recordAssistantMessage(session, 0, "", [call]); recordToolCall(session, 0, call);
+    });
+    const tool = createShellTool({ cwd: workspace });
+    void (async () => {
+      try {
+        const result = await tool.execute(tool.parseInput(call.arguments), { signal: abort.signal });
+        recordToolResult(session, 0, call.id, "shell", JSON.stringify(result), "exitCode" in result && result.exitCode !== 0);
+      } catch (error) { recordToolResult(session, 0, call.id, "shell", error instanceof Error ? error.message : "Shell failed.", true); }
+      finally {
+        try { session.close(); }
+        catch (error) { runStates.update(id, "error", { message: "Session persistence failed. Inspect diagnostics before continuing." }); writeDiagnostic("session.close", String(error)); }
+        activeHandles.delete(id); activeRuns.delete(id); runStates.finish(id); sync.publish("session", id);
+      }
+    })().catch(error => writeDiagnostic("shell.run", String(error)));
+    return json({ sessionId: id }, 202);
+  }
+
+  async function handleChat(request: Request, detached = false): Promise<Response> {
+    const runWorkspace = workspace;
+    const runStore = store;
+    const body = await readJson<{ prompt?: string; sessionId?: string; attachments?: unknown; loop?: unknown }>(request);
     if (typeof body?.prompt !== "string" || body.prompt.length > 65536 || (body.sessionId !== undefined && (typeof body.sessionId !== "string" || body.sessionId.length > 128))) return json({ error: "Invalid chat message." }, 400);
-    if (activeRuns.size >= 8) return json({ error: "Too many active sessions. Wait for a running session to finish." }, 429);
+    let loopOptions: LoopOptions | undefined;
+    if (body.loop !== undefined) {
+      const args = body.loop && typeof body.loop === "object" && !Array.isArray(body.loop) && typeof (body.loop as { args?: unknown }).args === "string" ? (body.loop as { args: string }).args : undefined;
+      if (args === undefined || args.length > 65536) return json({ error: "Invalid loop request." }, 400);
+      const parsed = parseLoopArgs(args);
+      if (!parsed.ok) return json({ error: parsed.error }, 400);
+      loopOptions = parsed.options;
+    }
     const raw = body.prompt.trim();
     const attachments = Array.isArray(body?.attachments)
       ? body.attachments.filter((value): value is string => typeof value === "string" && value.length > 0)
@@ -1177,37 +1273,46 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
 
     const config = readConfig();
     if (typeof config === "string") return json({ error: config }, 500);
-    const model = loadModel(config);
+    const model = await loadModel(config);
     if (typeof model === "string") return json({ error: model }, 400);
-    const small = config.small_model ? loadModel({ ...config, model: config.small_model }) : undefined;
+    const small = config.small_model ? await loadModel({ ...config, model: config.small_model }) : undefined;
+    if (workspace !== runWorkspace) return json({ error: "Workspace changed; retry in the correct workspace." }, 409);
+    if (activeRuns.size >= MAX_ACTIVE_RUNS) return json({ error: "Too many active sessions. Wait for a running session to finish." }, 429);
 
     let session: SessionHandle;
     let history: ChatMessage[] = [];
     try {
       if (body?.sessionId) {
         if (activeRuns.has(body.sessionId)) return json({ error: "This session already has an active run. Queue the message until it finishes." }, 409);
-        history = toChatMessages(store.open(body.sessionId, "read").all());
-        session = store.open(body.sessionId, "write");
+        const existing = runStore.open(body.sessionId, "read");
+        if (existing.header.cwd && resolve(existing.header.cwd) !== runWorkspace) return json({ error: "Session belongs to a different workspace." }, 409);
+        history = toChatMessages(existing.all());
+        session = runStore.open(body.sessionId, "write");
       } else {
-        session = store.create();
+        session = runStore.create();
       }
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Unknown session." }, 404);
     }
 
     const encoder = new TextEncoder();
-    const abort = new AbortController();
-    const requestAbort = () => abort.abort();
-    request.signal.addEventListener("abort", requestAbort, { once: true });
-    if (request.signal.aborted) abort.abort();
-    activeRuns.set(session.id, abort);
+    const abort = beginRun(session, () => {
+      session.appendEvent("run/started", {});
+      recordSessionModel(session, `${model.selection.provider.name}/${model.selection.model.id}`);
+      if (config.thinking) recordSessionThinking(session, config.thinking);
+    });
     let closed = false;
     const pendingApprovals = new Set<string>();
     let managed: RuntimeAgent | undefined;
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const send = (event: string, data: unknown): void => {
-          if (!closed) { try { controller.enqueue(encoder.encode(sse(event, data))); } catch { closed = true; abort.abort(); } }
+          runStates.update(session.id, event, data);
+          sync.publish("activity", session.id);
+          if (!closed && !detached) {
+            if ((controller.desiredSize ?? 0) < 0) { closed = true; controller.close(); return; }
+            try { controller.enqueue(encoder.encode(sse(event, data))); } catch { closed = true; }
+          }
         };
         send("session", { sessionId: session.id });
         try {
@@ -1216,13 +1321,13 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
             if (event.type === "requested") { questions.set(event.id, asker); send("ask", event); }
             else { questions.delete(event.id); send("ask_closed", { id: event.id }); }
           });
-          managed = runtimeFor(workspace).createAgent(config, {
+          managed = runtimeFor(runWorkspace).createAgent(config, {
             model: model.client,
             onDelta: delta => send("delta", delta),
             task: true,
             log: eventLog,
             taskModels: configuredModelIds(config),
-            resolveTaskModel: async id => { const built = loadModel({ ...config, model: id }); if (typeof built === "string") throw new Error(built); return built.client; },
+             resolveTaskModel: async id => { const built = await loadModel({ ...config, model: id }); if (typeof built === "string") throw new Error(built); return built.client; },
             onJobEvent: event => send("job", event),
             onTaskEvent: event => send("task", event),
             session,
@@ -1239,7 +1344,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
                 : {}),
             requestApproval: async (approval) => {
               const id = randomUUID();
-              send("approval", { id, toolName: approval.toolName, riskLevel: approval.riskLevel, reason: approval.reason, target: approval.target ?? null });
+              send("approval", { id, toolName: approval.toolName, riskLevel: approval.riskLevel, riskKind: approval.riskKind, reason: approval.reason, target: approval.target ?? null });
               return await new Promise<boolean>((resolveApproval) => {
                 const approvalSignal = approval.signal ?? abort.signal;
                 let settled = false;
@@ -1262,6 +1367,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
               });
             },
             onEvent: (event) => {
+              sync.publish("activity", session.id);
               if (event.type === "model") {
                 send("assistant", {
                   turn: event.turn,
@@ -1282,24 +1388,69 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
           }, { ask: asker.request, onTodo: items => send("todo", { items }), report: message => send("notice", { message }) });
           const ringko = managed.agent;
           activeAgents.set(session.id, ringko);
-          const result = await ringko.run(prompt, { signal: abort.signal });
-          send("done", { sessionId: session.id, content: result.content, turns: result.turns });
+          // Title and summary are best-effort: a slow or failed generation must
+          // never delay or reject the completed run.
+          let metaStarted = false;
+          const maybeMeta = (): void => {
+            if (metaStarted || sessionTitle(session.all())) return;
+            metaStarted = true;
+            const metaModel = small && typeof small !== "string" ? small.client : model.client;
+            const collected: SessionEvent[] = [];
+            const target = { appendEvent: (type: string, data?: unknown): SessionEvent => { const event = { type, data, seq: collected.length, time: Date.now() }; collected.push(event); return event; }, flush: () => {} };
+            void generateSessionMeta(request => metaModel({ ...request, signal: AbortSignal.timeout(META_TIMEOUT_MS) }), toChatMessages(session.all()), target)
+              .then(meta => {
+                if (!meta) return;
+                const current = activeHandles.get(session.id);
+                const writer = current ?? runStore.open(session.id, "write");
+                try {
+                  if (!sessionTitle(writer.all())) { writer.append(collected); writer.flush(); sync.publish("session", session.id); }
+                } finally { if (!current) writer.close(); }
+              })
+              .catch(error => writeDiagnostic("session.meta", error instanceof Error ? error.message : "Metadata persistence failed."));
+          };
+          if (loopOptions) {
+            const options = loopOptions;
+            const text = loopPrompt(options);
+            for (let iteration = 1; ; iteration += 1) {
+              send("loop", { iteration, maxIterations: options.maxIterations, promise: options.completionPromise ?? null });
+              const result = await ringko.run(text, { signal: abort.signal });
+              maybeMeta();
+              const complete = options.completionPromise !== undefined && promiseText(result.content) === options.completionPromise;
+              const exhausted = options.maxIterations > 0 && iteration >= options.maxIterations;
+              if (complete || exhausted) {
+                send("done", { sessionId: session.id, content: result.content, turns: result.turns });
+                break;
+              }
+              abort.signal.throwIfAborted();
+            }
+          } else {
+            const result = await ringko.run(prompt, { signal: abort.signal });
+            maybeMeta();
+            send("done", { sessionId: session.id, content: result.content, turns: result.turns });
+          }
         } catch (error) {
-          send("error", { message: error instanceof Error ? error.message : "Run failed." });
+          const message = error instanceof Error ? error.message : "Run failed.";
+          try { session.appendEvent("run/error", { message }); session.flush(); }
+          catch (failure) { writeDiagnostic("session.persist", String(failure)); }
+          send("error", { message });
         } finally {
-          managed?.close();
-          request.signal.removeEventListener("abort", requestAbort);
+          try { managed?.close(); } catch (error) { writeDiagnostic("runtime.agent.close", String(error)); }
           activeRuns.delete(session.id);
           activeAgents.delete(session.id);
           for (const id of pendingApprovals) approvals.get(id)?.(false);
-          const wasClosed = closed;
-          closed = true;
-          session.close();
-          if (!wasClosed) controller.close();
+          try { session.close(); }
+          catch (error) { send("error", { message: "Session persistence failed. Inspect diagnostics before continuing." }); writeDiagnostic("session.close", String(error)); }
+          activeHandles.delete(session.id);
+          runStates.finish(session.id);
+          writeDiagnostic("backend.run.finish", JSON.stringify({ sessionId: session.id }));
+          sync.publish("session", session.id);
+          if (!closed) { closed = true; try { controller.close(); } catch { /* Consumer detached during completion. */ } }
         }
       },
-      cancel() { closed = true; abort.abort(); },
-    });
+      cancel() { closed = true; },
+    }, { highWaterMark: 256 * 1024, size: chunk => chunk?.byteLength ?? 0 });
+
+    if (detached) return json({ sessionId: session.id }, 202);
 
     return new Response(stream, {
       headers: {
@@ -1592,6 +1743,17 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     },
     async fetch(request) {
       const url = new URL(request.url);
+      const handleRequest = async (): Promise<Response | undefined> => {
+      // Local UI APIs must not be reachable from an unrelated browser origin (CSRF/DNS rebinding).
+      const allowedHosts = new Set([host, "localhost", "127.0.0.1", "[::1]"]);
+      if (loopback && url.pathname.startsWith("/api/") && !allowedHosts.has(url.hostname)) return json({ error: "Invalid backend host." }, 403);
+      const origin = request.headers.get("origin");
+      if (url.pathname.startsWith("/api/") && origin && origin !== url.origin && origin !== options.devServerUrl) return json({ error: "Cross-origin backend request denied." }, 403);
+      const expectedWorkspace = request.headers.get("x-ringko-workspace");
+      if (expectedWorkspace) {
+        try { if (resolve(decodeURIComponent(expectedWorkspace)) !== workspace) return json({ error: "Backend workspace changed. Reconnect to the correct workspace." }, 409); }
+        catch { return json({ error: "Invalid workspace header." }, 400); }
+      }
       if (url.pathname === "/api/info") return await handleInfo();
       const terminalSocketRequest =
         request.method === "GET" &&
@@ -1602,6 +1764,14 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
           return json({ error: "unauthorized" }, 401);
         }
       }
+      if (url.pathname === "/api/backend" && request.method === "GET") return json({ protocol: PROTOCOL_VERSION, instance: sync.instance, workspace, configPath: options.configPath ? resolve(options.configPath) : null });
+      if (url.pathname === "/api/backend/stop" && request.method === "POST") {
+        if (activeRuns.size) return json({ error: "Stop active sessions before stopping the backend." }, 409);
+        setTimeout(() => { sync.close(); stopTimeSource(); for (const id of terminalSessions.keys()) removeTerminal(id, true); for (const runtime of runtimes.values()) void runtime.close().catch(error => writeDiagnostic("runtime.close", String(error))); server.stop(true); }, 50);
+        return json({ ok: true });
+      }
+      if (url.pathname === "/api/sync" && request.method === "GET") return sync.stream(request.signal);
+      if (url.pathname === "/api/runs" && request.method === "POST") return await handleChat(request, true);
       if (url.pathname === "/api/terminal" && request.method === "POST") {
         return await handleCreateTerminal(request);
       }
@@ -1666,7 +1836,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname === "/api/compact" && request.method === "POST") return await handleCompact(request);
       if (url.pathname === "/api/access" && request.method === "POST") return await handleSetAccess(request);
       if (url.pathname === "/api/permission" && request.method === "POST") return await handleSetAccess(request);
-      if (url.pathname === "/api/permissions" && request.method === "GET") return handlePermissionRules();
+      if (url.pathname === "/api/permissions" && request.method === "GET") return handlePermissionRules(url);
       if (url.pathname === "/api/permissions" && request.method === "DELETE") return await handleRemovePermissionRule(request);
       if (url.pathname === "/api/mode" && request.method === "POST") return await handleSetMode(request);
       if (url.pathname === "/api/upload" && request.method === "POST") return await handleUpload(request);
@@ -1677,6 +1847,13 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         const slash = rest.indexOf("/");
         const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
         const action = slash === -1 ? "" : rest.slice(slash + 1);
+        if (!id || id.length > 128 || id.includes("\0") || id.includes("/") || id.includes("\\")) return json({ error: "Invalid session id." }, 400);
+        if (options.shared) {
+          try { const existing = store.open(id, "read"); if (existing.header.cwd && resolve(existing.header.cwd) !== workspace) return json({ error: "Session belongs to a different workspace." }, 409); }
+          catch { return json({ error: "Unknown session." }, 404); }
+        }
+        if (action === "snapshot" && request.method === "GET") return handleSnapshot(id);
+        if (action === "shell" && request.method === "POST") return await handleShell(id, request);
         if (action === "jobs" && request.method === "GET") {
           const agent = activeAgents.get(id);
           if (agent) return json(agent.jobs.list());
@@ -1705,7 +1882,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         }
         if (request.method === "GET" && action === "") return handleSession(id);
         if (request.method === "DELETE" && action === "") return handleDeleteSession(id);
-        if (request.method === "GET" && action === "context") return handleContext(id);
+        if (request.method === "GET" && action === "context") return await handleContext(id);
         if (request.method === "GET" && action === "tool-log") return handleToolLog(id, url);
         if (request.method === "GET" && action === "trajectory") return handleTrajectory(id, url);
         if (request.method === "POST" && action === "fork") return await handleForkSession(id, request);
@@ -1733,6 +1910,18 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
       if (options.devServerUrl) return await proxyDev(request, url);
       return await serveStatic(url.pathname);
+      };
+      try {
+        const response = await handleRequest();
+        if (request.method !== "GET" && response?.ok) {
+          if (/^\/api\/(model|thinking|ui|mode|access|permission|permissions|providers|reload|auth|mcp|skills)(\/|$)/.test(url.pathname)) sync.publish("config");
+          else if (url.pathname.startsWith("/api/sessions/")) sync.publish("session", decodeURIComponent(url.pathname.slice("/api/sessions/".length).split("/")[0]));
+        }
+        return response;
+      } catch (error) {
+        if (error instanceof URIError || error instanceof TypeError) return json({ error: "Invalid backend request." }, 400);
+        return json({ error: error instanceof Error ? error.message : "Backend request failed." }, 500);
+      }
     },
   });
 
@@ -1740,6 +1929,6 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   return {
     url: `http://${host}:${boundPort}`,
     port: boundPort,
-    stop: () => { stopTimeSource(); for (const run of activeRuns.values()) run.abort(); for (const id of terminalSessions.keys()) removeTerminal(id, true); for (const runtime of runtimes.values()) void runtime.close().catch(() => {}); server.stop(true); },
+    stop: () => { sync.close(); stopTimeSource(); for (const run of activeRuns.values()) run.abort(); for (const id of terminalSessions.keys()) removeTerminal(id, true); for (const runtime of runtimes.values()) void runtime.close().catch(() => {}); server.stop(true); },
   };
 }

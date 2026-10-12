@@ -1,13 +1,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { UnauthorizedError, createSession, fetchInfo, fetchSession, fetchSessions, respondApproval, streamChat, stopSession, answerQuestion, jobAction, type QuestionOutput, type Info, type SessionMeta } from '@/api'
+import { UnauthorizedError, backendClient, createSession, fetchInfo, fetchSnapshot, fetchSessions, respondApproval, streamChat, stopSession, answerQuestion, jobAction, type QuestionOutput, type Info, type SessionMeta } from '@/api'
+import { BackendError } from '@ringko-ai/client'
 import { Conversations, emptyConversation, type Conversation } from '@/lib/conversations'
 
 export interface AppState extends Conversation {
   info: Info | null; unauthorized: boolean; sessions: SessionMeta[]; sessionId: string | undefined
   refreshInfo(): void; refreshSessions(): void; clearSession(): void
   answer(output?: QuestionOutput): void; controlJob(id: string, action: 'status' | 'cancel' | 'background'): void
-  send(prompt: string, attachments?: string[]): void; stop(): void; decide(approved: boolean, scope?: 'session' | 'saved'): void
+  send(prompt: string, attachments?: string[], loop?: { args: string }): void; stop(): void; decide(approved: boolean, scope?: 'session' | 'saved'): void
   openSession(id: string): void; newChat(): void; setDraft(value: string): void
   editQueued(id: string, prompt: string): void; removeQueued(id: string): void; resumeQueue(): void
   runningSessions: string[]
@@ -28,20 +29,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [revision, setRevision] = useState(0)
   const refreshSessions = useCallback(() => { fetchSessions().then(setSessions).catch(cause => { if (cause instanceof UnauthorizedError) setUnauthorized(true) }) }, [])
   const refreshInfo = useCallback(() => { fetchInfo().then(value => { setInfo(value); setUnauthorized(false) }).catch(reportError) }, [])
-  const [conversations] = useState(() => new Conversations(streamChat, error => { if (error === 'Unauthorized') setUnauthorized(true); else if (error) toast.error(error); refreshSessions() }))
+  const [conversations] = useState<Conversations>(() => new Conversations(streamChat, (error, id) => {
+    if (error === 'Unauthorized') setUnauthorized(true); else if (error) toast.error(error)
+    refreshSessions()
+    if (id) void fetchSnapshot(id).then(snapshot => conversations.synchronize(snapshot)).catch(reportError)
+  }))
   useEffect(() => conversations.subscribe(() => setRevision(value => value + 1)), [conversations])
   // Delayed disposal tolerates React StrictMode's setup/cleanup/setup probe.
   const disposal = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => { clearTimeout(disposal.current); return () => { disposal.current = setTimeout(() => conversations.dispose(), 0) } }, [conversations])
   useEffect(() => { refreshInfo() }, [refreshInfo])
   useEffect(() => { if (info) refreshSessions() }, [info, refreshSessions])
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const watch = backendClient.watch(notice => {
+      if (notice.kind === 'activity') return
+      if (!timer) timer = setTimeout(() => { timer = undefined; refreshSessions(); if (notice.kind !== 'session') refreshInfo() }, 150)
+    }, error => { if (error instanceof BackendError && error.status === 401) setUnauthorized(true) })
+    return () => { clearTimeout(timer); watch.close() }
+  }, [refreshSessions, refreshInfo, unauthorized])
+  useEffect(() => {
+    if (!sessionId) return
+    const subscription = backendClient.watchSession(sessionId, snapshot => conversations.synchronize(snapshot), error => {
+      if (error instanceof BackendError && error.status === 401) setUnauthorized(true)
+      else if (error instanceof BackendError && error.status === 404) { conversations.patch(sessionId, { busy: false, error: 'Session was deleted in another client.' }); refreshSessions() }
+    })
+    return () => subscription.close()
+  }, [sessionId, conversations, refreshSessions, unauthorized])
   const select = useCallback((id?: string) => { selected.current = id; setSessionId(id); selectionVersion.current++ }, [])
   const openSession = useCallback((id: string) => {
     let expected: Conversation
     try { expected = conversations.get(id) } catch (error) { reportError(error); return }
     select(id)
     if (expected.busy) return
-    fetchSession(id).then(data => conversations.load(id, { messages: data.messages, tasks: data.tasks ?? [], jobs: data.jobs ?? [], todos: data.todos ?? [] }, expected)).catch(reportError)
+    fetchSnapshot(id).then(data => { if (conversations.get(id) === expected) conversations.synchronize(data) }).catch(reportError)
   }, [conversations, select])
   const creating = useRef<Promise<string> | null>(null)
   const ensureSession = useCallback(() => {
@@ -52,8 +73,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     return creating.current
   }, [conversations, select, refreshSessions])
-  const send = useCallback((prompt: string, attachments?: string[]) => {
-    void ensureSession().then(id => conversations.send(id, prompt, attachments)).catch(reportError)
+  const send = useCallback((prompt: string, attachments?: string[], loop?: { args: string }) => {
+    void ensureSession().then(id => conversations.send(id, prompt, attachments, loop)).catch(reportError)
   }, [conversations, ensureSession])
   const newChat = useCallback(() => {
     newDraftRef.current = ''; setNewDraft(''); select()
@@ -79,7 +100,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     editQueued: (id, prompt) => { if (selected.current) { try { conversations.editQueued(selected.current, id, prompt) } catch (error) { reportError(error) } } },
     removeQueued: id => { if (selected.current) conversations.removeQueued(selected.current, id) },
     resumeQueue: () => { if (selected.current) conversations.resume(selected.current) },
-    runningSessions: sessions.filter(item => conversations.peek(item.id)?.busy).map(item => item.id),
+    runningSessions: sessions.filter(item => item.busy || conversations.peek(item.id)?.busy).map(item => item.id),
   }), [state, info, unauthorized, sessions, sessionId, refreshInfo, refreshSessions, openSession, newChat, send, stop, answer, decide, controlJob, select, conversations])
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }

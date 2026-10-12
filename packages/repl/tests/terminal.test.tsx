@@ -187,7 +187,14 @@ describe("terminal component interactions", () => {
     const io = terminal();
     const requests: readonly ChatMessage[][] = [];
     const captured = requests as ChatMessage[][];
-    const model: ModelClient = async request => { captured.push([...request.messages]); return { content: "offline answer", toolCalls: [] }; };
+    const model: ModelClient = async request => {
+      // The background title/summary pass is not part of the conversation transcript.
+      if (request.messages.some(message => typeof message.content === "string" && message.content.includes("label an agent conversation"))) {
+        return { content: '{"title":"offline session","summary":"An offline test conversation."}', toolCalls: [] };
+      }
+      captured.push([...request.messages]);
+      return { content: "offline answer", toolCalls: [] };
+    };
     const app = render(<Repl workspace={root} model={model} modelLabel="Echo/alpha" config={{ model: "Echo/alpha", providers: [{ name: "Echo", type: "echo", models: [{ name: "alpha", id: "alpha" }, { name: "beta", id: "beta" }] }] }} createModel={async () => model} />, { stdin: io.input as unknown as NodeJS.ReadStream, stdout: io.output as unknown as NodeJS.WriteStream, stderr: io.output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
     try {
       await settle(); expect(io.read()).toContain("What would you like to work on?");
@@ -223,7 +230,8 @@ describe("terminal component interactions", () => {
     try {
       await settle(); io.input.write("delegate"); await settle(); io.input.write("\r");
       await settle(); await settle(); await settle();
-      expect(io.read()).toContain("Main · 1 subagent");
+      expect(io.read()).toContain("main");
+      expect(io.read()).toContain("1 subagent");
       const beforePicker = io.read().length;
       io.input.write("\x07"); await settle();
       expect(io.read().slice(beforePicker)).toContain("Main / Subagent views");
@@ -261,6 +269,75 @@ describe("terminal component interactions", () => {
       io.input.write("next"); await settle(); io.input.write("\r"); await settle();
       expect(submitted).toEqual(["draft\nnext"]); expect(current.text).toBe("");
     } finally { app.unmount(); io.input.destroy(); io.output.destroy(); }
+  });
+  it("exits on a second Ctrl+C within the window but not on a single press", async () => {
+    const io = terminal();
+    function Harness() {
+      const [editor, setEditor] = useState<EditorState>({ text: "", cursor: 0 });
+      return <PromptInput editor={editor} onEdit={setEditor} running={false} history={[]} onSubmit={() => {}} onShortcut={() => {}} onInterrupt={() => {}} />;
+    }
+    const app = render(<Harness />, { stdin: io.input as unknown as NodeJS.ReadStream, stdout: io.output as unknown as NodeJS.WriteStream, stderr: io.output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
+    let exited = false;
+    const done = app.waitUntilExit().then(() => { exited = true; });
+    try {
+      await settle(); io.input.write("\x03"); await settle();
+      expect(exited).toBe(false);
+      expect(io.read()).toContain("Press Ctrl+C again to exit");
+      io.input.write("\x03"); await settle();
+      await done;
+      expect(exited).toBe(true);
+    } finally { app.unmount(); io.input.destroy(); io.output.destroy(); }
+  });
+  it("triggers an inline action on the highlighted item without selecting it", async () => {
+    const io = terminal();
+    const selected: string[] = []; const renamed: string[] = [];
+    const app = render(
+      <Selector
+        title="Sessions"
+        items={[{ label: "Alpha", value: "a" }, { label: "Beta", value: "b" }]}
+        onSelect={value => selected.push(value)}
+        onCancel={() => {}}
+        actions={[{ label: "Ctrl+R rename", match: (input, key) => key.ctrl && input === "r", trigger: item => renamed.push(item.value) }]}
+      />,
+      { stdin: io.input as unknown as NodeJS.ReadStream, stdout: io.output as unknown as NodeJS.WriteStream, stderr: io.output as unknown as NodeJS.WriteStream, exitOnCtrlC: false },
+    );
+    try {
+      await settle();
+      expect(io.read()).toContain("Ctrl+R rename");
+      io.input.write("\x1b[B"); await settle();   // highlight Beta
+      io.input.write("\x12"); await settle();     // Ctrl+R
+      expect(renamed).toEqual(["b"]);
+      expect(selected).toEqual([]);
+    } finally { app.unmount(); io.input.destroy(); io.output.destroy(); }
+  });
+  it("loops the same prompt until the completion promise appears", async () => {
+    const root = mkdtempSync(join(tmpdir(), "rkh-loop-"));
+    const previousHome = process.env.RINGKO_HOME; process.env.RINGKO_HOME = root;
+    const io = terminal();
+    let runs = 0;
+    const model: ModelClient = async request => {
+      if (request.messages.some(message => typeof message.content === "string" && message.content.includes("label an agent conversation"))) {
+        return { content: '{"title":"loop session","summary":"A looped task."}', toolCalls: [] };
+      }
+      const last = request.messages.at(-1);
+      if (last && typeof last.content === "string" && last.content.includes("fix it")) {
+        runs += 1;
+        return runs < 2 ? { content: "still working", toolCalls: [] } : { content: "all good <promise>DONE</promise>", toolCalls: [] };
+      }
+      return { content: "ok", toolCalls: [] };
+    };
+    const app = render(<Repl workspace={root} model={model} modelLabel="test" config={{}} />, { stdin: io.input as unknown as NodeJS.ReadStream, stdout: io.output as unknown as NodeJS.WriteStream, stderr: io.output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
+    try {
+      await settle();
+      io.input.write("/loop fix it --completion-promise DONE --max-iterations 5"); await settle(); io.input.write("\r");
+      for (let index = 0; index < 6; index += 1) await settle();
+      expect(runs).toBe(2);
+      expect(io.read()).toContain("loop complete");
+    } finally {
+      app.unmount(); io.input.destroy(); io.output.destroy();
+      if (previousHome === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
   it("does not select empty searches and cancels a grouped picker", async () => {
     const io = terminal(); const selected: string[] = []; let cancelled = false;

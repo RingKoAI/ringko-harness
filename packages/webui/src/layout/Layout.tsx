@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Folder, FolderPlus, MessageSquare, MoreHorizontal, PanelRight, Pencil, Plus, Settings as SettingsIcon, Trash2, Wrench } from 'lucide-react'
+import { Archive, ArchiveRestore, Folder, FolderPlus, GitBranch, MessageSquare, MoreHorizontal, PanelRight, Pencil, Plus, Settings as SettingsIcon, Trash2, Wrench } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -7,6 +7,7 @@ import {
   archiveSession,
   deleteSession,
   fetchProjects,
+  forkSession,
   getToken,
   renameSession,
   setCurrentProject,
@@ -185,6 +186,18 @@ export function Layout() {
     })
   }
 
+  async function fork(id: string): Promise<void> {
+    try {
+      const { sessionId } = await forkSession(id)
+      app.refreshSessions()
+      app.openSession(sessionId)
+      navigate(`/${sessionId}`)
+      toast.success(t('session.forked'))
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
   return (
     <SidebarProvider>
       <Sidebar collapsible="icon">
@@ -309,8 +322,8 @@ export function Layout() {
                           {app.runningSessions.includes(session.id) ? <span className="ml-2 text-primary"> · {t('session.running')}</span> : null}
                           {session.archived ? ` · ${t('session.archived')}` : ''}
                         </span>
-                        <span className="block truncate text-[10px] text-muted-foreground">
-                          {relativeTime(session.createdAt)}
+                        <span className="block truncate text-[10px] text-muted-foreground" title={session.summary ?? undefined}>
+                          {session.summary ? session.summary : relativeTime(session.createdAt)}
                         </span>
                       </span>
                     </SidebarMenuButton>
@@ -329,6 +342,10 @@ export function Layout() {
                         >
                           <Pencil />
                           {t('session.rename')}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => void fork(session.id)}>
+                          <GitBranch />
+                          {t('session.fork')}
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => void run(() => archiveSession(session.id, !session.archived))}>
                           {session.archived ? <ArchiveRestore /> : <Archive />}

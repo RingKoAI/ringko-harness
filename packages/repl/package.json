@@ -8,9 +8,10 @@
     ".": "./src/index.tsx"
   },
   "scripts": {
-    "test": "bun test tests"
+    "test": "bun test tests --timeout 30000"
   },
   "dependencies": {
+    "@ringko-ai/client": "workspace:*",
     "@ringko-ai/auth": "workspace:*",
     "@ringko-ai/config": "workspace:*",
     "@ringko-ai/providers": "workspace:*",

@@ -1,6 +1,7 @@
 import { expect, it } from 'bun:test'
 import { Conversations, CONVERSATION_LIMITS } from '../src/lib/conversations'
 import type { ChatHandlers } from '../src/api'
+import type { SessionSnapshot } from '@ringko-ai/client'
 
 function fixture() {
   const calls: { input: { sessionId: string; prompt: string }; handlers: ChatHandlers; aborted: boolean }[] = []
@@ -54,4 +55,31 @@ it('rejects stale history loads, oversized input and excessive queued work', () 
   for (let index = 0; index < CONVERSATION_LIMITS.queued; index++) manager.send('a', `queued ${index}`)
   expect(() => manager.send('a', 'excess')).toThrow('full')
   expect(() => manager.send('b', 'x'.repeat(CONVERSATION_LIMITS.prompt + 1))).toThrow('size')
+})
+
+function snapshot(id = 'a'): SessionSnapshot {
+  return { id, instance: 'fixture', revision: 1, title: null, summary: null, archived: false, messages: [{ role: 'user', content: 'from another terminal' }], events: [], busy: true,
+    approvals: [{ id: 'approval', toolName: 'shell', riskLevel: 'high', riskKind: 'shell', reason: 'fixture', target: 'echo fixture' }], questions: [], tasks: [], todos: [], jobs: [], partial: { content: 'shared partial', reasoning: '' }, loop: null, error: null }
+}
+it('loads another terminal\'s run without losing local drafts and settles from a snapshot', () => {
+  const { manager } = fixture(); manager.patch('a', { draft: 'keep my draft' })
+  manager.synchronize(snapshot())
+  expect(manager.get('a')).toMatchObject({ busy: true, draft: 'keep my draft', partial: { content: 'shared partial' }, approval: { id: 'approval' } })
+  manager.synchronize({ ...snapshot(), revision: 2, busy: false, partial: null, approvals: [], messages: [{ role: 'assistant', content: 'shared done' }] })
+  expect(manager.get('a')).toMatchObject({ busy: false, draft: 'keep my draft', approval: null, messages: [{ role: 'assistant', content: 'shared done' }] })
+})
+it('does not double-append snapshots while its own HTTP stream is active', () => {
+  const { manager, calls } = fixture(); manager.send('a', 'local prompt')
+  manager.synchronize(snapshot())
+  calls[0].handlers.onAssistant({ content: 'local answer', reasoning: null, toolCalls: [], turn: 1 })
+  expect(manager.get('a').messages.map(message => message.content)).toEqual(['local prompt', 'local answer'])
+})
+it('does not resume a manually paused queue or overwrite a newer snapshot', async () => {
+  const { manager, calls } = fixture(); manager.send('a', 'first'); manager.send('a', 'queued'); manager.stop('a')
+  manager.synchronize({ ...snapshot(), revision: 10, busy: false, approvals: [], partial: null, messages: [{ role: 'assistant', content: 'newer' }] })
+  manager.synchronize({ ...snapshot(), revision: 9 })
+  await Promise.resolve()
+  expect(calls).toHaveLength(1); expect(manager.get('a').busy).toBe(false)
+  expect(manager.get('a').messages.at(-1)?.content).toBe('newer')
+  manager.resume('a'); expect(calls).toHaveLength(2)
 })

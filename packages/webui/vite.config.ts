@@ -2,8 +2,10 @@ import { fileURLToPath, URL } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
+import { sharedPort } from '@ringko-ai/client/local'
 
-const api = process.env.RINGKO_API ?? 'http://127.0.0.1:8787'
+const workspace = fileURLToPath(new URL('../..', import.meta.url))
+const api = process.env.RINGKO_API ?? `http://127.0.0.1:${sharedPort(workspace)}`
 
 // https://vite.dev/config/
 export default defineConfig({

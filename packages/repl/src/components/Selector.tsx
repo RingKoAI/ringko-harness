@@ -1,4 +1,4 @@
-import { Box, Text, useInput, usePaste, useStdout } from "ink";
+import { Box, Text, useInput, usePaste, useStdout, type Key } from "ink";
 import { Fragment, useMemo, useState } from "react";
 import { filterItems, type SelectorItem } from "../selection.ts";
 import { cleanTerminalText, fitTerminalLine as truncate, graphemes } from "../editor.ts";
@@ -6,14 +6,23 @@ import { theme } from "../theme.ts";
 
 export type { SelectorItem } from "../selection.ts";
 
+/** An inline action offered on the highlighted item (e.g. Ctrl+R rename). */
+export interface SelectorAction {
+  /** Short hint such as "Ctrl+R rename". */
+  label: string;
+  match(input: string, key: Key): boolean;
+  trigger(item: SelectorItem): void;
+}
+
 export interface SelectorProps {
   title: string;
   items: readonly SelectorItem[];
   onSelect: (value: string) => void;
   onCancel: () => void;
+  actions?: readonly SelectorAction[];
 }
 
-export function Selector({ title, items, onSelect, onCancel }: SelectorProps) {
+export function Selector({ title, items, onSelect, onCancel, actions }: SelectorProps) {
   const { stdout } = useStdout();
   const [query, setQuery] = useState("");
   const currentIndex = items.findIndex((item) => item.current);
@@ -32,6 +41,14 @@ export function Selector({ title, items, onSelect, onCancel }: SelectorProps) {
 
   useInput((input, key) => {
     if (key.escape || (key.ctrl && input === "c")) { onCancel(); return; }
+    if (actions && !key.upArrow && !key.downArrow && !key.pageUp && !key.pageDown) {
+      for (const action of actions) {
+        if (!action.match(input, key)) continue;
+        const selected = filtered[active];
+        if (selected) action.trigger(selected);
+        return;
+      }
+    }
     if (key.upArrow || (key.ctrl && input === "p")) setIndex(Math.max(0, active - 1));
     else if (key.downArrow || (key.ctrl && input === "n")) setIndex(Math.min(filtered.length - 1, active + 1));
     else if (key.pageUp) setIndex(Math.max(0, active - count));
@@ -59,7 +76,7 @@ export function Selector({ title, items, onSelect, onCancel }: SelectorProps) {
         </Fragment>;
       })}
       {filtered[active]?.description ? <Text color={theme.dim}>{truncate(cleanTerminalText(filtered[active].description ?? ""), width)}</Text> : null}
-      <Text color={theme.dim}>{truncate(`${filtered.length ? `${active + 1}/${filtered.length} · ` : ""}Up/Down · Enter select · Esc back`, width)}</Text>
+      <Text color={theme.dim}>{truncate(`${filtered.length ? `${active + 1}/${filtered.length} · ` : ""}Up/Down · Enter select${actions?.length ? ` · ${actions.map(action => action.label).join(" · ")}` : ""} · Esc back`, width)}</Text>
     </Box>
   );
 }

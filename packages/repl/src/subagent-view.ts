@@ -10,6 +10,12 @@ export interface SubagentView {
   parentCallId: string | null;
   status: "running" | "completed" | "failed" | "cancelled";
   reason?: string;
+  /** Wall-clock start of the delegated task, from the `started` event. */
+  startedAt: number;
+  /** Set when the task reaches a terminal state; absent while running. */
+  endedAt?: number;
+  /** Number of tool calls the subagent has issued. */
+  toolCount: number;
   items: ReplItem[];
 }
 
@@ -47,12 +53,16 @@ export function applyTaskView(views: readonly SubagentView[], event: TaskEvent):
   const index = views.findIndex(view => view.id === event.taskId);
   const previous: SubagentView = index < 0 ? {
     id: event.taskId, description: event.description, mode: event.mode, model: event.model,
-    parentCallId: event.parentCallId, status: "running", items: [],
+    parentCallId: event.parentCallId, status: "running", startedAt: event.time, toolCount: 0, items: [],
   } : views[index]!;
   const next: SubagentView = event.type === "event"
-    ? event.event ? { ...previous, items: applyAgentEvent(previous.items, displayEvent(event.event)).slice(-MAX_TASK_ITEMS) } : previous
+    ? event.event ? {
+        ...previous,
+        toolCount: previous.toolCount + (event.event.type === "tool_call" && Array.isArray(event.event.message.toolCalls) ? event.event.message.toolCalls.length : 0),
+        items: applyAgentEvent(previous.items, displayEvent(event.event)).slice(-MAX_TASK_ITEMS),
+      } : previous
     : event.type === "started" ? previous
-      : { ...previous, status: event.type, ...(event.reason ? { reason: event.reason } : {}), items: finishPendingTools(previous.items) };
+      : { ...previous, status: event.type, endedAt: event.time, ...(event.reason ? { reason: event.reason } : {}), items: finishPendingTools(previous.items) };
   const result = index < 0 ? [...views, next] : views.map((view, position) => position === index ? next : view);
   return result.length > MAX_TASK_VIEWS ? result.slice(-MAX_TASK_VIEWS) : result;
 }

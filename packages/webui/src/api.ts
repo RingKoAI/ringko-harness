@@ -1,4 +1,6 @@
 // Typed client for the RingKo local server (see @ringko-ai/app).
+import { BackendClient, consumeSse, type SessionSnapshot } from '@ringko-ai/client';
+export type { SessionSnapshot } from '@ringko-ai/client';
 
 export interface Access {
   id: string;
@@ -79,7 +81,9 @@ export interface SessionMeta {
   createdAt: number;
   cwd: string | null;
   title?: string | null;
+  summary?: string | null;
   archived?: boolean;
+  busy?: boolean;
 }
 
 export interface ToolCall {
@@ -214,6 +218,12 @@ export function terminalSocketUrl(id: string): string {
   return socketUrl.toString()
 }
 
+export interface LoopStatus {
+  iteration: number;
+  maxIterations: number;
+  promise: string | null;
+}
+
 export interface ChatHandlers {
   onDelta?(delta: { kind: 'text' | 'reasoning'; text: string }): void;
   onJob?(event: JobUpdate): void;
@@ -226,7 +236,10 @@ export interface ChatHandlers {
   onTool(message: { name: string; content: string; toolCallId?: string | null; error: boolean; turn: number }): void;
   onApproval(approval: Approval): void;
   onTodo?(items: TodoItem[]): void;
+  onLoop?(status: LoopStatus): void;
   onDone(result: { sessionId: string; content: string; turns: number }): void;
+  /** A background title/summary update was persisted for this session. */
+  onSessionMeta?(): void;
   onError(message: string): void;
   onUnauthorized?(): void;
 }
@@ -255,6 +268,7 @@ export async function stopSession(id: string): Promise<void> {
 }
 
 const BASE = "";
+export const backendClient = new BackendClient({ token: () => getToken() });
 export interface QuestionRequest { id: string; input: { questions: Array<{ id: string; question: string; header?: string; detail?: string; multiSelect?: boolean; options?: Array<{ label: string; description?: string }> }> } }
 export interface QuestionOutput { answers: Array<{ id: string; selected: string[]; custom?: string }> }
 export interface JobSummary { jobId: string; kind: 'sub' | 'shell'; description: string; status: 'running' | 'completed' | 'failed' | 'cancelled' | 'unknown'; background: boolean; lastSeq: number; result?: unknown; output?: string }
@@ -330,11 +344,11 @@ export function fetchContext(id: string): Promise<ContextUsage> {
   return getJson<ContextUsage>(`/api/sessions/${encodeURIComponent(id)}/context`);
 }
 
-export async function forkSession(id: string, index: number): Promise<{ sessionId: string }> {
+export async function forkSession(id: string, index?: number): Promise<{ sessionId: string }> {
   const response = await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/fork`, {
     method: "POST",
     headers: authHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ index }),
+    body: JSON.stringify(index === undefined ? {} : { index }),
   })
   if (response.status === 401) throw new UnauthorizedError()
   if (!response.ok) throw new Error(`Branch failed (${response.status}).`)
@@ -362,6 +376,8 @@ export function fetchSessions(): Promise<SessionMeta[]> {
 export function fetchSession(id: string): Promise<{ id: string; messages: ServerMessage[]; tasks?: TaskSummary[]; todos?: TodoItem[]; jobs?: JobSummary[] }> {
   return getJson<{ id: string; messages: ServerMessage[] }>(`/api/sessions/${encodeURIComponent(id)}`);
 }
+
+export function fetchSnapshot(id: string): Promise<SessionSnapshot> { return backendClient.snapshot(id); }
 
 export function fetchToolLog(id: string, offset = 0): Promise<ToolLogPage> {
   return getJson<ToolLogPage>(`/api/sessions/${encodeURIComponent(id)}/tool-log?offset=${offset}`);
@@ -836,7 +852,7 @@ export async function verifyToken(token: string): Promise<boolean> {
 
 /** Start a chat run and consume the SSE stream. Returns an abort handle. */
 export function streamChat(
-  input: { prompt: string; sessionId?: string; attachments?: string[] },
+  input: { prompt: string; sessionId?: string; attachments?: string[]; loop?: { args: string } },
   handlers: ChatHandlers,
 ): { abort(): void } {
   const controller = new AbortController();
@@ -864,51 +880,19 @@ export function streamChat(
       return;
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
     let terminal = false;
     try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) {
-          if (!terminal && !controller.signal.aborted) handlers.onError("Stream ended before completion. Reopen the session to inspect saved results.");
-          break;
-        }
-        buffer += decoder.decode(value, { stream: true });
-        buffer = buffer.replace(/\r\n/g, "\n");
-        if (buffer.length > 4 * 1024 * 1024) throw new Error("Stream frame is too large.");
-        let index = buffer.indexOf("\n\n");
-        while (index !== -1) {
-          const frame = buffer.slice(0, index);
-          buffer = buffer.slice(index + 2);
-          if (/^event: (done|error)$/m.test(frame)) terminal = true;
-          dispatch(frame);
-          index = buffer.indexOf("\n\n");
-        }
-      }
+      await consumeSse(response, (event, payload) => {
+        if (event === 'done' || event === 'error') terminal = true;
+        dispatch(event, payload);
+      }, controller.signal);
+      if (!terminal && !controller.signal.aborted) handlers.onError("Stream disconnected. The backend keeps running; synchronizing the session.");
     } catch (error) {
       if (!controller.signal.aborted) handlers.onError(error instanceof Error ? error.message : "Stream failed.");
-    } finally {
-      await reader.cancel().catch(() => {});
-      reader.releaseLock();
     }
   })();
 
-  function dispatch(frame: string): void {
-    let event = "message";
-    const dataLines: string[] = [];
-    for (const line of frame.split("\n")) {
-      if (line.startsWith("event:")) event = line.slice(6).trim();
-      else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
-    }
-    if (dataLines.length === 0) return;
-    let payload: unknown;
-    try {
-      payload = JSON.parse(dataLines.join("\n"));
-    } catch {
-      return;
-    }
+  function dispatch(event: string, payload: unknown): void {
     switch (event) {
       case "delta": {
         const delta = payload as { kind?: unknown; text?: unknown };
@@ -940,6 +924,12 @@ export function streamChat(
         break;
       case "todo":
         handlers.onTodo?.(((payload as { items?: TodoItem[] }).items ?? []) as TodoItem[]);
+        break;
+      case "loop":
+        handlers.onLoop?.(payload as LoopStatus);
+        break;
+      case "session_meta":
+        handlers.onSessionMeta?.();
         break;
       case "done":
         handlers.onDone(payload as Parameters<ChatHandlers["onDone"]>[0]);

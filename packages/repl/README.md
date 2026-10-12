@@ -10,14 +10,25 @@ indicator, tool approvals, a bounded editor or selector, and a model/status foot
 
 - `/model` opens model search grouped by provider; `/connect` browses providers.
 - `/resume` restores a session and its visible conversation; `/new` starts a new one.
+  In the session list, Enter opens the highlighted session; Ctrl+R renames it,
+  Ctrl+F forks it (branch a copy) and Ctrl+D deletes it. The active session
+  cannot be deleted.
 - Type `/` for command suggestions. Tab completes; Enter runs the selected command.
+- `/loop <prompt> [--max-iterations N] [--completion-promise TEXT]` re-runs the
+  same prompt until the reply contains `<promise>TEXT</promise>` or the iteration
+  budget is spent (0 = unlimited). Esc or `/cancel-loop` stops it; the loop
+  status shows in the footer.
 - Prompt history retains the last 100 entries in memory. A draft survives selector
   navigation and history browsing. Multiline paste does not submit automatically.
 - PgUp/PgDn browse wrapped transcript rows. Ctrl+O expands tool output.
-- `/agents` or Ctrl+G selects Main or a Subagent view. A bounded tree shows
-  delegated task status; child tool calls and responses remain in their own
-  transcript. The most recent 32 tasks are restored from session events on
-  resume; session history itself remains unchanged.
+- `/agents` or Ctrl+G selects Main or a Subagent view. The tree prints the
+  `main` row and each delegated task with a `●`/`○` viewed marker, a `▶`/`⏸`
+  run state, elapsed time and tool count; child tool calls and responses remain
+  in their own transcript. The most recent 32 tasks are restored from session
+  events on resume; session history itself remains unchanged.
+- The todo panel summarizes progress as `N tasks (X done, Y in progress, Z open)`
+  and lists `✔` completed (struck through), `▪` in-progress and `▫` pending
+  rows, using the active-form label while a task runs.
 - Risky tool calls require explicit approval; the harness remains the execution boundary.
 - Conversation records are stored in `~/.ringko/sessions`.
 
@@ -37,6 +48,7 @@ Use `/shortcuts` to see the complete help. Main Pi-style bindings:
 | Shift+Enter / Alt+Enter | Insert newline |
 | Esc | Interrupt run or close selector |
 | Ctrl+C | Clear draft or interrupt |
+| Ctrl+C ×2 | Exit (second press within 800 ms) |
 | Ctrl+D | Exit only with an empty draft while idle |
 
 Ctrl+Shift+P also cycles backward in terminals that distinguish it. Modifier

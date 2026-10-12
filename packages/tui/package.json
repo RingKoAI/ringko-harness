@@ -19,6 +19,8 @@
     "build:all": "pnpm run build:linux-x64 && pnpm run build:linux-arm64 && pnpm run build:macos-x64 && pnpm run build:macos-arm64 && pnpm run build:windows-x64"
   },
   "dependencies": {
+    "@ringko-ai/app": "workspace:*",
+    "@ringko-ai/client": "workspace:*",
     "@ringko-ai/auth": "workspace:*",
     "@ringko-ai/config": "workspace:*",
     "@ringko-ai/providers": "workspace:*",

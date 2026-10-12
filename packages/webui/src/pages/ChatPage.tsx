@@ -43,6 +43,7 @@ import { matchToolResults, toolCallTarget } from '@/lib/tool-activity'
 const COMMANDS: { name: string; label: MessageKey }[] = [
   { name: 'reload', label: 'command.reload' },
   { name: 'compact', label: 'command.compact' },
+  { name: 'loop', label: 'command.loop' },
 ]
 
 type Translate = ReturnType<typeof useI18n>['t']
@@ -309,6 +310,15 @@ export function ChatPage() {
     const prompt = draft.trim()
     if (prompt.length === 0) return
     if (app.busy && (prompt === '/reload' || prompt === '/compact')) { toast.error(t('queue.commandBusy')); return }
+    if (prompt === '/loop' || prompt.startsWith('/loop ')) {
+      const args = prompt.slice('/loop'.length).trim()
+      if (args.length === 0) { toast.error(t('loop.usage')); return }
+      const paths = attachments.map((file) => file.path)
+      setDraft('')
+      setAttachments([])
+      app.send(prompt, paths, { args })
+      return
+    }
     if (prompt === '/reload') {
       setDraft('')
       reload()
@@ -436,6 +446,12 @@ export function ChatPage() {
             <ModePicker />
           </div>
         </div> : null}
+        {app.loop ? (
+          <div aria-live="off" className="mx-auto mb-2 flex w-full max-w-3xl items-center gap-2 text-xs text-muted-foreground">
+            <span className="inline-block size-2 animate-pulse rounded-full bg-primary" aria-hidden="true" />
+            <span>{t('loop.running', { iteration: app.loop.iteration })}{app.loop.maxIterations > 0 ? ` / ${app.loop.maxIterations}` : ''}{app.loop.promise ? ` → ${app.loop.promise}` : ''}</span>
+          </div>
+        ) : null}
         <TodoPanel />
         <QuestionPanel />
         <QueuePanel key={app.sessionId ?? 'new'} />

@@ -1,5 +1,5 @@
 import { Box, Text, useApp, useInput, usePaste, useStdout } from "ink";
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { commandGroup, filterCommands } from "../commands.ts";
 import { edit, editorLines, fitTerminalLine, graphemes, HISTORY_LIMIT, type EditorState } from "../editor.ts";
 import { shortcut, type Shortcut } from "../keybindings.ts";
@@ -18,6 +18,8 @@ export interface PromptInputProps {
 }
 const MAX_SUGGESTIONS = 6;
 const MAX_EDITOR_LINES = 5;
+/** Two Ctrl+C presses within this window exit; the first press only arms exit. */
+const EXIT_CTRL_C_WINDOW_MS = 800;
 
 export function PromptInput({ running, editor, onEdit, history, onSubmit, onShortcut, onInterrupt, maxEditorLines = MAX_EDITOR_LINES }: PromptInputProps) {
   const { exit } = useApp();
@@ -25,6 +27,8 @@ export function PromptInput({ running, editor, onEdit, history, onSubmit, onShor
   const [selected, setSelected] = useState(0);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
+  const [exitArmed, setExitArmed] = useState(false);
+  const lastInterrupt = useRef(0);
   const value = editor.text;
   const maxSuggestions = Math.max(1, Math.min(MAX_SUGGESTIONS, Math.floor(((stdout.rows ?? 24) - 14) / 2)));
   const width = Math.max(10, (stdout.columns ?? 80) - 6);
@@ -36,13 +40,25 @@ export function PromptInput({ running, editor, onEdit, history, onSubmit, onShor
     setSelected(0);
   }
   usePaste(text => { change({ type: "insert", text }); });
+  // The armed hint clears itself once the double-press window lapses.
+  useEffect(() => {
+    if (!exitArmed) return;
+    const timer = setTimeout(() => setExitArmed(false), EXIT_CTRL_C_WINDOW_MS);
+    return () => clearTimeout(timer);
+  }, [exitArmed]);
   useInput((input, key) => {
     if (key.eventType === "release") return;
     if (key.ctrl && input === "c") {
-      if (running) onInterrupt();
-      else { change({ type: "clear" }); setHistoryIndex(null); }
+      if (running) { lastInterrupt.current = 0; setExitArmed(false); onInterrupt(); return; }
+      const now = Date.now();
+      // Second Ctrl+C within the window exits; the first clears/arms.
+      if (value.length === 0 && now - lastInterrupt.current < EXIT_CTRL_C_WINDOW_MS) { exit(); return; }
+      if (value.length > 0) { change({ type: "clear" }); setHistoryIndex(null); }
+      lastInterrupt.current = now;
+      setExitArmed(true);
       return;
     }
+    if (exitArmed) { lastInterrupt.current = 0; setExitArmed(false); }
     if (key.ctrl && input === "d") {
       if (!running && !value) exit();
       else if (!running) change({ type: "delete" });
@@ -104,6 +120,8 @@ export function PromptInput({ running, editor, onEdit, history, onSubmit, onShor
         {!value ? <Text><Text inverse> </Text><Text color={theme.dim}>{fitTerminalLine(running ? "Working · Esc interrupts" : "Message, /command or !shell command", Math.max(1, (stdout.columns ?? 80) - 5))}</Text></Text> : lines.map((line, index) => <Text key={index}>{line.before}{line.cursor !== undefined ? <Text inverse>{line.cursor}</Text> : null}{line.after}</Text>)}
       </Box>
     </Box>
-    <Text color={theme.dim}>{truncate(`${running ? "Esc interrupt" : "Enter send"} · Alt+Enter newline · Up/Down history · Ctrl+L models`, width)}</Text>
+    {exitArmed
+      ? <Text color={theme.permission}>{truncate("Press Ctrl+C again to exit", width)}</Text>
+      : <Text color={theme.dim}>{truncate(`${running ? "Esc interrupt" : "Enter send"} · Alt+Enter newline · Up/Down history · Ctrl+C twice exits`, width)}</Text>}
   </Box>;
 }
