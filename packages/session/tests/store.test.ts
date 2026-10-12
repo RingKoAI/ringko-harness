@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sessionLogPath } from "../src/paths.ts";
@@ -62,10 +62,23 @@ describe("SessionStore", () => {
     writer.flush();
 
     expect(() => store().open("s3", "write")).toThrow("locked");
+    expect(() => store().delete("s3")).toThrow("locked");
 
     writer.close();
     const reopened = store().open("s3", "write");
     reopened.close();
+  });
+
+  it("releases the writer lock even when persistence and descriptor cleanup fail", () => {
+    const writer = store().create(); writer.appendEvent("persisted", {}); writer.flush();
+    // Isolated fault injection: invalidate the underlying descriptor before the next flush.
+    closeSync(Reflect.get(writer, "fd") as number);
+    writer.appendEvent("not-persisted", {});
+    expect(() => writer.flush()).toThrow();
+    expect(() => writer.appendEvent("must-fail-closed", {})).toThrow();
+    expect(() => writer.close()).toThrow();
+    const recovered = store().open(writer.id, "write");
+    expect(recovered.all()).toHaveLength(1); recovered.close();
   });
 
   it("rejects appends on a read-only handle", () => {

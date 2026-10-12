@@ -120,7 +120,9 @@ export class SessionStore {
   delete(id: string): boolean {
     const dir = this.findDir(id);
     if (!dir) return false;
-    rmSync(dir, { recursive: true, force: true });
+    const lock = acquireLock(sessionLockPath(dir));
+    try { rmSync(dir, { recursive: true, force: true }); }
+    finally { lock.release(); }
     return true;
   }
 
@@ -200,6 +202,7 @@ export class SessionHandle {
   private materialized: boolean;
   private seq: number;
   private closed = false;
+  private writeFailure: unknown;
 
   private constructor(
     store: SessionStore,
@@ -243,11 +246,17 @@ export class SessionHandle {
   private claimWrite(): void {
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     this.lock = acquireLock(sessionLockPath(this.dir));
-    this.fd = openSync(this.path, "a");
-    // An existing-but-empty log (interrupted first write) still needs a header.
-    if (!fileExists(this.path) || statSync(this.path).size === 0) {
-      writeSync(this.fd, serializeHeader(this.header));
-      fsyncSync(this.fd);
+    try {
+      this.fd = openSync(this.path, "a");
+      // An existing-but-empty log (interrupted first write) still needs a header.
+      if (!fileExists(this.path) || statSync(this.path).size === 0) {
+        writeSync(this.fd, serializeHeader(this.header));
+        fsyncSync(this.fd);
+      }
+    } catch (error) {
+      try { if (this.fd !== undefined) closeSync(this.fd); }
+      finally { this.fd = undefined; this.lock.release(); this.lock = undefined; }
+      throw error;
     }
   }
 
@@ -287,19 +296,24 @@ export class SessionHandle {
     this.assertOpen();
     if (this.mode !== "write") return;
     if (this.buffer.length === 0 && this.materialized) return;
+    try {
+      if (!this.materialized) {
+        mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+        this.lock = acquireLock(sessionLockPath(this.dir));
+        this.fd = openSync(this.path, "a");
+        writeSync(this.fd, serializeHeader(this.header));
+        this.materialized = true;
+      }
+      if (this.fd === undefined) this.fd = openSync(this.path, "a");
 
-    if (!this.materialized) {
-      mkdirSync(this.dir, { recursive: true, mode: 0o700 });
-      this.lock = acquireLock(sessionLockPath(this.dir));
-      this.fd = openSync(this.path, "a");
-      writeSync(this.fd, serializeHeader(this.header));
-      this.materialized = true;
+      for (const line of this.buffer) writeSync(this.fd, line);
+      this.buffer.length = 0;
+      fsyncSync(this.fd);
+    } catch (error) {
+      // A torn write is recovered on reopen. Retrying the same buffered prefix could duplicate committed events.
+      this.writeFailure = error;
+      throw error;
     }
-    if (this.fd === undefined) this.fd = openSync(this.path, "a");
-
-    for (const line of this.buffer) writeSync(this.fd, line);
-    this.buffer.length = 0;
-    fsyncSync(this.fd);
   }
 
   /** All events seen so far (persisted plus appended). */
@@ -310,17 +324,18 @@ export class SessionHandle {
   /** Close the handle, flushing and releasing the write lock. */
   close(): void {
     if (this.closed) return;
-    if (this.mode === "write") this.flush();
-    if (this.fd !== undefined) {
-      closeSync(this.fd);
-      this.fd = undefined;
-    }
-    this.lock?.release();
-    this.lock = undefined;
-    this.closed = true;
+    const errors: unknown[] = [];
+    try { if (this.mode === "write") this.flush(); } catch (error) { errors.push(error); }
+    try { if (this.fd !== undefined) closeSync(this.fd); } catch (error) { errors.push(error); }
+    this.fd = undefined;
+    try { this.lock?.release(); } catch (error) { errors.push(error); }
+    this.lock = undefined; this.closed = true;
+    if (errors.length > 1) throw new AggregateError(errors, "Session persistence and cleanup failed.");
+    if (errors.length === 1) throw errors[0];
   }
 
   private assertOpen(): void {
     if (this.closed) throw new Error("Session handle is closed.");
+    if (this.writeFailure !== undefined) throw this.writeFailure;
   }
 }
