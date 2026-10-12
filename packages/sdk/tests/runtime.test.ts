@@ -2,6 +2,7 @@ import { expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { defineTool } from "@ringko-ai/harness";
 import { saveWorkflowFile } from "@ringko-ai/workflow";
 import { RuntimeManager } from "../src/runtime.ts";
 
@@ -109,6 +110,24 @@ it("reports invalid MCP configuration while keeping ordinary tools available", a
   try {
     expect((await managed.agent.run("hello")).content).toBe("done");
     expect(reports[0]).toContain("configuration");
+  } finally { await runtime.close(); }
+}));
+
+it("honors the configured agent turn budget", async () => isolated(async directory => {
+  const runtime = new RuntimeManager(directory);
+  const managed = runtime.createAgent({ maxTurns: 3 }, {
+    model: async () => ({ content: "", toolCalls: [{ id: crypto.randomUUID(), name: "fixture", arguments: {} }] }),
+  });
+  managed.agent.register(defineTool({ name: "fixture", description: "Fixture", inputSchema: { type: "object" }, parseInput: () => ({}), assessRisk: () => ({ kind: "safe", reason: "Fixture" }), execute: () => "ok" }));
+  try {
+    await expect(managed.agent.run("loop")).rejects.toThrow("after 3 turns");
+  } finally { managed.close(); await runtime.close(); }
+}));
+
+it("rejects a malformed configured turn budget", async () => isolated(async directory => {
+  const runtime = new RuntimeManager(directory);
+  try {
+    expect(() => runtime.createAgent({ maxTurns: 0 }, { model: async () => ({ content: "", toolCalls: [] }) })).toThrow("maxTurns");
   } finally { await runtime.close(); }
 }));
 

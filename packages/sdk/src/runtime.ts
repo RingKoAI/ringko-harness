@@ -88,6 +88,7 @@ export class RuntimeManager {
   createAgent(config: RingkoConfig, options: AgentConfig, host: RuntimeHost = {}): RuntimeAgent {
     if (this.closed) throw new Error("Runtime is closed.");
     if (config.permission !== undefined && !isAccessMode(config.permission)) throw new TypeError("Invalid runtime permission mode.");
+    if (config.maxTurns !== undefined && (!Number.isInteger(config.maxTurns) || config.maxTurns < 1)) throw new TypeError("Invalid maxTurns; expected a positive integer.");
     const workflow = resolveWorkflow(config.workflow);
     for (const names of [workflow.tools?.allow, workflow.tools?.deny]) {
       if (names !== undefined && (!Array.isArray(names) || names.some(name => typeof name !== "string" || !name))) throw new TypeError("Workflow tool policy must contain tool names.");
@@ -113,6 +114,7 @@ export class RuntimeManager {
       } : options.model,
       modelId: workflow.model ?? options.modelId,
       compaction: options.compaction ?? config.compaction,
+      ...((options.maxTurns ?? config.maxTurns) !== undefined ? { maxTurns: options.maxTurns ?? config.maxTurns } : {}),
       ...(isAccessMode(permission) ? { accessMode: permission } : {}),
       onEvent: event => {
         this.log.append("session", { type: event.type, turn: event.turn, toolName: event.toolName ?? null });

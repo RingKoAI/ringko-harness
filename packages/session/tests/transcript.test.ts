@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentEvent } from "@ringko-ai/harness";
 import type { SessionEvent } from "../src/types.ts";
-import { recordAgentEvent, recordUserMessage, repairInterruptedToolCalls, toChatMessages } from "../src/transcript.ts";
+import { recordAgentEvent, recordSessionSummary, recordSessionTitle, recordUserMessage, repairInterruptedToolCalls, sessionSummary, sessionTitle, toChatMessages } from "../src/transcript.ts";
 
 function collector(): { events: SessionEvent[]; handle: { appendEvent(type: string, data?: unknown): SessionEvent } } {
   const events: SessionEvent[] = [];
@@ -93,5 +93,17 @@ describe("transcript", () => {
       message: { role: "tool", content: "denied", toolCallId: "c1", name: "run_shell" },
     });
     expect(events[0]).toMatchObject({ type: "tool/result", data: { failed: true, name: "run_shell" } });
+  });
+
+  it("stores the latest session title and summary", () => {
+    const { events, handle } = collector();
+    expect(sessionTitle(events)).toBeUndefined();
+    expect(sessionSummary(events)).toBeUndefined();
+    recordSessionTitle(handle, "first title");
+    recordSessionSummary(handle, "did a thing");
+    recordSessionTitle(handle, "second title");
+    expect(sessionTitle(events)).toBe("second title");
+    expect(sessionSummary(events)).toBe("did a thing");
+    expect(events.map(event => event.type)).toEqual(["session/title", "session/summary", "session/title"]);
   });
 });

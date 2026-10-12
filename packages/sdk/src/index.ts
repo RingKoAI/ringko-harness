@@ -33,6 +33,10 @@ import { recordUsage } from "@ringko-ai/config";
 import { TaskManager, type TaskEvent } from "./task.ts";
 export { TASK_LIMITS, TaskManager } from "./task.ts";
 export type { TaskInput, TaskMode, TaskResult, TaskEvent, TaskStatus } from "./task.ts";
+export { generateSessionMeta } from "./session-meta.ts";
+export type { SessionMeta, SessionMetaOptions, SessionMetaTarget } from "./session-meta.ts";
+export { loopPrompt, parseLoopArgs, promiseText } from "./loop.ts";
+export type { LoopOptions, LoopParse } from "./loop.ts";
 export { JobManager, JOB_LIMITS } from "@ringko-ai/harness";
 export type { JobEvent, JobSnapshot, JobInput } from "@ringko-ai/harness";
 import type {

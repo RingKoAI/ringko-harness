@@ -109,7 +109,9 @@ export class AgentTurnLimitError extends Error {
   }
 }
 
-const DEFAULT_MAX_TURNS = 8;
+// One run budget for an agentic task. Coding loops routinely need dozens of
+// tool rounds, so 8 stopped mid-task; hosts tune this per run via `maxTurns`.
+const DEFAULT_MAX_TURNS = 50;
 
 function serialize(value: unknown): string {
   if (typeof value === "string") {

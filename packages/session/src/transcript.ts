@@ -11,6 +11,7 @@ export const TRANSCRIPT_EVENT = {
   model: "session/model",
   modelCall: "model/call",
   title: "session/title",
+  summary: "session/summary",
   thinking: "session/thinking",
   archive: "session/archived",
   compaction: "session/compaction",
@@ -79,6 +80,11 @@ export function recordSessionTitle(handle: HandleLike, title: string): SessionEv
   return handle.appendEvent(TRANSCRIPT_EVENT.title, { title });
 }
 
+/** Record a generated session summary (one or two sentences about the conversation). */
+export function recordSessionSummary(handle: HandleLike, summary: string): SessionEvent {
+  return handle.appendEvent(TRANSCRIPT_EVENT.summary, { summary });
+}
+
 /** Record the session's reasoning/thinking depth. */
 export function recordSessionThinking(handle: HandleLike, level: string): SessionEvent {
   return handle.appendEvent(TRANSCRIPT_EVENT.thinking, { level });
@@ -134,6 +140,11 @@ export function sessionModel(events: readonly SessionEvent[]): string | undefine
 /** The session's generated title, if any. */
 export function sessionTitle(events: readonly SessionEvent[]): string | undefined {
   return lastString(events, TRANSCRIPT_EVENT.title, "title");
+}
+
+/** The session's generated summary, if any. */
+export function sessionSummary(events: readonly SessionEvent[]): string | undefined {
+  return lastString(events, TRANSCRIPT_EVENT.summary, "summary");
 }
 
 /** Whether the session is archived (the latest archive event wins). */

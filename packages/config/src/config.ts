@@ -65,6 +65,8 @@ export interface RingkoConfig {
   expandThinking?: boolean;
   /** Whether tool outputs/arguments are expanded in the UI (false = collapsed). */
   expandTools?: boolean;
+  /** Per-run agent turn budget; defaults to the harness limit (50). */
+  maxTurns?: number;
   /** Automatic compaction settings. */
   compaction?: {
     enabled?: boolean;
