@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { render } from "ink";
+import { render } from "./render.ts";
 import { BackendClient, type SessionSnapshot } from "@ringko-ai/client";
 import { Repl } from "../src/app.tsx";
 

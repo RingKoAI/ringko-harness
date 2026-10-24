@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { PassThrough } from "node:stream";
-import { render, useInput } from "ink";
+import { useInput } from "ink";
+import { render } from "./render.ts";
 import { useEffect, useState } from "react";
 import { PromptInput } from "../src/components/PromptInput.tsx";
 import { Selector } from "../src/components/Selector.tsx";

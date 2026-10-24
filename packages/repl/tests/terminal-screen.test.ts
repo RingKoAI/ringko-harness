@@ -1,7 +1,8 @@
 import { expect, it } from "bun:test";
 import { PassThrough } from "node:stream";
 import { createElement } from "react";
-import { Box, render, Text } from "ink";
+import { Box, Text } from "ink";
+import { render } from "./render.ts";
 
 it("renders the first frame in the alternate screen without input and restores on exit", async () => {
   const input = new PassThrough();

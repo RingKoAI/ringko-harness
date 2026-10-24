@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { PassThrough } from "node:stream";
-import { render } from "ink";
+import { render } from "./render.ts";
 import type { TodoItem } from "@ringko-ai/tools";
 import { TodoPanel } from "../src/components/TodoPanel.tsx";
 

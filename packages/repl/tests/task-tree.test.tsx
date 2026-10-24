@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { PassThrough } from "node:stream";
-import { render } from "ink";
+import { render } from "./render.ts";
 import { TaskTree } from "../src/components/TaskTree.tsx";
 import type { SubagentView } from "../src/subagent-view.ts";
 
