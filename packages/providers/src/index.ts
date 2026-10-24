@@ -9,7 +9,6 @@ import { resolveAnthropicOauthModel } from "./anthropic/index.ts";
 import { resolveGitHubCopilotModel } from "./github-copilot/index.ts";
 import { resolveOpenAiOauthModel } from "./openai/index.ts";
 import { resolveXaiOauthModel } from "./xai/index.ts";
-import { resolveGoogleOauthModel } from "./google/index.ts";
 
 export * from "./ai-sdk.ts";
 export * from "./openai/index.ts";
@@ -31,7 +30,6 @@ export type ProviderName =
   | "anthropic-oauth"
   | "xai-oauth"
   | "google"
-  | "google-gemini-cli"
   | "openai-compatible";
 
 export interface ProviderClientOptions extends AiSdkModelOptions {
@@ -72,8 +70,6 @@ export function resolveProviderModel(options: ProviderClientOptions): LanguageMo
       }
       return google(options.model);
     }
-    case "google-gemini-cli":
-      return resolveGoogleOauthModel(options.model);
     case "openai-compatible": {
       if (!options.baseURL) {
         throw new TypeError('Provider "openai-compatible" requires a baseURL.');

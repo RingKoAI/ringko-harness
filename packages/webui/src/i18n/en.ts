@@ -2,8 +2,6 @@
 export const en = {
   "upload.limit": "Attach up to 16 files per message.",
 
-  "oauth.googleProject": "Google Cloud project ID (optional for eligible individual accounts)",
-  "oauth.googleProjectHint": "my-cloud-project",
 
   "workspace.title": "Files & changes",
   "workspace.scope": "Read-only view of the server workspace. Git changes compare with HEAD, not a specific task.",

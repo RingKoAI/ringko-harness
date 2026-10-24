@@ -9,7 +9,7 @@ import { dirname } from "node:path";
 import { authPath } from "./paths.ts";
 
 /** OAuth auth domains the harness knows how to sign in to. */
-export const OAUTH_DOMAINS = ["openai-oauth", "github-copilot", "xai-oauth", "anthropic-oauth", "google-gemini-cli"] as const;
+export const OAUTH_DOMAINS = ["openai-oauth", "github-copilot", "xai-oauth", "anthropic-oauth"] as const;
 export type OAuthDomainId = (typeof OAUTH_DOMAINS)[number];
 
 export interface OAuthCredential {
@@ -19,8 +19,6 @@ export interface OAuthCredential {
   /** Epoch milliseconds when `access` expires. */
   expires: number;
   accountId?: string;
-  /** Google Code Assist project, distinct from the account identity. */
-  projectId?: string;
   /** Display identity (email or username) reported by the login flow. */
   login?: string;
   avatarUrl?: string;
@@ -72,7 +70,6 @@ function parseOAuthCredential(value: unknown): OAuthCredential | undefined {
     access: value.access,
     expires: value.expires,
     ...(typeof value.accountId === "string" ? { accountId: value.accountId } : {}),
-    ...(typeof value.projectId === "string" ? { projectId: value.projectId } : {}),
     ...(typeof value.login === "string" ? { login: value.login } : {}),
     ...(typeof value.avatarUrl === "string" ? { avatarUrl: value.avatarUrl } : {}),
   };

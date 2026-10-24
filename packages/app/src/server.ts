@@ -11,7 +11,6 @@ import {
   loginGitHubCopilot,
   loginOpenAiDevice,
   loginXaiDevice,
-  loginGoogle,
   queryCodexQuota,
   queryXaiQuota,
   refreshOpenAi,
@@ -665,12 +664,11 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   const OAUTH_ISSUE_TIMEOUT_MS = 30 * 1000;
 
   /** Map an auth domain to the OAuth flow it speaks, if any. */
-  function oauthKind(domain: string): "openai" | "copilot" | "xai" | "anthropic" | "google" | undefined {
+  function oauthKind(domain: string): "openai" | "copilot" | "xai" | "anthropic" | undefined {
     if (domain === "openai-oauth") return "openai";
     if (domain === "github-copilot") return "copilot";
     if (domain === "xai-oauth") return "xai";
     if (domain === "anthropic-oauth") return "anthropic";
-    if (domain === "google-gemini-cli") return "google";
     return undefined;
   }
 
@@ -683,7 +681,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   /** Account states only; token material never leaves the server. */
   function handleAuth(): Response {
     const state = loadAuth();
-    const domains = [...new Set([...OAUTH_DOMAINS, ...Object.keys(state.oauth)])];
+    const domains = OAUTH_DOMAINS;
     return json({
       domains: domains.map((domain) => {
         const entry = state.oauth[domain] ?? { accounts: [] };
@@ -730,15 +728,12 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   async function handleStartOAuth(request: Request): Promise<Response> {
     const now = Date.now();
     pruneOAuthFlows(now);
-    const body = await readJson<{ domain?: unknown; projectId?: unknown }>(request);
+    const body = await readJson<{ domain?: unknown }>(request);
     const domain = typeof body?.domain === "string" ? body.domain.trim() : "";
     if (domain.length === 0) return json({ error: "domain is required." }, 400);
     const kind = oauthKind(domain);
     if (!kind) return json({ error: `Unsupported OAuth domain "${domain}".` }, 400);
     if ([...oauthFlows.values()].filter(flow => flow.status === "pending").length >= 4 || oauthFlows.size >= 64) return json({ error: "Too many sign-in attempts. Finish an existing attempt or retry later." }, 429);
-    const projectId = typeof body?.projectId === "string" ? body.projectId.trim() : undefined;
-    if (body?.projectId !== undefined && typeof body.projectId !== "string") return json({ error: "Google Cloud project ID must be a string." }, 400);
-    if (projectId && !/^[a-z][a-z0-9-]{4,61}[a-z0-9]$/.test(projectId)) return json({ error: "Invalid Google Cloud project ID." }, 400);
 
     const id = randomUUID();
     oauthFlows.set(id, { status: "pending", createdAt: now });
@@ -748,8 +743,6 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       ? loginOpenAiDevice(onCode)
       : kind === "copilot"
         ? loginGitHubCopilot(onCode)
-        : kind === "google"
-          ? loginGoogle(url => onCode(url, ""), projectId)
         : kind === "anthropic"
           ? loginAnthropic((url) => onCode(url, ""))
           : loginXaiDevice(onCode);
@@ -757,10 +750,6 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       (credential) => {
         const accountId = credential.accountId ?? credential.login ?? randomUUID();
         setOAuthAccount(domain, { id: accountId, credential, authenticatedAt: Date.now() });
-        if (domain === "google-gemini-cli") {
-          const file = loadProviders();
-          if (!(file.providers ?? []).some(provider => provider.type === domain)) saveProviders({ ...file, providers: [...(file.providers ?? []), { name: "google-gemini-cli", type: domain, models: knownModels(domain).map(model => ({ id: model.id, name: model.name ?? model.id })) }] });
-        }
         oauthFlows.set(id, { status: "success", createdAt: now });
         return undefined;
       },

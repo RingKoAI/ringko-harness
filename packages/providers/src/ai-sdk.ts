@@ -228,7 +228,7 @@ function googleThinking(level: string): Record<string, JSONValue> {
 /** Map the thinking depth onto provider options (reasoning effort). */
 function reasoningOptions(options: AiSdkModelOptions): { providerOptions?: ProviderOptions } {
   const level = options.thinking;
-  if (options.provider === "google" || options.provider === "google-gemini-cli") {
+  if (options.provider === "google") {
     if (!level) return {};
     return { providerOptions: { google: { thinkingConfig: googleThinking(level) } } };
   }

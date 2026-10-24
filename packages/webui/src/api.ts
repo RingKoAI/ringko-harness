@@ -708,11 +708,11 @@ export function fetchAuth(): Promise<AuthStatus> {
   return getJson<AuthStatus>('/api/auth');
 }
 
-export async function startOAuth(domain: string, projectId?: string): Promise<OAuthStart> {
+export async function startOAuth(domain: string): Promise<OAuthStart> {
   const response = await fetch(`${BASE}/api/auth/oauth`, {
     method: 'POST',
     headers: authHeaders({ 'content-type': 'application/json' }),
-    body: JSON.stringify({ domain, ...(projectId ? { projectId } : {}) }),
+    body: JSON.stringify({ domain }),
   });
   if (response.status === 401) throw new UnauthorizedError();
   if (!response.ok) throw await errorFrom(response, `OAuth start failed (${response.status}).`);

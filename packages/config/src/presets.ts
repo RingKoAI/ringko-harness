@@ -27,7 +27,6 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   { id: "openai-codex", label: "OpenAI (ChatGPT OAuth)", type: "openai-oauth", auth: "oauth" },
   { id: "anthropic", label: "Anthropic (Claude)", type: "anthropic", apiKeyEnv: "ANTHROPIC_API_KEY", auth: "apikey", docs: "https://docs.anthropic.com" },
   { id: "anthropic-oauth", label: "Anthropic (Claude Pro/Max OAuth)", type: "anthropic-oauth", auth: "oauth" },
-  { id: "google-gemini-cli", label: "Google (Gemini CLI OAuth)", type: "google-gemini-cli", auth: "oauth", docs: "https://github.com/google-gemini/gemini-cli" },
   { id: "google", label: "Google (Gemini)", type: "google", apiKeyEnv: "GEMINI_API_KEY", auth: "apikey", docs: "https://ai.google.dev" },
   { id: "xai", label: "xAI (Grok OAuth)", type: "xai-oauth", auth: "oauth" },
   { id: "github-copilot", label: "GitHub Copilot", type: "github-copilot", auth: "oauth" },

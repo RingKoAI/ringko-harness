@@ -3,8 +3,6 @@ import type { MessageKey } from './en'
 export const zhCN: Record<MessageKey, string> = {
   "upload.limit": "每条消息最多添加 16 个附件。",
 
-  "oauth.googleProject": "Google Cloud 项目 ID（符合条件的个人账号可留空）",
-  "oauth.googleProjectHint": "my-cloud-project",
 
   "workspace.title": "文件与变更",
   "workspace.scope": "只读查看服务工作区。Git 变更与 HEAD 对比，不代表某个任务的修改。",

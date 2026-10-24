@@ -36,7 +36,7 @@ import {
   writeDiagnostic,
   type RingkoConfig,
 } from "@ringko-ai/config";
-import { loginGoogle, loginAnthropic, loginGitHubCopilot, loginOpenAiBrowser, loginOpenAiDevice, loginXaiDevice, openBrowser } from "@ringko-ai/auth";
+import { loginAnthropic, loginGitHubCopilot, loginOpenAiBrowser, loginOpenAiDevice, loginXaiDevice, openBrowser } from "@ringko-ai/auth";
 import {
   SessionStore,
   latestSessionModel,
@@ -390,7 +390,7 @@ async function serveCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   return 0;
 }
 
-const KNOWN_PROVIDER_TYPES = new Set(["openai", "openai-oauth", "anthropic", "google", "google-gemini-cli", "github-copilot", "xai-oauth", "openai-compatible"]);
+const KNOWN_PROVIDER_TYPES = new Set(["openai", "openai-oauth", "anthropic", "google", "github-copilot", "xai-oauth", "openai-compatible"]);
 
 /** Discover a provider's models (live or catalog) and persist them to provider.json. */
 async function syncModels(providerName: string, fallbackType: string, io: CliIo): Promise<number> {
@@ -460,7 +460,6 @@ function normalizeAuthDomain(value: string): string {
   if (value === "openai" || value === "chatgpt" || value === "oauth") return "openai-oauth";
   if (value === "copilot") return "github-copilot";
   if (value === "xai" || value === "grok" || value === "grok-oauth") return "xai-oauth";
-  if (value === "google" || value === "gemini" || value === "google-oauth") return "google-gemini-cli";
   if (value === "anthropic" || value === "claude" || value === "claude-oauth") return "anthropic-oauth";
   return value;
 }
@@ -525,8 +524,8 @@ async function authCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
     }
     case "login": {
       const domain = normalizeAuthDomain(domainArg ?? "openai");
-      if (domain !== "openai-oauth" && domain !== "github-copilot" && domain !== "xai-oauth" && domain !== "anthropic-oauth" && domain !== "google-gemini-cli") {
-        io.err(`Unsupported OAuth domain "${domain}" (supported: openai-oauth, github-copilot, xai-oauth, anthropic-oauth, google-gemini-cli).`);
+      if (domain !== "openai-oauth" && domain !== "github-copilot" && domain !== "xai-oauth" && domain !== "anthropic-oauth") {
+        io.err(`Unsupported OAuth domain "${domain}" (supported: openai-oauth, github-copilot, xai-oauth, anthropic-oauth).`);
         return 2;
       }
       try {
@@ -539,8 +538,6 @@ async function authCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
               ? await loginXaiDevice((url, code) => {
                   io.out(`open ${url} and enter code ${code}`);
                 })
-              : domain === "google-gemini-cli"
-                ? await loginGoogle(url => { io.out("open this URL to sign in:"); io.out(url); openBrowser(url) }, process.env.GOOGLE_CLOUD_PROJECT)
               : domain === "anthropic-oauth"
                 ? await loginAnthropic((url) => {
                     io.out("open this URL to sign in:");
@@ -559,7 +556,7 @@ async function authCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
         const accountId = credential.accountId ?? credential.login ?? `account-${Date.now().toString(36)}`;
         setOAuthAccount(domain, { id: accountId, credential, authenticatedAt: Date.now() });
         io.out(`signed in to ${domain} as ${credential.login ?? accountId}.`);
-        await syncModels(domain === "github-copilot" ? "github-copilot" : domain === "xai-oauth" ? "xai" : domain === "anthropic-oauth" ? "anthropic" : domain === "google-gemini-cli" ? "google-gemini-cli" : "openai", domain, io);
+        await syncModels(domain === "github-copilot" ? "github-copilot" : domain === "xai-oauth" ? "xai" : domain === "anthropic-oauth" ? "anthropic" : "openai", domain, io);
         return 0;
       } catch (error) {
         io.err(error instanceof Error ? error.message : "login failed.");

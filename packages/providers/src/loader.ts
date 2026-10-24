@@ -59,8 +59,6 @@ const TYPE_ALIASES: Record<string, string> = {
   xai: "xai-oauth",
   grok: "xai-oauth",
   google: "google",
-  "google-gemini-cli": "google-gemini-cli",
-  "google-oauth": "google-gemini-cli",
   gemini: "google",
   "google-generative-ai": "google",
   "openai-compatible": "openai-compatible",

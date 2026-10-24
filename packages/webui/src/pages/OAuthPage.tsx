@@ -20,7 +20,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { useApp } from '@/store'
-import { Input } from '@/components/ui/input'
 
 const POLL_INTERVAL_MS = 2000
 
@@ -29,7 +28,6 @@ const DOMAIN_LABELS: Record<string, string> = {
   'github-copilot': 'GitHub Copilot',
   'xai-oauth': 'xAI (Grok OAuth)',
   'anthropic-oauth': 'Anthropic (Claude Pro/Max)',
-  'google-gemini-cli': 'Google (Gemini CLI OAuth)',
 }
 
 function domainLabel(domain: string): string {
@@ -67,7 +65,6 @@ export function OAuthPage() {
   const app = useApp()
   const [auth, setAuth] = useState<AuthStatus>({ domains: [] })
   const [busy, setBusy] = useState<string | null>(null)
-  const [googleProject, setGoogleProject] = useState('')
   const [flow, setFlow] = useState<{ domain: string; data: OAuthStart } | null>(null)
   const [quotas, setQuotas] = useState<Record<string, QuotaResponse>>({})
   const [quotaFailed, setQuotaFailed] = useState<Record<string, boolean>>({})
@@ -137,7 +134,7 @@ export function OAuthPage() {
   async function addAccount(domain: string): Promise<void> {
     setBusy(domain)
     try {
-      const started = await startOAuth(domain, domain === 'google-gemini-cli' ? googleProject.trim() || undefined : undefined)
+      const started = await startOAuth(domain)
       setFlow({ domain, data: started })
     } catch (cause) {
       toast.error(messageOf(cause, t('oauth.signInFailed')))
@@ -209,7 +206,6 @@ export function OAuthPage() {
                   </Button>
                 </div>
 
-                {entry.domain === 'google-gemini-cli' ? <label className="block space-y-1 text-xs text-muted-foreground">{t('oauth.googleProject')}<Input value={googleProject} onChange={event => setGoogleProject(event.target.value)} placeholder={t('oauth.googleProjectHint')} maxLength={63} /></label> : null}
                 {entry.accounts.length === 0 ? (
                   <p className="text-xs text-muted-foreground">{t('oauth.noAccounts')}</p>
                 ) : (
