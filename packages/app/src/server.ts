@@ -58,6 +58,7 @@ import {
   saveProviders,
   saveProjects,
   saveSettings,
+  saveConfigFile,
   setDefaultOAuthAccount,
   setOAuthAccount,
   setToolAuth,
@@ -865,6 +866,11 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
 
+  function persistSettings(config: RingkoConfig): void {
+    if (options.configPath) saveConfigFile(config, options.configPath);
+    else saveSettings(config);
+  }
+
   async function handleSetAccess(request: Request): Promise<Response> {
     const body = await readJson<{ mode?: unknown; permission?: unknown }>(request);
     const permission = body?.permission ?? body?.mode;
@@ -873,7 +879,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     }
     const config = readConfig();
     if (typeof config === "string") return json({ error: config }, 500);
-    saveSettings({ ...config, permission, mode: permission });
+    persistSettings({ ...config, permission, mode: permission });
     return await handleInfo();
   }
 
@@ -883,7 +889,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     if (workflow.length === 0) return json({ error: "workflow is required." }, 400);
     const config = readConfig();
     if (typeof config === "string") return json({ error: config }, 500);
-    saveSettings({ ...config, workflow });
+    persistSettings({ ...config, workflow });
     return await handleInfo();
   }
 
@@ -916,7 +922,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     }
     const config = readConfig();
     if (typeof config === "string") return json({ error: config }, 500);
-    saveSettings({ ...config, thinking: level });
+    persistSettings({ ...config, thinking: level });
     return await handleInfo();
   }
 
@@ -927,7 +933,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     const next: RingkoConfig = { ...config };
     if (typeof body?.expandThinking === "boolean") next.expandThinking = body.expandThinking;
     if (typeof body?.expandTools === "boolean") next.expandTools = body.expandTools;
-    saveSettings(next);
+    persistSettings(next);
     return await handleInfo();
   }
 
@@ -986,7 +992,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     if (!(provider.models ?? []).some((entry) => entry.id === modelId)) {
       return json({ error: `unknown model "${modelId}" for provider "${providerName}".` }, 400);
     }
-    saveProviders({ ...loadProviders(), model: target });
+    if (options.configPath) saveConfigFile({ ...config, model: target }, options.configPath);
+    else saveProviders({ ...loadProviders(), model: target });
     return await handleInfo();
   }
 

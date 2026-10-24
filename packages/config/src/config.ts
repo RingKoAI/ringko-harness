@@ -5,7 +5,8 @@
 // `~/.ringko/settings.local.json` holds workspace/capabilities/mode.
 //
 // Keys stay out of project trees; files are written 0600 on POSIX.
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { CatalogModel } from "./catalog.ts";
 import { providerPath, settingsPath } from "./paths.ts";
@@ -140,6 +141,27 @@ function writeJson(path: string, value: Record<string, unknown>): string {
     chmodSync(path, 0o600);
   } catch {
     // best effort (e.g. Windows)
+  }
+  return path;
+}
+
+/** Persist a trusted, explicitly selected config without changing user-level settings. */
+export function saveConfigFile(config: RingkoConfig, path: string): string {
+  const data = `${JSON.stringify(config, null, 2)}\n`;
+  const target = existsSync(path) ? realpathSync(path) : path;
+  const temporary = `${target}.${randomUUID()}.tmp`;
+  mkdirSync(dirname(target), { recursive: true });
+  const descriptor = openSync(temporary, "wx", 0o600);
+  try {
+    try {
+      writeFileSync(descriptor, data, "utf8");
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+    renameSync(temporary, target);
+  } finally {
+    rmSync(temporary, { force: true });
   }
   return path;
 }

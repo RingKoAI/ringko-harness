@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,6 +7,7 @@ import {
   loadConfig,
   parseConfigValue,
   saveConfig,
+  saveConfigFile,
   setConfigValue,
   unsetConfigValue,
   upsertProviderModels,
@@ -109,6 +110,15 @@ describe("upsertProviderModels", () => {
     expect(next.providers?.[0]?.models?.map((model) => model.id)).toEqual(["gpt-6-sol", "gpt-5.5"]);
     expect(next.model).toBe("openai/gpt-6-sol");
   });
+});
+
+it("cleans the temporary config on a failed atomic replacement without changing its destination", () => {
+  const target = join(home, "cannot-replace");
+  mkdirSync(target);
+  writeFileSync(join(target, "keep.txt"), "original");
+  expect(() => saveConfigFile({ thinking: "low" }, target)).toThrow();
+  expect(readFileSync(join(target, "keep.txt"), "utf8")).toBe("original");
+  expect(readdirSync(home)).toEqual(["cannot-replace"]);
 });
 
 describe("dotted access", () => {
