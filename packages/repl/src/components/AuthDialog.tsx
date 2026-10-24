@@ -1,7 +1,9 @@
-import { Box, Text, useInput, useStdout } from "ink";
+import { Text, useInput, useStdout } from "ink";
 import { copyToClipboard } from "../clipboard.ts";
 import { theme } from "../theme.ts";
 import { fitTerminalLine } from "../editor.ts";
+import { Panel } from "./Panel.tsx";
+import { terminalColumns } from "../terminal-layout.ts";
 
 export interface AuthBox {
   title: string;
@@ -19,9 +21,9 @@ const CODE_PATTERN = /[A-Z0-9]{4}-[A-Z0-9]{4,5}/;
 
 export function AuthDialog({ auth, onCopied, onClose }: AuthDialogProps) {
   const { stdout } = useStdout();
-  const width = Math.max(1, (stdout.columns ?? 80) - 4);
+  const width = Math.max(1, terminalColumns(stdout.columns ?? 80) - 4);
   useInput((input, key) => {
-    if (key.escape) {
+    if (key.escape || (key.ctrl && input === "c")) {
       onClose();
       return;
     }
@@ -38,14 +40,13 @@ export function AuthDialog({ auth, onCopied, onClose }: AuthDialogProps) {
   });
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={theme.permission} paddingX={1}>
-      <Text bold>{fitTerminalLine(auth.title, width)}</Text>
+    <Panel title={auth.title} color={theme.permission}>
       <Text color={theme.brand}>{fitTerminalLine(auth.url, width)}</Text>
       {auth.instructions ? <Text color={theme.dim}>{fitTerminalLine(auth.instructions, width)}</Text> : null}
       <Text color={theme.dim}>waiting for authorization…</Text>
       <Text>
         c <Text color={theme.dim}>copy</Text> · esc <Text color={theme.dim}>hide</Text>
       </Text>
-    </Box>
+    </Panel>
   );
 }

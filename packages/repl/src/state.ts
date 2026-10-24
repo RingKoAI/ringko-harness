@@ -107,7 +107,7 @@ export function toolResultSummary(item: ReplItem): string | undefined {
         if (Array.isArray(record.matches)) {
           const count = record.matches.length;
           const unit = item.toolName === "glob" ? "file" : "match";
-          return `${count} ${unit}${count === 1 ? "" : "s"}${truncated}`;
+          return `${count} ${unit}${count === 1 ? "" : unit === "match" ? "es" : "s"}${truncated}`;
         }
         if (Array.isArray(record.files)) {
           const count = record.files.length;

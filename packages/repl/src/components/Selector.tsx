@@ -1,8 +1,11 @@
-import { Box, Text, useInput, usePaste, useStdout, type Key } from "ink";
+import { Text, useInput, usePaste, useStdout, type Key } from "ink";
 import { Fragment, useMemo, useState } from "react";
 import { filterItems, type SelectorItem } from "../selection.ts";
 import { cleanTerminalText, fitTerminalLine as truncate, graphemes } from "../editor.ts";
 import { theme } from "../theme.ts";
+import { Panel } from "./Panel.tsx";
+import { hintLine } from "../chrome.ts";
+import { terminalColumns } from "../terminal-layout.ts";
 
 export type { SelectorItem } from "../selection.ts";
 
@@ -32,7 +35,7 @@ export function Selector({ title, items, onSelect, onCancel, actions }: Selector
   const count = Math.max(1, Math.min(8, Math.floor(((stdout.rows ?? 24) - 14) / 2)));
   const start = Math.max(0, Math.min(active - Math.floor(count / 2), filtered.length - count));
   const visible = filtered.slice(start, start + count);
-  const width = Math.max(10, (stdout.columns ?? 80) - 10);
+  const width = Math.max(1, terminalColumns(stdout.columns ?? 80) - 2);
   function search(input: string): void {
     setQuery(value => (value + cleanTerminalText(input.slice(0, 1024)).replace(/\n/g, " ")).slice(0, 256));
     setIndex(0);
@@ -62,21 +65,20 @@ export function Selector({ title, items, onSelect, onCancel, actions }: Selector
   });
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={theme.brand} paddingX={1} flexShrink={0}>
-      <Box justifyContent="space-between"><Text bold>{title}</Text><Text color={theme.dim}>{filtered.length} options</Text></Box>
+    <Panel title={`${title} · ${filtered.length} options`}>
       <Text color={query ? undefined : theme.dim}>{truncate(`Search: ${query || "type to filter"}`, width)}</Text>
       {visible.length === 0 ? <Text color={theme.dim}>No matches. Backspace to edit; Esc to return.</Text> : null}
       {visible.map((item, row) => {
         const selected = start + row === active;
         return <Fragment key={item.value}>
           {item.group && (row === 0 || visible[row - 1]?.group !== item.group) ? <Text bold color={theme.dim}>{truncate(cleanTerminalText(item.group), width)}</Text> : null}
-          <Text color={selected ? theme.brand : undefined} backgroundColor={selected ? theme.userBackground : undefined} bold={selected}>
+          <Text color={selected ? theme.brand : undefined} backgroundColor={selected ? theme.selected : undefined} bold={selected}>
             {selected ? "> " : "  "}{truncate(cleanTerminalText(item.label), width - 12)}{item.current ? " [current]" : ""}
           </Text>
         </Fragment>;
       })}
       {filtered[active]?.description ? <Text color={theme.dim}>{truncate(cleanTerminalText(filtered[active].description ?? ""), width)}</Text> : null}
-      <Text color={theme.dim}>{truncate(`${filtered.length ? `${active + 1}/${filtered.length} · ` : ""}Up/Down · Enter select${actions?.length ? ` · ${actions.map(action => action.label).join(" · ")}` : ""} · Esc back`, width)}</Text>
-    </Box>
+      <Text color={theme.dim}>{hintLine(["Enter select", "Esc back", "↑/↓", ...(actions ?? []).map(action => action.label), ...(filtered.length ? [`${active + 1}/${filtered.length}`] : [])], width)}</Text>
+    </Panel>
   );
 }

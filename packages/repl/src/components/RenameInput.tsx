@@ -1,7 +1,9 @@
-import { Box, Text, useInput, useStdout } from "ink";
+import { Text, useInput, usePaste, useStdout } from "ink";
 import { useState } from "react";
 import { edit, editorLines, fitTerminalLine, graphemes, type EditorState } from "../editor.ts";
 import { theme } from "../theme.ts";
+import { Panel } from "./Panel.tsx";
+import { terminalColumns } from "../terminal-layout.ts";
 
 export interface RenameInputProps {
   initial: string;
@@ -12,10 +14,11 @@ export interface RenameInputProps {
 /** A single-line editor for renaming a session. Enter saves, Esc cancels. */
 export function RenameInput({ initial, onSubmit, onCancel }: RenameInputProps) {
   const { stdout } = useStdout();
-  const width = Math.max(1, (stdout.columns ?? 80) - 4);
+  const width = Math.max(1, terminalColumns(stdout.columns ?? 80) - 4);
   const [editor, setEditor] = useState<EditorState>({ text: initial, cursor: graphemes(initial).length });
+  usePaste(text => setEditor(previous => edit(previous, { type: "insert", text: text.replace(/[\r\n]+/g, " ") })));
   useInput((input, key) => {
-    if (key.escape) { onCancel(); return; }
+    if (key.escape || (key.ctrl && input === "c")) { onCancel(); return; }
     if (key.return) {
       const value = editor.text.trim();
       if (value) onSubmit(value); else onCancel();
@@ -32,8 +35,7 @@ export function RenameInput({ initial, onSubmit, onCancel }: RenameInputProps) {
   });
   const lines = editorLines(editor, width, 1);
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={theme.brand} paddingX={1}>
-      <Text bold color={theme.brand}>{fitTerminalLine("Rename session", width)}</Text>
+    <Panel title="Rename session">
       {lines.map((line, index) => (
         <Text key={index}>
           <Text color={theme.brand}>{"> "}</Text>
@@ -41,6 +43,6 @@ export function RenameInput({ initial, onSubmit, onCancel }: RenameInputProps) {
         </Text>
       ))}
       <Text color={theme.dim}>{fitTerminalLine("Enter save · Esc cancel", width)}</Text>
-    </Box>
+    </Panel>
   );
 }

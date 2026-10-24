@@ -1,7 +1,10 @@
 import { Box, Text, useApp, useInput, usePaste, useStdout } from "ink";
 import { Fragment, useEffect, useRef, useState } from "react";
+import stringWidth from "string-width";
+import { terminalColumns } from "../terminal-layout.ts";
 import { commandGroup, filterCommands } from "../commands.ts";
-import { edit, editorLines, fitTerminalLine, graphemes, HISTORY_LIMIT, type EditorState } from "../editor.ts";
+import { edit, editorViewport, fitTerminalLine, graphemes, HISTORY_LIMIT, type EditorState } from "../editor.ts";
+import { hintLine } from "../chrome.ts";
 import { shortcut, type Shortcut } from "../keybindings.ts";
 import { theme } from "../theme.ts";
 import { truncate } from "../state.ts";
@@ -28,15 +31,18 @@ export function PromptInput({ running, editor, onEdit, history, onSubmit, onShor
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const [exitArmed, setExitArmed] = useState(false);
+  const [dismissed, setDismissed] = useState<string>();
   const lastInterrupt = useRef(0);
   const value = editor.text;
   const maxSuggestions = Math.max(1, Math.min(MAX_SUGGESTIONS, Math.floor(((stdout.rows ?? 24) - 14) / 2)));
-  const width = Math.max(10, (stdout.columns ?? 80) - 6);
-  const suggestions = value.startsWith("/") && !/\s/.test(value) ? filterCommands(value.slice(1)).slice(0, maxSuggestions) : [];
+  const columns = terminalColumns(stdout.columns ?? 80);
+  const width = Math.max(1, columns - 2);
+  const suggestions = value !== dismissed && value.startsWith("/") && !/\s/.test(value) ? filterCommands(value.slice(1)).slice(0, maxSuggestions) : [];
   const active = Math.min(selected, Math.max(0, suggestions.length - 1));
   const recent = history.slice(-HISTORY_LIMIT);
   function change(action: Parameters<typeof edit>[1]) {
     onEdit(edit(editor, action));
+    setDismissed(undefined);
     setSelected(0);
   }
   usePaste(text => { change({ type: "insert", text }); });
@@ -64,7 +70,7 @@ export function PromptInput({ running, editor, onEdit, history, onSubmit, onShor
       else if (!running) change({ type: "delete" });
       return;
     }
-    if (key.escape) { if (running) onInterrupt(); return; }
+    if (key.escape) { if (suggestions.length) setDismissed(value); else if (running) onInterrupt(); return; }
     const action = shortcut(input, key);
     if (action) { onShortcut(action); return; }
     if (key.return) {
@@ -103,7 +109,19 @@ export function PromptInput({ running, editor, onEdit, history, onSubmit, onShor
     else if (!key.meta && input) change({ type: "insert", text: input });
   });
 
-  const lines = editorLines(editor, Math.max(1, (stdout.columns ?? 80) - 4), Math.max(1, maxEditorLines));
+  const viewport = editorViewport(editor, Math.max(1, columns - 4), Math.max(1, maxEditorLines));
+  const shell = value.startsWith("!");
+  const overflow = [viewport.above ? `↑ ${viewport.above} more` : "", viewport.below ? `↓ ${viewport.below} more` : ""].filter(Boolean).join(" · ");
+  const border = shell ? theme.shell : theme.border;
+  const borderLabel = [shell ? "Shell" : "", overflow].filter(Boolean).join(" · ");
+  const caption = borderLabel ? fitTerminalLine(`── ${borderLabel}`, columns) : "";
+  const hints = suggestions.length
+    ? ["↑/↓ select", "Tab complete", "Enter run", "Esc close"]
+    : running
+      ? ["Esc interrupt", "Draft kept until idle", "Alt+Enter newline"]
+      : shell
+        ? ["Enter run shell", "Alt+Enter newline", "Ctrl+C clear"]
+        : ["Enter send", "Alt+Enter newline", "/ commands", "Ctrl+L models", "Ctrl+C twice exits"];
   return <Box flexDirection="column" flexShrink={0}>
     {suggestions.length ? <Box flexDirection="column" paddingX={1}>
       {suggestions.map((command, index) => <Fragment key={command.name}>
@@ -112,16 +130,17 @@ export function PromptInput({ running, editor, onEdit, history, onSubmit, onShor
         <Text color={index === active ? theme.brand : undefined} bold={index === active}>/{command.name}</Text>
         <Text color={theme.dim}>  {truncate(command.description, Math.max(1, width - command.name.length - 3))}</Text>
       </Box></Fragment>)}
-      <Text color={theme.dim}>{truncate("Up/Down select · Tab complete · Enter run", width)}</Text>
     </Box> : null}
-    <Box borderStyle="single" borderLeft={false} borderRight={false} borderColor={running ? theme.permission : theme.brand} paddingX={1}>
-      <Text color={theme.brand}>{"> "}</Text>
+    <Text color={border}>{caption}{"─".repeat(Math.max(0, columns - stringWidth(caption)))}</Text>
+    <Box paddingX={1}>
+      <Text color={shell ? theme.shell : theme.brand}>{"> "}</Text>
       <Box flexGrow={1} flexDirection="column">
-        {!value ? <Text><Text inverse> </Text><Text color={theme.dim}>{fitTerminalLine(running ? "Working · Esc interrupts" : "Message, /command or !shell command", Math.max(1, (stdout.columns ?? 80) - 5))}</Text></Text> : lines.map((line, index) => <Text key={index}>{line.before}{line.cursor !== undefined ? <Text inverse>{line.cursor}</Text> : null}{line.after}</Text>)}
+        {!value ? <Text><Text inverse> </Text><Text color={theme.dim}>{fitTerminalLine(running ? "Working · Esc interrupts" : "Message, /command or !shell command", Math.max(1, columns - 5))}</Text></Text> : viewport.lines.map((line, index) => <Text key={index}>{line.before}{line.cursor !== undefined ? <Text inverse>{line.cursor}</Text> : null}{line.after}</Text>)}
       </Box>
     </Box>
+    <Text color={border}>{"─".repeat(columns)}</Text>
     {exitArmed
       ? <Text color={theme.permission}>{truncate("Press Ctrl+C again to exit", width)}</Text>
-      : <Text color={theme.dim}>{truncate(`${running ? "Esc interrupt" : "Enter send"} · Alt+Enter newline · Up/Down history · Ctrl+C twice exits`, width)}</Text>}
+      : <Text color={theme.dim}>{hintLine(hints, columns)}</Text>}
   </Box>;
 }

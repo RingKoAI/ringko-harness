@@ -1,6 +1,7 @@
 import { Box, Text } from "ink";
 import { homedir } from "node:os";
 import { relative, isAbsolute } from "node:path";
+import stringWidth from "string-width";
 import { fitTerminalLine } from "../editor.ts";
 import { theme } from "../theme.ts";
 
@@ -22,15 +23,16 @@ function formatCwd(path: string): string {
   return path;
 }
 
-const HINTS = "Ctrl+L models · Ctrl+O tools · Ctrl+G agents · /shortcuts";
-
 export function StatusBar({ modelLabel, workspace, title, columns = 80, compact = false, loop }: StatusBarProps) {
   const line1 = title ? `${formatCwd(workspace)} • ${title}` : formatCwd(workspace);
+  const model = fitTerminalLine(modelLabel, Math.max(1, Math.floor(columns / 2)));
+  const left = fitTerminalLine(line1, Math.max(1, columns - stringWidth(model) - 2));
+  const inline = !compact && columns >= 70;
   return (
     <Box flexDirection="column" flexShrink={0}>
       {loop ? <Text color={theme.permission}>{fitTerminalLine(loop, columns)}</Text> : null}
-      <Text color={theme.dim}>{fitTerminalLine(`${modelLabel} · ${line1}`, columns)}</Text>
-      {!compact && columns >= 60 ? <Text color={theme.dim}>{fitTerminalLine(HINTS, columns)}</Text> : null}
+      {inline ? <Text color={theme.dim}>{left}{" ".repeat(Math.max(1, columns - stringWidth(left) - stringWidth(model)))}{model}</Text>
+        : <Text color={theme.dim}>{fitTerminalLine(`${modelLabel} · ${line1}`, columns)}</Text>}
     </Box>
   );
 }

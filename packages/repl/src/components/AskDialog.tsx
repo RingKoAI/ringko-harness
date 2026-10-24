@@ -1,16 +1,19 @@
-import { Box, Text, useInput, usePaste, useStdout } from "ink";
+import { Text, useInput, usePaste, useStdout } from "ink";
 import { useState } from "react";
 import wrapAnsi from "wrap-ansi";
 import { ASK_LIMITS, type AskInput, type AskAnswer, type AskOutput } from "@ringko-ai/tools";
 import { cleanTerminalText, fitTerminalLine, graphemes } from "../editor.ts";
 import { theme } from "../theme.ts";
+import { Panel } from "./Panel.tsx";
+import { hintLine } from "../chrome.ts";
+import { terminalColumns } from "../terminal-layout.ts";
 
 type Draft = { selected: string[]; custom: string };
 const emptyDraft = (): Draft => ({ selected: [], custom: "" });
 
 export function AskDialog({ input, onAnswer, onCancel }: { input: AskInput; onAnswer: (output: AskOutput) => void; onCancel: () => void }) {
   const { stdout } = useStdout();
-  const width = Math.max(1, (stdout.columns ?? 80) - 4);
+  const width = Math.max(1, terminalColumns(stdout.columns ?? 80) - 4);
   const optionCount = Math.max(1, Math.min(6, (stdout.rows ?? 24) - 12));
   // The index after the last question is the review screen; only that screen submits.
   const [index, setIndex] = useState(0);
@@ -100,18 +103,16 @@ export function AskDialog({ input, onAnswer, onCancel }: { input: AskInput; onAn
     if (key.return) advance();
   });
 
-  if (reviewing) return <Box flexDirection="column" borderStyle="round" borderColor={theme.brand} paddingX={1}>
-    <Text bold color={theme.brand}>Review answers</Text>
+  if (reviewing) return <Panel title="Review answers">
     {detailLines.slice(detailStart, detailStart + visibleCount).map((line, row) => <Text key={row}>{line}</Text>)}
-    <Text color={theme.dim}>{fitTerminalLine("Enter submit · Left edit · PgUp/PgDn details · Esc cancel", width)}</Text>
-  </Box>;
+    <Text color={theme.dim}>{hintLine(["Enter submit", "Esc cancel", "Left edit", "PgUp/PgDn details"], width)}</Text>
+  </Panel>;
 
-  return <Box flexDirection="column" borderStyle="round" borderColor={theme.brand} paddingX={1}>
-    <Text bold color={theme.brand}>{fitTerminalLine(`Question ${index + 1}/${input.questions.length}${question.header ? ` · ${question.header}` : ""}`, width)}</Text>
+  return <Panel title={`Question ${index + 1}/${input.questions.length}${question.header ? ` · ${question.header}` : ""}`}>
     {detailLines.slice(detailStart, detailStart + visibleCount).map((line, row) => <Text key={row}>{line}</Text>)}
     {options.slice(optionStart, optionStart + optionCount).map((option, row) => { const optionIndex = optionStart + row; return <Text key={option.label} color={!editing && optionIndex === cursor ? theme.brand : undefined}>{fitTerminalLine(`${optionIndex === cursor && !editing ? ">" : " "} ${draft.selected.includes(option.label) ? "[x]" : "[ ]"} ${option.label}${option.description ? ` — ${option.description}` : ""}`, width)}</Text>; })}
     <Text color={editing || cursor === options.length ? theme.brand : theme.dim}>{fitTerminalLine(`${!editing && cursor === options.length ? ">" : " "} Custom: ${draft.custom || (editing ? "Type your answer" : "Enter/Tab to type")}`, width)}</Text>
     {feedback ? <Text color={theme.brand}>{fitTerminalLine(feedback, width)}</Text> : null}
-    <Text color={theme.dim}>{fitTerminalLine("Up/Down · Space select · Enter next · Tab custom · PgUp/PgDn details · Esc", width)}</Text>
-  </Box>;
+    <Text color={theme.dim}>{hintLine([...(question.multiSelect ? ["Space toggle"] : []), "Enter next", "Esc cancel", "↑/↓ select", "Tab custom", "PgUp/PgDn details"], width)}</Text>
+  </Panel>;
 }

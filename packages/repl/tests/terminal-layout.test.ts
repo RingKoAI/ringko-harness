@@ -1,6 +1,6 @@
 import { expect, it } from "bun:test";
 import stringWidth from "string-width";
-import { terminalLayout } from "../src/terminal-layout.ts";
+import { terminalColumns, terminalLayout } from "../src/terminal-layout.ts";
 import { fitTerminalLine } from "../src/editor.ts";
 
 it("reserves the last terminal row and removes optional panels on short screens and dialogs", () => {
@@ -16,4 +16,10 @@ it("fits CJK, graphemes and unsafe multiline status labels on one row", () => {
     expect(output).not.toContain("\n");
     expect(output).not.toContain("\x1b");
   }
+});
+
+it("leaves a Windows console wrap margin without reducing Unix terminal width", () => {
+  expect(terminalColumns(80, true)).toBe(79);
+  expect(terminalColumns(80, false)).toBe(80);
+  expect(terminalColumns(0, true)).toBe(1);
 });

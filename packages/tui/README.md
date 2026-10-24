@@ -33,6 +33,21 @@ binary (only the offline `echo` provider is). See
 Without an interactive approval prompt the CLI denies risky operations, so it
 fails closed; workspace reads and directory listings do not require approval.
 
+## Terminal layout
+
+The conversation uses shaded user messages, Markdown assistant replies and compact
+tool results. Adjacent read/search operations collapse into an exploration summary;
+Ctrl+O reveals the original calls, arguments and outputs. Failures and unknown
+outcomes remain explicit. Ctrl+T toggles reasoning details.
+
+PgUp enters history reading without following incoming stream updates. PgDn moves
+back toward the latest output and restores following at the bottom. Model/session
+pickers and questions use a shared pane and preserve the input draft on return.
+Short terminals collapse optional task details; Windows reserves a final column
+to avoid ConPTY wrap artifacts.
+
+With `--config <path>`, model, thinking and display changes are saved to that file.
+
 ## Local shell commands
 
 In the TUI, enter `!git status` or another `!command` to execute it directly in

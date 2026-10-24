@@ -55,7 +55,7 @@ import { messagesToItems } from "./state.ts";
 import { runLocalShell } from "./local-shell.ts";
 import { RuntimeManager } from "@ringko-ai/sdk/runtime";
 import type { PermissionRule } from "@ringko-ai/sdk/runtime";
-import { terminalLayout } from "./terminal-layout.ts";
+import { terminalColumns, terminalLayout } from "./terminal-layout.ts";
 import { fitTerminalLine } from "./editor.ts";
 import { applyTaskView, restoreTaskViews, type SubagentView } from "./subagent-view.ts";
 import { BackendError, type BackendClient } from "@ringko-ai/client";
@@ -118,10 +118,10 @@ export function Repl(props: ReplProps) {
   const { createModel, workspace, onSession, backend } = props;
 
   const { stdout } = useStdout();
-  const [size, setSize] = useState({ columns: stdout.columns ?? 80, rows: stdout.rows ?? 24 });
+  const [size, setSize] = useState({ columns: terminalColumns(stdout.columns ?? 80), rows: stdout.rows ?? 24 });
 
   useEffect(() => {
-    const update = () => setSize({ columns: stdout.columns ?? 80, rows: stdout.rows ?? 24 });
+    const update = () => setSize({ columns: terminalColumns(stdout.columns ?? 80), rows: stdout.rows ?? 24 });
     stdout.on("resize", update);
     return () => {
       stdout.off("resize", update);
@@ -1192,9 +1192,9 @@ export function Repl(props: ReplProps) {
   return (
     <Box flexDirection="column" width={size.columns} height={layout.height}>
       {!sessionStarted ? <Banner modelLabel={modelLabelText} workspace={workspace} /> : null}
-      {!modal && taskViews.length > 0 ? <TaskTree tasks={taskViews} selectedId={selectedTask?.id} columns={size.columns} /> : null}
+      {!modal && taskViews.length > 0 ? <TaskTree tasks={taskViews} selectedId={selectedTask?.id} columns={size.columns} maxRows={layout.compact ? 1 : Math.min(6, Math.floor(layout.height / 6) + 1)} /> : null}
       <Box ref={transcriptBox} flexDirection="column" flexGrow={1} flexShrink={1} minHeight={0} justifyContent={!sessionStarted ? "flex-start" : "flex-end"} overflowY="hidden">
-        <Transcript items={visibleItems} expandThinking={expandThinking} expandTools={expandTools} columns={size.columns} rows={Math.floor(transcriptSize.height)} offset={scrollOffset} onOffset={setScrollOffset} />
+        <Transcript viewKey={`${sessionId ?? "new"}:${viewedTaskId ?? "main"}`} items={visibleItems} expandThinking={expandThinking} expandTools={expandTools} columns={size.columns} rows={Math.floor(transcriptSize.height)} offset={scrollOffset} onOffset={setScrollOffset} />
         {!sessionStarted ? <Box flexDirection="column" paddingX={2} marginTop={1} marginBottom={1}>
           <Text bold color={theme.brand}>What would you like to work on?</Text>
           <Text color={theme.dim}>/connect providers · /model models · /resume sessions</Text>

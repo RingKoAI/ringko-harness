@@ -289,6 +289,51 @@ describe("terminal component interactions", () => {
       expect(exited).toBe(true);
     } finally { app.unmount(); io.input.destroy(); io.output.destroy(); }
   });
+  it("dismisses completion before interrupting and preserves a running draft", async () => {
+    const io = terminal();
+    let interrupts = 0;
+    const sent: string[] = [];
+    let current: EditorState = { text: "/model", cursor: 6 };
+    function Harness() {
+      const [editor, setEditor] = useState(current);
+      useEffect(() => { current = editor; }, [editor]);
+      return <PromptInput editor={editor} onEdit={setEditor} running={true} history={[]} onSubmit={value => sent.push(value)} onShortcut={() => {}} onInterrupt={() => { interrupts++; }} />;
+    }
+    const app = render(<Harness />, { stdin: io.input as unknown as NodeJS.ReadStream, stdout: io.output as unknown as NodeJS.WriteStream, stderr: io.output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
+    try {
+      await settle(); io.input.write("\x1b"); await settle();
+      expect(interrupts).toBe(0);
+      expect(current.text).toBe("/model");
+      io.input.write("\r"); await settle();
+      expect(sent).toEqual([]);
+      expect(current.text).toBe("/model");
+      io.input.write("\x1b"); await settle();
+      expect(interrupts).toBe(1);
+    } finally { app.unmount(); io.input.destroy(); io.output.destroy(); }
+  });
+  it("restores the draft after model-picker input without leaking search text into the prompt", async () => {
+    const io = terminal();
+    const root = mkdtempSync(join(tmpdir(), "rkh-focus-"));
+    const previousHome = process.env.RINGKO_HOME; process.env.RINGKO_HOME = root;
+    const prompts: string[] = [];
+    const model: ModelClient = async request => {
+      if (!request.messages.some(message => message.content.includes("label an agent conversation"))) prompts.push(request.messages.at(-1)?.content ?? "");
+      return { content: "answer", toolCalls: [] };
+    };
+    const app = render(<Repl workspace={root} model={model} modelLabel="Fixture/alpha" config={{ providers: [{ name: "Fixture", models: [{ id: "alpha", name: "Alpha" }] }] }} />, { stdin: io.input as unknown as NodeJS.ReadStream, stdout: io.output as unknown as NodeJS.WriteStream, stderr: io.output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
+    try {
+      await settle(); io.input.write("draft message"); await settle();
+      io.input.write("\x0c"); await settle();
+      io.input.write("picker-search"); await settle();
+      io.input.write("\x1b"); await settle();
+      io.input.write("\r"); await settle(); await settle();
+      expect(prompts).toEqual(["draft message"]);
+    } finally {
+      app.unmount(); io.input.destroy(); io.output.destroy();
+      if (previousHome === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previousHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("triggers an inline action on the highlighted item without selecting it", async () => {
     const io = terminal();
     const selected: string[] = []; const renamed: string[] = [];

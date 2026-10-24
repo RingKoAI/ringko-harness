@@ -3,6 +3,11 @@ import { toolLogEntries } from "@ringko-ai/session";
 import { messagesToItems, nextId, type ReplItem } from "./state.ts";
 import { restoreTaskViews } from "./subagent-view.ts";
 
+/** Snapshots replace object identities; negative display IDs stay stable within each view. */
+function stableItems(items: readonly ReplItem[]): ReplItem[] {
+  return items.map((item, index) => ({ ...item, id: -(index + 1) }));
+}
+
 /** A snapshot can be loaded during a running turn, not only after a completed transcript. */
 export function snapshotItems(snapshot: SessionSnapshot): ReplItem[] {
   const pending = new Set(toolLogEntries(snapshot.events).filter(call => call.status === "pending").map(call => call.callId));
@@ -11,14 +16,16 @@ export function snapshotItems(snapshot: SessionSnapshot): ReplItem[] {
       ? { ...item, running: true, incomplete: false, text: "" } : item);
   if (snapshot.partial?.reasoning) items.push({ id: nextId(), kind: "thinking", text: snapshot.partial.reasoning });
   if (snapshot.partial?.content) items.push({ id: nextId(), kind: "assistant", text: snapshot.partial.content, running: true });
-  return items;
+  if (snapshot.error) items.push({ id: nextId(), kind: "assistant", text: `Request failed: ${snapshot.error.split(" | ")[0]}`, failed: true });
+  return stableItems(items);
 }
 
 export function snapshotTasks(snapshot: SessionSnapshot) {
   return restoreTaskViews(snapshot.events).map(view => {
     const task = snapshot.tasks.find(task => task.taskId === view.id);
     // An interrupted historical task has no terminal event. Never show it as still active.
+    const stable = { ...view, items: stableItems(view.items) };
     return !snapshot.busy && view.status === "running"
-      ? { ...view, status: "cancelled" as const, reason: task?.reason ?? "No active backend run." } : view;
+      ? { ...stable, status: "cancelled" as const, reason: task?.reason ?? "No active backend run." } : stable;
   });
 }

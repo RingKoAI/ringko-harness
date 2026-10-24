@@ -4,6 +4,7 @@ import type { TodoItem } from "@ringko-ai/tools";
 import { fitTerminalLine } from "../editor.ts";
 import { GLYPH } from "../glyphs.ts";
 import { theme } from "../theme.ts";
+import { terminalColumns } from "../terminal-layout.ts";
 
 const ICONS: Record<TodoItem["status"], string> = {
   completed: GLYPH.tick,
@@ -16,7 +17,7 @@ const RANK: Record<TodoItem["status"], number> = { in_progress: 0, pending: 1, c
 export function TodoPanel({ todos, maxRows = 5 }: { todos: readonly TodoItem[]; maxRows?: number }) {
   const { stdout } = useStdout();
   if (todos.length === 0 || maxRows <= 0) return null;
-  const columns = stdout.columns ?? 80;
+  const columns = terminalColumns(stdout.columns ?? 80);
   const padding = columns > 6 ? 1 : 0;
   const width = Math.max(1, columns - padding * 2);
   const completed = todos.filter(todo => todo.status === "completed").length;

@@ -25,3 +25,21 @@ it("does not show historical tool calls or interrupted subagents as still runnin
   expect(snapshotItems(value).find(item => item.toolCallId === "call")).toMatchObject({ running: false, incomplete: true });
   expect(snapshotTasks(value)[0].status).toBe("cancelled");
 });
+
+it("retains display identities across snapshot refreshes and streaming growth", () => {
+  const value = snapshot();
+  const before = snapshotItems(value);
+  value.partial = { reasoning: "Shared thinking", content: "Shared answer grows" };
+  const after = snapshotItems(value);
+  expect(after.map(item => item.id)).toEqual(before.map(item => item.id));
+  expect(after.every(item => item.id < 0)).toBe(true);
+  expect(after.at(-1)?.text).toBe("Shared answer grows");
+});
+
+it("shows backend model failures without rendering the raw response body", () => {
+  const value = snapshot();
+  value.busy = false; value.partial = null;
+  value.error = "Model is unavailable | status=400 | body=raw diagnostic response";
+  const failure = snapshotItems(value).at(-1);
+  expect(failure).toMatchObject({ kind: "assistant", failed: true, text: "Request failed: Model is unavailable" });
+});

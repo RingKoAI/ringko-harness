@@ -1,9 +1,11 @@
-import { Box, Text, useInput, useStdout } from "ink";
+import { Text, useInput, useStdout } from "ink";
 import { useState } from "react";
 import wrapAnsi from "wrap-ansi";
 import type { ToolApprovalRequest } from "@ringko-ai/sdk";
 import { theme } from "../theme.ts";
 import { cleanTerminalText, fitTerminalLine } from "../editor.ts";
+import { Panel } from "./Panel.tsx";
+import { terminalColumns } from "../terminal-layout.ts";
 
 export interface ApprovalDialogProps {
   request: ToolApprovalRequest;
@@ -13,7 +15,7 @@ export interface ApprovalDialogProps {
 export function ApprovalDialog({ request, onAnswer }: ApprovalDialogProps) {
   const { stdout } = useStdout();
   const [offset, setOffset] = useState(0);
-  const width = Math.max(1, (stdout.columns ?? 80) - 4);
+  const width = Math.max(1, terminalColumns(stdout.columns ?? 80) - 4);
   const count = Math.max(1, Math.min(4, (stdout.rows ?? 24) - 10));
   const details = wrapAnsi(cleanTerminalText(`${request.reason}${request.target ? `\ntarget: ${request.target}` : ""}`), width, { hard: true, trim: false }).split("\n");
   const start = Math.min(offset, Math.max(0, details.length - count));
@@ -27,16 +29,13 @@ export function ApprovalDialog({ request, onAnswer }: ApprovalDialogProps) {
   });
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor={theme.permission} paddingX={1}>
-      <Text color={theme.permission} bold>
-        {fitTerminalLine(`Approve ${request.toolName}?`, width)}
-      </Text>
+    <Panel title={`Approve ${request.toolName}?`} color={theme.permission}>
       <Text color={theme.dim}>
         {fitTerminalLine(`${request.riskKind} · ${request.riskLevel}`, width)}
       </Text>
       {details.slice(start, start + count).map((line, index) => <Text key={index}>{line}</Text>)}
       {request.remember ? <Text color={theme.dim}>{fitTerminalLine("s allow for session · a save rule (same tool and target)", width)}</Text> : null}
-      <Text color={theme.dim}>{fitTerminalLine(`y allow once · n reject${details.length > count ? " · PgUp/PgDn details" : ""}`, width)}</Text>
-    </Box>
+      <Text color={theme.dim}>{fitTerminalLine(`Enter/y allow once · n/Esc reject${details.length > count ? " · PgUp/PgDn details" : ""}`, width)}</Text>
+    </Panel>
   );
 }

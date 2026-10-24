@@ -85,6 +85,10 @@ export function edit(state: EditorState, action: EditorAction): EditorState {
 export interface EditorLine { before: string; cursor?: string; after: string }
 /** Bound the visible editor by terminal cells, while keeping the complete draft. */
 export function editorLines(state: EditorState, columns: number, maxRows: number): EditorLine[] {
+  return editorViewport(state, columns, maxRows).lines;
+}
+
+export function editorViewport(state: EditorState, columns: number, maxRows: number): { lines: EditorLine[]; above: number; below: number } {
   const width = Math.max(2, columns);
   const rows: EditorLine[] = [{ before: "", after: "" }];
   let row = 0;
@@ -102,5 +106,6 @@ export function editorLines(state: EditorState, columns: number, maxRows: number
     else used += cells;
   }
   const start = Math.max(0, cursorRow - Math.max(1, maxRows) + 1);
-  return rows.slice(start, start + Math.max(1, maxRows));
+  const lines = rows.slice(start, start + Math.max(1, maxRows));
+  return { lines, above: start, below: Math.max(0, rows.length - start - lines.length) };
 }

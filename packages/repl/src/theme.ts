@@ -1,8 +1,11 @@
 // Semantic theme tokens for the RingKo REPL.
 export const theme = {
-  brand: "#ff7a1a",
+  brand: "#e58c54",
   userBackground: "#303030",
-  tool: "cyan",
+  userText: "#eeeeee",
+  tool: "#b8b8b8",
+  selected: "#383838",
+  shell: "magenta",
   error: "red",
   success: "green",
   dim: "gray",

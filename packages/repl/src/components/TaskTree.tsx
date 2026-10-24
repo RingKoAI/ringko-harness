@@ -18,7 +18,7 @@ function formatElapsed(ms: number): string {
 }
 
 /** Main + delegated-task tree mirroring the reference terminal layout. */
-export function TaskTree({ tasks, selectedId, columns }: { tasks: readonly SubagentView[]; selectedId?: string; columns: number }) {
+export function TaskTree({ tasks, selectedId, columns, maxRows = MAX_VISIBLE + 2 }: { tasks: readonly SubagentView[]; selectedId?: string; columns: number; maxRows?: number }) {
   const anyRunning = tasks.some(task => task.status === "running");
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -29,8 +29,10 @@ export function TaskTree({ tasks, selectedId, columns }: { tasks: readonly Subag
   if (!tasks.length) return null;
 
   const selected = tasks.find(task => task.id === selectedId);
-  const recent = tasks.slice(-MAX_VISIBLE);
-  const visible = selected && !recent.includes(selected) ? [selected, ...tasks.slice(-(MAX_VISIBLE - 1))] : recent;
+  if (maxRows < 3) return <Text color={theme.dim}>{fitTerminalLine(`${tasks.length} subagent${tasks.length === 1 ? "" : "s"} · ${selected ? selected.description : "main"} · Ctrl+G views`, columns)}</Text>;
+  const count = Math.max(1, Math.min(MAX_VISIBLE, maxRows - 2));
+  const recent = tasks.slice(-count);
+  const visible = selected && !recent.includes(selected) ? [selected, ...(count > 1 ? tasks.slice(-(count - 1)) : [])] : recent;
   const width = Math.max(1, columns - 2);
   const mainViewed = selectedId === undefined;
 
