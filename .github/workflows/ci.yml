@@ -38,3 +38,9 @@ jobs:
 
       - name: Build binary
         run: pnpm build:bin
+
+      - name: Build npm package
+        run: bun packages/tui/scripts/pack-npm.mjs
+
+      - name: Verify npm package
+        run: pnpm test:npm

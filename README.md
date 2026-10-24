@@ -107,6 +107,11 @@ or endpoint URLs — the examples use placeholders only.
 Use the latest Node.js 24 LTS patch release (see `.node-version`), pnpm and Bun.
 CI resolves the latest Node.js 24 patch on each run to pick up security fixes.
 
+Pushing a version tag matching `packages/tui/package.json` publishes
+`@ringko-ai/tui` to npm after the release builds and checks succeed. See
+[npm release setup](packages/tui/NPM.md#automatic-npm-releases) for the required
+npm Trusted Publisher configuration and local package verification commands.
+
 ```sh
 pnpm install
 pnpm test          # harness + tools + sdk

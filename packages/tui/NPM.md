@@ -1,6 +1,6 @@
 # RingKo CLI
 
-Run the RingKo agent from a terminal with [Bun](https://bun.sh/) installed:
+Run the RingKo agent from a terminal with Node.js 24+ and [Bun](https://bun.sh/) installed:
 
 ```sh
 npx @ringko-ai/tui tui
@@ -9,7 +9,40 @@ npx @ringko-ai/tui tui
 The `ringko` executable requires Bun on your PATH. You can also use
 `bunx @ringko-ai/tui tui`, or run `npx @ringko-ai/tui help` to list commands.
 
-This package bundles the CLI and its built-in runtime dependencies. Model
-providers configured by the host are loaded separately at runtime. For source
+This package bundles the CLI, built-in model providers and the WebUI assets.
+The browser's interactive terminal uses Node.js and the `node-pty` dependency.
+Custom provider modules configured by the host are loaded separately at runtime. For source
 development and standalone platform binaries, see the
 [repository](https://github.com/RingKoAI/ringko-harness).
+
+## Automatic npm releases
+
+The `release.yml` workflow publishes this package after all platform binaries,
+tests, type checks and npm package smoke checks succeed. Push a version tag that
+exactly matches `packages/tui/package.json`, such as `v0.1.0`. Stable versions use
+the `latest` npm dist-tag; prerelease versions use `next`. Manual workflow runs
+on branches build binaries only. npm does not allow replacing a published version;
+use a new version and tag for each release.
+
+Publishing uses npm Trusted Publishing (OIDC), not `GITHUB_TOKEN` or an npm token.
+Configure the npm package's Trusted Publisher as:
+
+- Organization or user: `RingKoAI`
+- Repository: `ringko-harness`
+- Workflow filename: `release.yml`
+- Environment: leave empty
+- Allowed actions: allow direct `npm publish`
+
+If the package does not exist yet, first publish the initial version from an
+authorized npm account, then configure its Trusted Publisher. The npm scope
+`@ringko-ai` must grant that account publishing access. Complete the first OIDC
+publish within two days of creating the trusted publisher configuration.
+
+To prepare and check the package locally:
+
+```sh
+pnpm build:npm
+pnpm test:npm
+cd dist/npm-tui
+npm pack --dry-run
+```

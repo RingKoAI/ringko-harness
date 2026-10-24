@@ -47,7 +47,9 @@ import {
 } from "@ringko-ai/session";
 import { discoverProviderModels, loadProviderModel } from "./provider.ts";
 
-export const VERSION = "0.1.0";
+import { version } from "../package.json";
+
+export const VERSION = version;
 
 export interface CliIo {
   readonly out: (line: string) => void;

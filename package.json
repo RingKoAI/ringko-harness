@@ -12,6 +12,8 @@
     "typecheck:transport": "pnpm exec tsc -p packages/protocol/tsconfig.json && pnpm exec tsc -p packages/client/tsconfig.json",
     "build:bin": "pnpm --filter @ringko-ai/webui build && pnpm --filter @ringko-ai/tui build",
     "build:all-bin": "pnpm --filter @ringko-ai/webui build && pnpm --filter @ringko-ai/tui run build:all",
+    "build:npm": "pnpm --filter @ringko-ai/webui build && bun packages/tui/scripts/pack-npm.mjs",
+    "test:npm": "bun packages/tui/scripts/check-npm.mjs",
     "dev": "concurrently -k -n api,webui -c blue,magenta \"bun packages/app/src/main.ts --dev --shared\" \"pnpm --filter @ringko-ai/webui dev\"",
     "dev:tui": "bun packages/tui/src/cli.ts tui",
     "dev:webui": "pnpm --filter @ringko-ai/webui dev",

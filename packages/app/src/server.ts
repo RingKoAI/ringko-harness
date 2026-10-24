@@ -225,7 +225,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   const configuredPort = Number(process.env.RINGKO_PORT);
   const port = options.port ?? (Number.isInteger(configuredPort) && configuredPort > 0 ? configuredPort : DEFAULT_PORT);
   let workspace = resolve(options.workspace ?? process.cwd());
-  const webuiDir = resolve(options.webuiDir ?? process.env.RINGKO_WEBUI_DIR ?? (existsSync(join(DEFAULT_WEBUI_DIR, "index.html")) ? DEFAULT_WEBUI_DIR : join(dirname(process.execPath), "webui")));
+  const bundledWebuiDir = resolve(import.meta.dir, "../webui");
+  const webuiDir = resolve(options.webuiDir ?? process.env.RINGKO_WEBUI_DIR ?? (existsSync(join(DEFAULT_WEBUI_DIR, "index.html")) ? DEFAULT_WEBUI_DIR : existsSync(join(bundledWebuiDir, "index.html")) ? bundledWebuiDir : join(dirname(process.execPath), "webui")));
   let store = new SessionStore({ cwd: workspace });
   const approvals = new Map<string, (approved: boolean, scope?: "session" | "saved") => void>();
   const questions = new Map<string, AskManager>();
