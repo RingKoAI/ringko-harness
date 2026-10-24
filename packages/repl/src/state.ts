@@ -100,6 +100,7 @@ export function toolResultSummary(item: ReplItem): string | undefined {
     const parsed: unknown = JSON.parse(item.text);
     if (typeof parsed === "object" && parsed !== null) {
       const record = parsed as Record<string, unknown>;
+      if (!item.failed && item.toolName === "tree" && typeof record.directories === "number" && typeof record.files === "number") return `${record.directories} ${record.directories === 1 ? "directory" : "directories"} · ${record.files} file${record.files === 1 ? "" : "s"}${record.truncated === true ? " (truncated)" : ""}`;
       if (typeof record.exitCode === "number" || record.exitCode === null) return `Exit ${record.exitCode ?? "unknown"}${record.timedOut === true ? " (timed out)" : ""}${record.truncated === true ? " (truncated)" : ""}`;
       if (item.failed) return truncate(item.text, 160) || "Tool failed";
       if (item.toolName && QUIET_TOOLS.has(item.toolName)) {
@@ -139,6 +140,12 @@ export function toolInputText(item: ReplItem): string | undefined {
 }
 
 export function toolOutputText(item: ReplItem): string {
+  if (!item.failed && item.toolName === "tree") {
+    try {
+      const value: unknown = JSON.parse(item.text);
+      if (value && typeof value === "object" && typeof (value as { tree?: unknown }).tree === "string") return (value as { tree: string }).tree;
+    } catch { /* Plain-text errors remain visible. */ }
+  }
   if (item.toolName === "shell") {
     try {
       const value: unknown = JSON.parse(item.text);

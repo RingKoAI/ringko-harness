@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { agentEventToItems, applyAgentEvent, finishPendingTools, messagesToItems, toolInputText, toolResultSummary, truncate } from "../src/state.ts";
+import { agentEventToItems, applyAgentEvent, finishPendingTools, messagesToItems, toolInputText, toolOutputText, toolResultSummary, truncate } from "../src/state.ts";
 import { transcriptLines } from "../src/transcript-layout.ts";
 
 describe("agentEventToItems", () => {
@@ -39,6 +39,12 @@ describe("agentEventToItems", () => {
 });
 
 describe("tool transcript", () => {
+  it("summarizes tree counts and expands the formatted tree instead of its JSON envelope", () => {
+    const item = { id: 1, kind: "tool" as const, toolName: "tree", text: JSON.stringify({ tree: ".\n└── src/\n    └── index.ts", directories: 1, files: 1, truncated: false }) };
+    expect(toolResultSummary(item)).toBe("1 directory · 1 file");
+    expect(toolOutputText(item)).toBe(".\n└── src/\n    └── index.ts");
+    expect(transcriptLines([item], 80, false, true).map(line => line.text).join("\n")).toContain("└── src/");
+  });
   it("marks unfinished calls unknown after interruption and session restoration", () => {
     const messages = [{ role: "assistant" as const, content: "", toolCalls: [{ id: "a", name: "read", arguments: {} }] }];
     const live = finishPendingTools(agentEventToItems({ type: "tool_call", turn: 1, message: messages[0] }));

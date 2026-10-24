@@ -1,6 +1,6 @@
 import type { ReplItem } from "./state.ts";
 
-const EXPLORATION_TOOLS = new Set(["read", "glob", "grep", "list"]);
+const EXPLORATION_TOOLS = new Set(["read", "glob", "grep", "list", "tree"]);
 export interface TranscriptGroup { items: readonly ReplItem[]; exploration: boolean }
 
 /** A presentation-only projection; original calls, results and their IDs stay intact. */

@@ -18,7 +18,7 @@ describe("delegated task capability boundary", () => {
       registerWorkspaceTools(tools, { workspace: root });
       let calls = 0;
       const model: ModelClient = async request => {
-        expect(request.tools.map(tool => tool.name).sort()).toEqual(["glob", "grep", "read"]);
+        expect(request.tools.map(tool => tool.name).sort()).toEqual(["glob", "grep", "read", "tree"]);
         if (calls++ === 0) return { content: "", toolCalls: [
           { id: "w", name: "write", arguments: { path: "blocked.txt", content: "bad" } },
           { id: "s", name: "shell", arguments: { command: "bad" } },
@@ -43,7 +43,7 @@ describe("delegated task capability boundary", () => {
         registerWorkspaceTools(tools, { workspace: join(root, "workspace") });
         let calls = 0;
         const manager = new TaskManager({ tools, model: async request => {
-          expect(request.tools.map(tool => tool.name).sort()).toEqual(["edit", "glob", "grep", "read", "write"]);
+          expect(request.tools.map(tool => tool.name).sort()).toEqual(["edit", "glob", "grep", "read", "tree", "write"]);
           return calls++ === 0 ? { content: "", toolCalls: [{ id: "overwrite", name: "write", arguments: { path: join(root, "existing.txt"), content: "updated" } }] } : final;
         } });
         tools.register(manager.tool());

@@ -7,6 +7,7 @@ import { createGrepTool, type GrepInput, type GrepMatch, type GrepOutput } from 
 import { createReadTool, type ReadInput, type ReadOutput } from "./read.ts";
 import { createShellTool, type ShellInput, type ShellOptions, type ShellOutput } from "./shell.ts";
 import { createTodoStore, createTodoTool, createTodoReadTool, type TodoInput, type TodoItem, type TodoOutput, type TodoStatus, type TodoStore } from "./todo.ts";
+import { createTreeTool, type TreeInput, type TreeOutput, type TreeEntry } from "./tree.ts";
 import { createWebFetchTool, type WebFetchInput, type WebFetchOptions, type WebFetchOutput } from "./webfetch.ts";
 import { createWebSearchTool, type WebSearchInput, type WebSearchOptions, type WebSearchOutput } from "./websearch.ts";
 import { createWriteTool, type WriteInput, type WriteOutput } from "./write.ts";
@@ -26,6 +27,7 @@ export {
   createTodoStore,
   createTodoTool,
   createTodoReadTool,
+  createTreeTool,
   createWebFetchTool,
   createWebSearchTool,
   createWriteTool,
@@ -54,6 +56,9 @@ export type {
   TodoOutput,
   TodoStatus,
   TodoStore,
+  TreeInput,
+  TreeOutput,
+  TreeEntry,
   WebFetchInput,
   WebFetchOptions,
   WebFetchOutput,
@@ -70,7 +75,7 @@ export interface WorkspaceToolsOptions {
 }
 
 /**
- * Register the workspace-scoped tools (`read`, `write`, `edit`, `glob`, `grep`)
+ * Register the workspace-scoped tools (`read`, `write`, `edit`, `glob`, `grep`, `tree`)
  * and return the boundary they share. Network and shell tools are registered
  * separately so hosts opt into those capabilities explicitly.
  */
@@ -82,6 +87,7 @@ export function registerWorkspaceTools(registry: ToolRegistry, options: Workspac
   registry.register(createEditTool(workspace, tracker));
   registry.register(createGlobTool(workspace));
   registry.register(createGrepTool(workspace));
+  registry.register(createTreeTool(workspace));
   return workspace;
 }
 

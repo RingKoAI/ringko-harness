@@ -50,6 +50,7 @@ describe("ringko cli", () => {
     expect(out).toContain("read");
     expect(out).toContain("write");
     expect(out).toContain("grep");
+    expect(out).toContain("tree");
   });
 
   it("runs the offline echo provider when none is configured", async () => {

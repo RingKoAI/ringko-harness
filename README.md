@@ -84,6 +84,12 @@ Configuration, skills, and MCP servers live outside the project, under two roots
 `RINGKO_HOME` / `AGENTS_HOME` override the home directories. Inspect them with
 `ringko config show`, `ringko skills`, `ringko mcp`, and `ringko session list`.
 
+## Directory structure
+
+For directory structure, the model has a native `tree` tool instead of needing
+an OS `tree` command through `shell`. It supports depth/entry limits, hidden-file
+and exclusion controls, and external-path approval. See [tree tool](docs/TREE-TOOL.md).
+
 ## Providers
 
 Model providers are adapted from the [Vercel AI SDK](https://ai-sdk.dev).

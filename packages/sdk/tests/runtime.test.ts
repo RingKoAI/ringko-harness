@@ -182,3 +182,26 @@ it("registers both network tools and enforces saved denial before provider acces
     await expect(managed.agent.tools.call("websearch", { query: "test" }, undefined, "full")).rejects.toThrow("Approval was not granted");
   } finally { managed.close(); await runtime.close(); }
 }));
+
+it("gives the model a native tree tool and executes it with shell capability disabled", async () => isolated(async directory => {
+  mkdirSync(join(directory, "structure"));
+  writeFileSync(join(directory, "structure", "index.ts"), "file contents must not be returned");
+  const runtime = new RuntimeManager(directory);
+  let calls = 0;
+  const managed = runtime.createAgent({ capabilities: { shell: false } }, {
+    model: async request => {
+      expect(request.tools.some(tool => tool.name === "tree")).toBe(true);
+      expect(request.tools.some(tool => tool.name === "shell")).toBe(false);
+      if (calls++ === 0) return { content: "", toolCalls: [{ id: "structure", name: "tree", arguments: { path: "structure", max_depth: 2 } }] };
+      const result = request.messages.at(-1);
+      expect(result?.role).toBe("tool");
+      const output = JSON.parse(result!.content);
+      expect(output.tree).toContain("index.ts");
+      expect(output.tree).not.toContain("file contents must not be returned");
+      expect(output.files).toBe(1);
+      return { content: "tree verified", toolCalls: [] };
+    },
+  });
+  try { expect((await managed.agent.run("Show directory structure using tree")).content).toBe("tree verified"); }
+  finally { managed.close(); await runtime.close(); }
+}));
