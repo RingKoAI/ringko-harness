@@ -104,6 +104,9 @@ or endpoint URLs — the examples use placeholders only.
 
 ## Development
 
+Use the latest Node.js 24 LTS patch release (see `.node-version`), pnpm and Bun.
+CI resolves the latest Node.js 24 patch on each run to pick up security fixes.
+
 ```sh
 pnpm install
 pnpm test          # harness + tools + sdk
