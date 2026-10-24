@@ -3,11 +3,20 @@
 Run the RingKo agent from a terminal with Node.js 24+ and [Bun](https://bun.sh/) installed:
 
 ```sh
-npx @ringko-ai/tui tui
+npx @ringko-ai/rkh tui
 ```
 
-The `ringko` executable requires Bun on your PATH. You can also use
-`bunx @ringko-ai/tui tui`, or run `npx @ringko-ai/tui help` to list commands.
+The `rkh` executable requires Bun on your PATH. You can also use
+`bunx @ringko-ai/rkh tui`, or run `npx @ringko-ai/rkh help` to list commands.
+
+For a global installation:
+
+```sh
+npm install -g @ringko-ai/rkh
+rkh tui
+```
+
+The public npm package is `@ringko-ai/rkh`; its command is `rkh`.
 
 This package bundles the CLI, built-in model providers and the WebUI assets.
 The browser's interactive terminal uses Node.js and the `node-pty` dependency.

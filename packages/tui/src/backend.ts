@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { BackendClient, BackendError, PROTOCOL_VERSION } from "@ringko-ai/client";
 import { canonicalWorkspace, sharedPort } from "@ringko-ai/client/local";
+import { cliCommand } from "./cli-identity.ts";
 export { sharedPort } from "@ringko-ai/client/local";
 
 const START_TIMEOUT_MS = 15_000;
@@ -54,5 +55,5 @@ export async function connectBackend(options: ConnectOptions): Promise<{ client:
     await new Promise(resolveWait => setTimeout(resolveWait, RETRY_MS));
     if (await probe()) return { client, url: normalizedUrl, workspace };
   }
-  throw new Error(`Shared backend did not start at ${normalizedUrl}. Run ringko serve --port ${port} --workspace "${workspace}" --shared to inspect the error.`);
+  throw new Error(`Shared backend did not start at ${normalizedUrl}. Run ${cliCommand()} serve --port ${port} --workspace "${workspace}" --shared to inspect the error.`);
 }

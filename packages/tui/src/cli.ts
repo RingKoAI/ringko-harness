@@ -1,5 +1,6 @@
 import { createRingKo, access, loopPrompt, promiseText, type ApprovalHandler, type ChatMessage, type RingKo } from "@ringko-ai/sdk";
 import { resumeHint } from "./resume-hint.ts";
+import { cliCommand } from "./cli-identity.ts";
 import { RuntimeManager, registerRuntimeTools } from "@ringko-ai/sdk/runtime";
 import { resolve } from "node:path";
 import { connectBackend } from "./backend.ts";
@@ -56,10 +57,10 @@ export interface CliIo {
   readonly err: (line: string) => void;
 }
 
-const USAGE = `ringko - RingKo agent harness CLI
+const USAGE = `${cliCommand()} - RingKo agent harness CLI
 
 Usage:
-  ringko <command> [options]
+  ${cliCommand()} <command> [options]
 
 Commands:
   run <prompt>         Run the agent
@@ -213,7 +214,7 @@ interface CliLoop { maxIterations: number; completionPromise?: string }
 async function runCommand(parsed: ParsedArgs, io: CliIo, loop?: CliLoop): Promise<number> {
   const prompt = parsed.positionals.join(" ").trim();
   if (prompt.length === 0) {
-    io.err(loop ? 'loop requires a prompt, e.g. `ringko loop "fix tests" --max-iterations 10`.' : 'run requires a prompt, e.g. `ringko run "hello"`.');
+    io.err(loop ? `loop requires a prompt, e.g. \`${cliCommand()} loop "fix tests" --max-iterations 10\`.` : `run requires a prompt, e.g. \`${cliCommand()} run "hello"\`.`);
     return 1;
   }
 
@@ -228,7 +229,7 @@ async function runCommand(parsed: ParsedArgs, io: CliIo, loop?: CliLoop): Promis
   };
   const hasOverride = Boolean(parsed.provider || parsed.model);
   if (parsed.sessionPicker && !parsed.session) {
-    io.err("`-s` with no id needs the interactive picker; use `ringko tui -s`.");
+    io.err(`\`-s\` with no id needs the interactive picker; use \`${cliCommand()} tui -s\`.`);
     return 1;
   }
 
@@ -334,7 +335,7 @@ async function loopCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
 
 async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   if (!process.stdout.isTTY) {
-    io.err("ringko tui requires an interactive terminal.");
+    io.err(`${cliCommand()} tui requires an interactive terminal.`);
     return 1;
   }
   const config = readConfig(parsed, io);
@@ -752,7 +753,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
     case "version":
     case "--version":
     case "-v":
-      io.out(`ringko ${VERSION}`);
+      io.out(`${cliCommand()} ${VERSION}`);
       return 0;
     case "info": {
       const mode = access();
@@ -785,7 +786,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       return serveCommand(parsed, io);
     case "service": {
       const action = parsed.positionals[0] ?? "status";
-      if (action !== "start" && action !== "status" && action !== "stop") { io.err("Usage: ringko service start|status|stop"); return 2; }
+      if (action !== "start" && action !== "status" && action !== "stop") { io.err(`Usage: ${cliCommand()} service start|status|stop`); return 2; }
       try {
         const config = readConfig(parsed, io); if (!config) return 2;
         const connection = await connectBackend({ workspace: parsed.workspace ?? config.workspace ?? process.cwd(), configPath: parsed.config, url: parsed.server, startIfMissing: action === "start" });

@@ -1,5 +1,6 @@
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { NPM_PACKAGE_NAME, NPM_CLI_COMMAND } from "../src/cli-identity.ts";
 
 const packageRoot = resolve(import.meta.dir, "..");
 const repositoryRoot = resolve(packageRoot, "../..");
@@ -7,6 +8,9 @@ const output = resolve(repositoryRoot, "dist/npm-tui");
 const manifest = JSON.parse(readFileSync(resolve(packageRoot, "package.json"), "utf8"));
 const appManifest = JSON.parse(readFileSync(resolve(repositoryRoot, "packages/app/package.json"), "utf8"));
 const webui = resolve(repositoryRoot, "packages/webui/dist");
+const npmName = NPM_PACKAGE_NAME;
+const command = NPM_CLI_COMMAND;
+const entry = `${command}.mjs`;
 
 if (!existsSync(resolve(webui, "index.html"))) {
   throw new Error("Build @ringko-ai/webui before preparing the npm package.");
@@ -18,7 +22,7 @@ const result = await Bun.build({
   entrypoints: [resolve(packageRoot, "src/cli.ts")],
   target: "bun",
   outdir: resolve(output, "bin"),
-  naming: "ringko.mjs",
+  naming: entry,
   banner: "#!/usr/bin/env bun",
 });
 if (!result.success || result.outputs.length !== 1) {
@@ -27,12 +31,12 @@ if (!result.success || result.outputs.length !== 1) {
 }
 
 writeFileSync(resolve(output, "package.json"), `${JSON.stringify({
-  name: manifest.name,
+  name: npmName,
   version: manifest.version,
   description: "RingKo interactive agent CLI",
   type: "module",
   license: manifest.license,
-  bin: { ringko: "bin/ringko.mjs" },
+  bin: { [command]: `bin/${entry}` },
   engines: { node: ">=24", bun: ">=1.2.0" },
   files: ["bin/", "webui/", "README.md", "LICENSE", "NOTICE"],
   dependencies: { "node-pty": appManifest.dependencies["node-pty"] },
@@ -44,4 +48,4 @@ copyFileSync(resolve(repositoryRoot, "NOTICE"), resolve(output, "NOTICE"));
 copyFileSync(resolve(repositoryRoot, "packages/app/src/terminal-bridge.mjs"), resolve(output, "bin/terminal-bridge.mjs"));
 cpSync(webui, resolve(output, "webui"), { recursive: true });
 copyFileSync(resolve(packageRoot, "NPM.md"), resolve(output, "README.md"));
-console.log(`Prepared ${manifest.name}@${manifest.version} in ${output}`);
+console.log(`Prepared ${npmName}@${manifest.version} in ${output}`);

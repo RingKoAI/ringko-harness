@@ -14,22 +14,28 @@ try {
   cpSync(source, installed, { recursive: true });
   const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
   assert.equal(manifest.private, undefined);
+  assert.equal(manifest.name, "@ringko-ai/rkh");
+  assert.equal(manifest.bin.rkh, "bin/rkh.mjs");
   assert.ok(manifest.dependencies["node-pty"]);
   assert.ok(existsSync(join(installed, "bin/terminal-bridge.mjs")));
-  const cli = join(installed, manifest.bin.ringko);
+  const cli = join(installed, manifest.bin.rkh);
   const env = { ...process.env, RINGKO_HOME: join(root, "home"), AGENTS_HOME: join(root, "agents") };
   delete env.RINGKO_SERVER;
   delete env.RINGKO_WEBUI_DIR;
   delete env.RINGKO_WEB_TOKEN;
 
   for (const [args, expected] of [
-    [["version"], `ringko ${manifest.version}`],
+    [["version"], `rkh ${manifest.version}`],
     [["run", "npm-smoke-test"], "echo: npm-smoke-test"],
   ]) {
     const result = Bun.spawnSync([process.execPath, cli, ...args], { cwd: root, env, timeout: timeoutMs });
     assert.equal(result.exitCode, 0, result.stderr.toString());
     assert.equal(result.stdout.toString().trim(), expected);
   }
+
+  const help = Bun.spawnSync([process.execPath, cli, "help"], { cwd: root, env, timeout: timeoutMs });
+  assert.equal(help.exitCode, 0, help.stderr.toString());
+  assert.match(help.stdout.toString(), /rkh <command>/);
 
   const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
   const port = probe.port;

@@ -15,3 +15,9 @@ it("quotes shell metacharacters without executing them", () => {
 it("uses the binary command for compiled launches", () => {
   expect(resumeHint("session-one", "/work", "$bunfs/root/cli.ts", false)).toContain("ringko tui --session 'session-one'");
 });
+
+it("uses rkh for npm launches on Windows and Unix", () => {
+  for (const entry of ["C:\\npm\\node_modules\\@ringko-ai\\rkh\\bin\\rkh.mjs", "/usr/local/lib/node_modules/@ringko-ai/rkh/bin/rkh.mjs"]) {
+    expect(resumeHint("session-one", "/work", entry, false)).toContain("rkh tui --session 'session-one'");
+  }
+});

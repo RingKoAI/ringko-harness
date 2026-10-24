@@ -102,13 +102,24 @@ See [docs/PROVIDERS.md](docs/PROVIDERS.md) for custom OpenAI-compatible
 endpoints and for reading a VS Code providers file. Never commit real API keys
 or endpoint URLs — the examples use placeholders only.
 
+## Installation
+
+Install Node.js 24+ and [Bun](https://bun.sh/), then install the CLI globally:
+
+```sh
+npm install -g @ringko-ai/rkh
+rkh tui
+```
+
+Use `rkh help` to list commands, or `npx @ringko-ai/rkh tui` without a global install.
+
 ## Development
 
 Use the latest Node.js 24 LTS patch release (see `.node-version`), pnpm and Bun.
 CI resolves the latest Node.js 24 patch on each run to pick up security fixes.
 
 Pushing a version tag matching `packages/tui/package.json` publishes
-`@ringko-ai/tui` to npm after the release builds and checks succeed. See
+`@ringko-ai/rkh` to npm after the release builds and checks succeed. See
 [npm release setup](packages/tui/NPM.md#automatic-npm-releases) for the required
 npm Trusted Publisher configuration and local package verification commands.
 
