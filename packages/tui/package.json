@@ -1,6 +1,6 @@
 {
   "name": "@ringko-ai/tui",
-  "version": "0.2.2-rc",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
