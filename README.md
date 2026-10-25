@@ -1,7 +1,9 @@
 # RingKo Harness
 
-Provider-neutral agent tooling shared by the RingKo surfaces (TUI, Web UI, VS
-Code extension, desktop app).
+English | [简体中文](README.zh-CN.md)
+
+Provider-neutral agent tooling shared by the RingKo surfaces (TUI, Web UI,
+VS Code extension).
 
 - **`packages/harness`** — provider-neutral tool registry, risk/approval gate,
   and the agent turn loop.
@@ -18,6 +20,21 @@ Code extension, desktop app).
 Every tool invocation passes through the harness approval gate; hosts supply the
 approval handler, and risky operations fail closed when none is configured.
 
+## Install and first run
+
+The CLI is published on npm as `@ringko-ai/rkh` and is meant to be installed
+globally. It needs Node.js 24+ **and** Bun 1.2+ on `PATH` — the executable is a
+Bun bundle, so Bun is not optional:
+
+```sh
+npm install -g @ringko-ai/rkh
+ringko tui
+```
+
+`ringko help` lists commands; `npx @ringko-ai/rkh tui` runs without a global
+install. From a source checkout, every `ringko <command>` in this document maps to
+`bun packages/tui/src/cli.ts <command>`, and `pnpm dev:tui` starts the TUI.
+
 In the Web UI, open a session and select **Tool call log** beside the composer
 controls to inspect recorded call arguments, results, status, and timestamps.
 Older sessions without separate `tool/call` events remain readable. The log is
@@ -33,15 +50,17 @@ Disconnecting a client does not cancel a run; use the client's explicit stop act
 Concurrent submissions to a busy session return HTTP 409.
 
 ```sh
-pnpm dev:tui                      # run from the repository workspace
-bun packages/tui/src/cli.ts service status
-bun packages/tui/src/cli.ts service stop
+ringko service status             # the local backend started by `ringko tui`
+ringko service stop
 # Optional manual backend and explicit connection:
-bun packages/tui/src/cli.ts serve --shared --workspace /path/to/project --port 8787
-bun packages/tui/src/cli.ts tui --workspace /path/to/project --server http://127.0.0.1:8787
+ringko serve --shared --workspace /path/to/project --port 8787
+ringko tui --workspace /path/to/project --server http://127.0.0.1:8787
+# From a source checkout use `bun packages/tui/src/cli.ts <command>` instead,
+# or `pnpm dev:tui` for the TUI alone.
 ```
 
-See [shared backend architecture and limitations](docs/SHARED-BACKEND.md).
+Shared backend architecture and limitations are documented in maintainer
+notes kept outside this repository.
 
 ### Delegated tasks
 
@@ -50,8 +69,9 @@ Write mode auto-approves workspace edits; full mode opens all parent-configured
 capabilities. Children have independent context and may select a configured model.
 Task and shell support background execution, event subscriptions and cancellation;
 completion resumes the parent model with results. `ask` renders questions in TUI/Web;
-`todowrite`/`todoread` persist and restore the session plan. See
-[Task and job tools](docs/TASK-TOOL.md) for limits and permission boundaries.
+`todowrite`/`todoread` persist and restore the session plan. Task and job tool
+limits and permission boundaries are documented in maintainer notes kept
+outside this repository.
 
 ### Session trajectory
 
@@ -88,7 +108,7 @@ Configuration, skills, and MCP servers live outside the project, under two roots
 
 For directory structure, the model has a native `tree` tool instead of needing
 an OS `tree` command through `shell`. It supports depth/entry limits, hidden-file
-and exclusion controls, and external-path approval. See [tree tool](docs/TREE-TOOL.md).
+and exclusion controls, and external-path approval.
 
 ## Providers
 
@@ -98,26 +118,15 @@ Model providers are adapted from the [Vercel AI SDK](https://ai-sdk.dev).
 are declared without `execute`, so the SDK returns tool calls and stops).
 
 Providers are introduced **through configuration** and loaded at run time, so
-they are never compiled into the `ringko` binary:
+they are never compiled into the CLI binary:
 
 ```json
 { "provider": { "name": "openai", "model": "gpt-4o-mini" } }
 ```
 
-See [docs/PROVIDERS.md](docs/PROVIDERS.md) for custom OpenAI-compatible
-endpoints and for reading a VS Code providers file. Never commit real API keys
-or endpoint URLs — the examples use placeholders only.
-
-## Installation
-
-Install Node.js 24+ and [Bun](https://bun.sh/), then install the CLI globally:
-
-```sh
-npm install -g @ringko-ai/rkh
-rkh tui
-```
-
-Use `rkh help` to list commands, or `npx @ringko-ai/rkh tui` without a global install.
+Custom OpenAI-compatible endpoints and reading a VS Code providers file are
+covered by maintainer notes kept outside this repository. Never commit real API
+keys or endpoint URLs — the examples use placeholders only.
 
 ## Development
 
@@ -131,9 +140,15 @@ npm Trusted Publisher configuration and local package verification commands.
 
 ```sh
 pnpm install
-pnpm test          # harness + tools + sdk
+pnpm test          # every workspace package
 pnpm build         # code + tui + webui
 ```
+
+## Documentation
+
+Design notes, the comparison report and tool references are maintainer documents
+kept outside this repository. This README and the per-package READMEs are the
+in-repo reference.
 
 ## License
 

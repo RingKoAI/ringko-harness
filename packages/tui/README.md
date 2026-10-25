@@ -27,8 +27,8 @@ ringko serve --shared --port 8787  # manually managed foreground server
 `--config <path>`); `--provider`, `--model`, and `--workspace` override them. Manage the config with
 `ringko config show|path|get|set|unset`. Providers are introduced through
 configuration and imported at run time — they are **not** compiled into the
-binary (only the offline `echo` provider is). See
-[docs/PROVIDERS.md](../../docs/PROVIDERS.md).
+binary (only the offline `echo` provider is). Provider configuration details
+are in maintainer notes kept outside this repository.
 
 Without an interactive approval prompt the CLI denies risky operations, so it
 fails closed; workspace reads and directory listings do not require approval.

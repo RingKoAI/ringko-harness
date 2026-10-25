@@ -1,28 +1,26 @@
 # RingKo CLI
 
-Run the RingKo agent from a terminal with Node.js 24+ and [Bun](https://bun.sh/) installed:
-
-```sh
-npx @ringko-ai/rkh tui
-```
-
-The `rkh` executable requires Bun on your PATH. You can also use
-`bunx @ringko-ai/rkh tui`, or run `npx @ringko-ai/rkh help` to list commands.
-
-For a global installation:
+`@ringko-ai/rkh` is the RingKo agent CLI, distributed as a globally installed npm
+package. The `ringko` executable is a Bun bundle, so Node.js 24+ **and**
+[Bun](https://bun.sh/) 1.2+ must be on `PATH` — Bun is not optional.
 
 ```sh
 npm install -g @ringko-ai/rkh
-rkh tui
+ringko tui
 ```
 
-The public npm package is `@ringko-ai/rkh`; its command is `rkh`.
+`ringko help` lists every command. Without a global install, `npx @ringko-ai/rkh tui`
+and `bunx @ringko-ai/rkh tui` run the same CLI.
+
+Prerelease versions publish under the `next` dist-tag: `npm install -g @ringko-ai/rkh@next`.
 
 This package bundles the CLI, built-in model providers and the WebUI assets.
 The browser's interactive terminal uses Node.js and the `node-pty` dependency.
-Custom provider modules configured by the host are loaded separately at runtime. For source
-development and standalone platform binaries, see the
-[repository](https://github.com/RingKoAI/ringko-harness).
+Custom provider modules configured by the host are loaded separately at runtime.
+The package installs the `ringko` command; the standalone platform binaries
+use the same name. For source development and standalone binaries, see the
+[repository](https://github.com/RingKoAI/ringko-harness); the Chinese README is
+[README.zh-CN.md](https://github.com/RingKoAI/ringko-harness/blob/main/README.zh-CN.md).
 
 ## Automatic npm releases
 

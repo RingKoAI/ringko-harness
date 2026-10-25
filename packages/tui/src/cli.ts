@@ -103,7 +103,7 @@ Options:
   --completion-promise <text>  (loop) Stop when a reply contains <promise>text</promise>
 
 Providers are introduced through configuration; the config names a provider
-module that is imported at run time. See docs/PROVIDERS.md.
+module that is imported at run time.
 `;
 
 /** Non-interactive default: deny every approval request (fail closed). */
