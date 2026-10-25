@@ -1,11 +1,11 @@
-// Built-in provider presets (data, not code). Each entry maps to an rkh provider
+// Built-in provider presets (data, not code). Each entry maps to a ringko provider
 // type; most are OpenAI-compatible endpoints. Model lists are discovered live or
 // filled from the catalog, so presets stay small and current.
 export interface ProviderPreset {
   /** Stable id (used as the default provider name). */
   id: string;
   label: string;
-  /** rkh provider type: openai | anthropic | google | openai-compatible | openai-oauth | github-copilot | xai-oauth. */
+  /** ringko provider type: openai | anthropic | google | openai-compatible | openai-oauth | github-copilot | xai-oauth. */
   type: string;
   /** Base URL for OpenAI-compatible (or custom) endpoints. */
   baseURL?: string;
