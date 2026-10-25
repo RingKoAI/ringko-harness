@@ -144,8 +144,15 @@ interface ParsedArgs {
   shared?: boolean;
 }
 
+/** Dash-prefixed first tokens that are commands, not options of the default command. */
+const DASH_COMMANDS = new Set(["--help", "-h", "--version", "-v"]);
+
 function parseArgs(argv: readonly string[]): ParsedArgs {
-  const [command, ...rest] = argv;
+  const [first, ...rest] = argv;
+  // A leading option belongs to the default command (the terminal UI), so it
+  // must not be mistaken for a command name.
+  const command = first !== undefined && (!first.startsWith("-") || DASH_COMMANDS.has(first)) ? first : undefined;
+  const args = command === undefined ? argv : rest;
   const positionals: string[] = [];
   let config: string | undefined;
   let provider: string | undefined;
@@ -157,11 +164,11 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let server: string | undefined;
   let port: number | undefined;
   let shared: boolean | undefined;
-  for (let i = 0; i < rest.length; i += 1) {
-    const arg = rest[i];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
     if (arg === "--shared") { shared = true; continue; }
     if (arg === "--server" || arg === "--port") {
-      const value = rest[++i];
+      const value = args[++i];
       if (!value || value.startsWith("--")) throw new TypeError(`Missing value for ${arg}.`);
       if (arg === "--server") server = value;
       else { port = Number(value); if (!/^\d+$/.test(value) || !Number.isInteger(port) || port < 1 || port > 65535) throw new TypeError("Port must be an integer from 1 to 65535."); }
@@ -172,7 +179,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       continue;
     }
     if (arg === "-s" || arg === "--session") {
-      const value = rest[i + 1];
+      const value = args[i + 1];
       if (value !== undefined && !value.startsWith("-")) {
         session = value;
         i += 1;
@@ -182,7 +189,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
       continue;
     }
     if (arg === "--config" || arg === "--provider" || arg === "--model" || arg === "--workspace") {
-      const value = rest[i + 1];
+      const value = args[i + 1];
       if (value === undefined) throw new TypeError(`Missing value for ${arg}.`);
       if (arg === "--config") config = value;
       else if (arg === "--provider") provider = value;

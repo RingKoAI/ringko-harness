@@ -38,6 +38,25 @@ describe("ringko cli", () => {
     expect(out.join("\n")).toContain("Usage:");
   });
 
+  it("prints help for --help", async () => {
+    const { io, out } = collect();
+    expect(await runCli(["--help"], io)).toBe(0);
+    expect(out.join("\n")).toContain("Usage:");
+  });
+
+  it("parses global options before the default command", () => {
+    const cli = join(import.meta.dir, "..", "src", "cli.ts");
+    const result = Bun.spawnSync([process.execPath, cli, "--session", "abc", "--workspace", home], {
+      env: { ...process.env, RINGKO_HOME: home },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(1);
+    const err = result.stderr.toString();
+    expect(err).toContain("requires an interactive terminal");
+    expect(err).not.toContain("Unknown command");
+  });
+
   it("starts the terminal UI when no command is given", () => {
     const cli = join(import.meta.dir, "..", "src", "cli.ts");
     const result = Bun.spawnSync([process.execPath, cli], {
