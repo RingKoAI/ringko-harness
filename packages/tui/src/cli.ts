@@ -90,11 +90,11 @@ Commands:
   help                 Show this help
 
 Options:
-  --config <path>      Config file (default: ~/.ringko/config)
+  --config <path>      Explicit config file (default: ~/.ringko/settings.local.json + provider.json)
   --provider <name>    Override the configured provider (default: echo)
   --model <id>         Override the configured model id
   --resume, -c         Continue the most recent session
-  -s, --session [id]   Continue a session; omit the id for a session picker (TUI)
+  -s, --session [id]   Continue a session; omit the id for the session picker
   --workspace <dir>    Workspace root for file tools (default: current directory)
   --server <url>       Connect to an existing local backend (or RINGKO_SERVER)
   --port <number>      (serve) HTTP port (default: 8787)
