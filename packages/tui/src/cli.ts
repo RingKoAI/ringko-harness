@@ -57,16 +57,16 @@ export interface CliIo {
   readonly err: (line: string) => void;
 }
 
-const USAGE = `${cliCommand()} - RingKo agent harness CLI
+const USAGE = `${cliCommand()} - RingKo agent harness
 
 Usage:
+  ${cliCommand()}                 Interactive terminal UI (default)
   ${cliCommand()} <command> [options]
 
 Commands:
   run <prompt>         Run the agent
   loop <prompt>        Repeat a prompt until --completion-promise or --max-iterations
-  tui                  Interactive terminal UI
-  serve                Start the shared HTTP backend (TUI starts one automatically)
+  serve                Start the local backend and browser UI
   service start|status|stop  Manage the shared backend of this workspace
   tools                List the registered tools
   skills               List installed skills (~/.ringko/skills, ~/.agents/skills)
@@ -335,7 +335,7 @@ async function loopCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
 
 async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   if (!process.stdout.isTTY) {
-    io.err(`${cliCommand()} tui requires an interactive terminal.`);
+    io.err(`${cliCommand()} requires an interactive terminal; use ${cliCommand()} serve for the browser UI.`);
     return 1;
   }
   const config = readConfig(parsed, io);
@@ -745,6 +745,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
 
   switch (parsed.command) {
     case undefined:
+      return tuiCommand(parsed, io);
     case "help":
     case "--help":
     case "-h":
@@ -780,8 +781,6 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       return modelsCommand(parsed, io);
     case "auth":
       return authCommand(parsed, io);
-    case "tui":
-      return tuiCommand(parsed, io);
     case "serve":
       return serveCommand(parsed, io);
     case "service": {

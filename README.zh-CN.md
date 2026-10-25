@@ -2,10 +2,10 @@
 
 [English](README.md) | 简体中文
 
-RingKo Harness 是一个与模型供应商无关的 agent harness。安装后的同一个命令自带两个人类
-界面：交互式终端界面（`ringko tui`）与本地浏览器界面（`ringko serve`），另有 VS Code
-扩展。所有界面跑的是同一套工具注册表、同一个审批门和同一份事件溯源会话日志，所以在一个
-界面里开的会话，可以在另一个界面里查看和续接。
+RingKo Harness 是一个与模型供应商无关的 agent harness。安装后的同一个命令提供两种样式的
+界面：交互式终端界面（直接运行 `ringko`，默认）与浏览器界面（`ringko serve`），VS Code
+扩展在推进中。所有界面跑的是同一套工具注册表、同一个审批门和同一份事件溯源会话日志，
+所以在一个界面里开的会话，可以在另一个界面里查看和续接。
 
 下面这些包是 harness 本体：
 
@@ -14,7 +14,7 @@ RingKo Harness 是一个与模型供应商无关的 agent harness。安装后的
 - **`packages/sdk`** — 面向宿主的稳定公共门面（`createRingKo`）。
 - **`packages/session`** — 事件溯源式会话存储（`~/.ringko/sessions`）。
 - **`packages/providers`** — 基于 AI SDK 的模型供应商适配（OpenAI、Anthropic）。
-- **`packages/repl`** — 基于 Ink 的交互式终端界面（`ringko tui`）。
+- **`packages/repl`** — 基于 Ink 的交互式终端界面（`ringko`）。
 - **`packages/protocol` / `client`** — 与平台无关的通信契约，以及共用的 HTTP/SSE 客户端。
 - **`packages/app/src/services`** — 由后端持有的同步状态与在途运行状态。
 - **`packages/tui` / `webui` / `app` / `code`** — 面向用户的各个界面。
@@ -30,7 +30,7 @@ Bun 打包产物，Bun 不是可选项：
 
 ```sh
 npm install -g @ringko-ai/rkh
-ringko tui      # 终端界面
+ringko          # 终端界面（默认）
 ringko serve    # 本地后端 + 浏览器界面，会打印访问地址（默认端口 8787）
 ```
 
@@ -44,17 +44,17 @@ ringko serve    # 本地后端 + 浏览器界面，会打印访问地址（默�
 
 ### 终端与浏览器共享会话
 
-`ringko tui` 会为「规范的 workspace + 配置」这一组合自动启动或复用本地后端。用浏览器
-打开它打印出的后端地址，然后在两个客户端里选中同一个会话（`ringko tui -s <id>`）。
+`ringko` 会为「规范的 workspace + 配置」这一组合自动启动或复用本地后端。用浏览器
+打开它打印出的后端地址，然后在两个客户端里选中同一个会话（`ringko -s <id>`）。
 消息、部分输出、工具活动、审批、提问、todo 与运行状态都会同步。断开某个客户端不会取消
 正在进行的运行，要取消请使用客户端显式的停止动作。向忙碌会话并发提交会返回 HTTP 409。
 
 ```sh
-ringko service status             # `ringko tui` 自动起的本地后端
+ringko service status             # `ringko` 自动起的本地后端
 ringko service stop
 # 可选：手动起后端并显式连接
 ringko serve --shared --workspace /path/to/project --port 8787
-ringko tui --workspace /path/to/project --server http://127.0.0.1:8787
+ringko --workspace /path/to/project --server http://127.0.0.1:8787
 # 源码检出时把 `ringko <command>` 换成 `bun packages/tui/src/cli.ts <command>`；
 # 只想启动 TUI 可以用 `pnpm dev:tui`。
 ```

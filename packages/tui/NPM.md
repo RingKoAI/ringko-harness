@@ -1,8 +1,8 @@
 # RingKo Harness
 
-RingKo is a provider-neutral agent harness. The `ringko` command starts either
-human interface: an interactive terminal UI (`ringko tui`) and a browser UI served
-locally (`ringko serve`, which prints the URL to open). Both run the same tool
+RingKo is a provider-neutral agent harness. The `ringko` command offers two
+interface styles: an interactive terminal UI (plain `ringko`, the default) and a
+browser UI (`ringko serve`, which prints the URL to open). Both run the same tool
 registry, the same approval gate and the same event-sourced session log.
 
 `@ringko-ai/rkh` installs that command globally. The executable is a Bun bundle, so
@@ -11,7 +11,7 @@ optional.
 
 ```sh
 npm install -g @ringko-ai/rkh
-ringko tui      # terminal interface
+ringko          # terminal interface (default)
 ringko serve    # local backend + browser interface, prints its URL
 ```
 

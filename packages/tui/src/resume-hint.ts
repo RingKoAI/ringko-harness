@@ -7,5 +7,5 @@ function quote(value: string, windows: boolean): string {
 
 export function resumeHint(sessionId: string, workspace: string, entry: string | undefined, windows = process.platform === "win32"): string {
   const source = entry && /\.tsx?$/.test(entry) && !entry.includes("$bunfs") ? `bun ${quote(entry, windows)}` : cliCommand(entry);
-  return `\nResume this session with:\n${source} tui --session ${quote(sessionId, windows)} --workspace ${quote(workspace, windows)}`;
+  return `\nResume this session with:\n${source} --session ${quote(sessionId, windows)} --workspace ${quote(workspace, windows)}`;
 }

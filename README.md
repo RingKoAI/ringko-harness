@@ -2,11 +2,11 @@
 
 English | [简体中文](README.zh-CN.md)
 
-RingKo Harness is a provider-neutral agent harness. One installed command ships
-two human interfaces — an interactive terminal UI (`ringko tui`) and a browser UI
-served locally (`ringko serve`) — plus a VS Code extension. Every interface runs
-the same tool registry, the same approval gate and the same event-sourced session
-log, so a session started in one can be inspected and resumed in the other.
+RingKo Harness is a provider-neutral agent harness. One installed command offers
+two interface styles: an interactive terminal UI (plain `ringko`, the default) and
+a browser UI (`ringko serve`). A VS Code extension is in progress. Every interface
+runs the same tool registry, the same approval gate and the same event-sourced
+session log, so a session started in one can be inspected and resumed in the other.
 
 The packages below are the harness itself:
 
@@ -17,7 +17,7 @@ The packages below are the harness itself:
 - **`packages/sdk`** — stable public facade (`createRingKo`) for hosts.
 - **`packages/session`** — event-sourced session storage (`~/.ringko/sessions`).
 - **`packages/providers`** — AI SDK-backed model providers (OpenAI, Anthropic).
-- **`packages/repl`** — interactive Ink terminal UI (`ringko tui`).
+- **`packages/repl`** — interactive Ink terminal UI (`ringko`).
 - **`packages/protocol` / `client`** — platform-neutral wire contracts and shared HTTP/SSE client.
 - **`packages/app/src/services`** — backend-owned synchronization and in-flight run state.
 - **`packages/tui` / `webui` / `app` / `code`** — the user-facing surfaces.
@@ -34,7 +34,7 @@ Bun is not optional:
 
 ```sh
 npm install -g @ringko-ai/rkh
-ringko tui      # terminal interface
+ringko          # terminal interface (default)
 ringko serve    # local backend + browser interface, prints its URL (port 8787)
 ```
 
@@ -49,19 +49,19 @@ available through `GET /api/sessions/:id/tool-log` in pages of up to 100 calls.
 
 ### Shared terminal/browser sessions
 
-`ringko tui` automatically starts or reuses a local backend for the canonical
+`ringko` automatically starts or reuses a local backend for the canonical
 workspace/config pair. Open the printed backend URL in a browser, then select
-the same session in both clients (`ringko tui -s <id>`). Messages, partial output,
+the same session in both clients (`ringko -s <id>`). Messages, partial output,
 tool activity, approvals, questions, todos and running state synchronize.
 Disconnecting a client does not cancel a run; use the client's explicit stop action.
 Concurrent submissions to a busy session return HTTP 409.
 
 ```sh
-ringko service status             # the local backend started by `ringko tui`
+ringko service status             # the local backend started by `ringko`
 ringko service stop
 # Optional manual backend and explicit connection:
 ringko serve --shared --workspace /path/to/project --port 8787
-ringko tui --workspace /path/to/project --server http://127.0.0.1:8787
+ringko --workspace /path/to/project --server http://127.0.0.1:8787
 # From a source checkout use `bun packages/tui/src/cli.ts <command>` instead,
 # or `pnpm dev:tui` for the TUI alone.
 ```

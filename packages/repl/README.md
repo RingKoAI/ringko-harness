@@ -54,7 +54,7 @@ Use `/shortcuts` to see the complete help. Main Pi-style bindings:
 Ctrl+Shift+P also cycles backward in terminals that distinguish it. Modifier
 support depends on the terminal; Alt+P and Alt+Enter are portable alternatives.
 
-Launch with `ringko tui`, or call `launchRepl({ model, modelLabel, config, workspace })`.
+Launch with `ringko`, or call `launchRepl({ model, modelLabel, config, workspace })`.
 The comparison report covering reference code, implemented behavior,
 verification scope and remaining gaps is a maintainer note kept outside this
 repository.

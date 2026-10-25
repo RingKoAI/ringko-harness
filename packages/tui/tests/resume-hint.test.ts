@@ -4,7 +4,7 @@ import { resumeHint } from "../src/resume-hint.ts";
 it("prints a reusable Bun invocation for source launches", () => {
   const text = resumeHint("session-one", "C:\\Work Dir", "C:\\RingKo\\cli.ts", true);
   expect(text).toContain("Resume this session with:");
-  expect(text).toContain("bun 'C:\\RingKo\\cli.ts' tui --session 'session-one' --workspace 'C:\\Work Dir'");
+  expect(text).toContain("bun 'C:\\RingKo\\cli.ts' --session 'session-one' --workspace 'C:\\Work Dir'");
 });
 
 it("quotes shell metacharacters without executing them", () => {
@@ -13,11 +13,11 @@ it("quotes shell metacharacters without executing them", () => {
 });
 
 it("uses the binary command for compiled launches", () => {
-  expect(resumeHint("session-one", "/work", "$bunfs/root/cli.ts", false)).toContain("ringko tui --session 'session-one'");
+  expect(resumeHint("session-one", "/work", "$bunfs/root/cli.ts", false)).toContain("ringko --session 'session-one'");
 });
 
 it("uses ringko for npm launches on Windows and Unix", () => {
   for (const entry of ["C:\\npm\\node_modules\\@ringko-ai\\rkh\\bin\\ringko.mjs", "/usr/local/lib/node_modules/@ringko-ai/rkh/bin/ringko.mjs"]) {
-    expect(resumeHint("session-one", "/work", entry, false)).toContain("ringko tui --session 'session-one'");
+    expect(resumeHint("session-one", "/work", entry, false)).toContain("ringko --session 'session-one'");
   }
 });

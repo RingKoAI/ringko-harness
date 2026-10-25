@@ -32,10 +32,21 @@ describe("ringko cli", () => {
     expect(out).toEqual([`ringko ${VERSION}`]);
   });
 
-  it("shows help when no command is given", async () => {
+  it("prints help when asked", async () => {
     const { io, out } = collect();
-    expect(await runCli([], io)).toBe(0);
+    expect(await runCli(["help"], io)).toBe(0);
     expect(out.join("\n")).toContain("Usage:");
+  });
+
+  it("starts the terminal UI when no command is given", () => {
+    const cli = join(import.meta.dir, "..", "src", "cli.ts");
+    const result = Bun.spawnSync([process.execPath, cli], {
+      env: { ...process.env, RINGKO_HOME: home },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain("requires an interactive terminal");
   });
 
   it("reports the access mode", async () => {

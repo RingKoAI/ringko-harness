@@ -16,7 +16,7 @@ ringko skills               # installed skills (~/.ringko/skills, ~/.agents/skil
 ringko mcp                  # configured MCP servers (~/.ringko/.mcp.json)
 ringko run "list the files"  # run the agent (offline `echo` provider by default)
 ringko loop "fix the tests" --max-iterations 10 --completion-promise DONE  # repeat until done
-ringko tui                   # interactive terminal UI (Ink; requires a TTY)
+ringko                       # interactive terminal UI (Ink; requires a TTY; default)
 ringko service start         # automatically start/reuse the workspace backend
 ringko service status        # print backend URL
 ringko service stop          # refuses while a session is running
@@ -61,7 +61,7 @@ retain the original local, non-persistent shell behavior.
 
 ## Shared backend
 
-`tui` starts/reuses a loopback service per canonical workspace/config pair.
+The terminal UI starts/reuses a loopback service per canonical workspace/config pair.
 Open the printed URL for WebUI; select the same session to see synchronized state.
 Use `--server http://127.0.0.1:<port>` or `RINGKO_SERVER` for explicit connection.
 `RINGKO_WEB_TOKEN`, if configured, must match the backend; do not put credentials
