@@ -1,12 +1,18 @@
-# RingKo CLI
+# RingKo Harness
 
-`@ringko-ai/rkh` is the RingKo agent CLI, distributed as a globally installed npm
-package. The `ringko` executable is a Bun bundle, so Node.js 24+ **and**
-[Bun](https://bun.sh/) 1.2+ must be on `PATH` — Bun is not optional.
+RingKo is a provider-neutral agent harness. The `ringko` command starts either
+human interface: an interactive terminal UI (`ringko tui`) and a browser UI served
+locally (`ringko serve`, which prints the URL to open). Both run the same tool
+registry, the same approval gate and the same event-sourced session log.
+
+`@ringko-ai/rkh` installs that command globally. The executable is a Bun bundle, so
+Node.js 24+ **and** [Bun](https://bun.sh/) 1.2+ must be on `PATH` — Bun is not
+optional.
 
 ```sh
 npm install -g @ringko-ai/rkh
-ringko tui
+ringko tui      # terminal interface
+ringko serve    # local backend + browser interface, prints its URL
 ```
 
 `ringko help` lists every command. Without a global install, `npx @ringko-ai/rkh tui`

@@ -2,8 +2,13 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Provider-neutral agent tooling shared by the RingKo surfaces (TUI, Web UI,
-VS Code extension).
+RingKo Harness is a provider-neutral agent harness. One installed command ships
+two human interfaces — an interactive terminal UI (`ringko tui`) and a browser UI
+served locally (`ringko serve`) — plus a VS Code extension. Every interface runs
+the same tool registry, the same approval gate and the same event-sourced session
+log, so a session started in one can be inspected and resumed in the other.
+
+The packages below are the harness itself:
 
 - **`packages/harness`** — provider-neutral tool registry, risk/approval gate,
   and the agent turn loop.
@@ -22,13 +27,15 @@ approval handler, and risky operations fail closed when none is configured.
 
 ## Install and first run
 
-The CLI is published on npm as `@ringko-ai/rkh` and is meant to be installed
-globally. It needs Node.js 24+ **and** Bun 1.2+ on `PATH` — the executable is a
-Bun bundle, so Bun is not optional:
+RingKo is published on npm as `@ringko-ai/rkh` and is meant to be installed
+globally. It installs one command, `ringko`, which starts either interface. It
+needs Node.js 24+ **and** Bun 1.2+ on `PATH` — the executable is a Bun bundle, so
+Bun is not optional:
 
 ```sh
 npm install -g @ringko-ai/rkh
-ringko tui
+ringko tui      # terminal interface
+ringko serve    # local backend + browser interface, prints its URL (port 8787)
 ```
 
 `ringko help` lists commands; `npx @ringko-ai/rkh tui` runs without a global

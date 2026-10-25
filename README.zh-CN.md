@@ -2,8 +2,12 @@
 
 [English](README.md) | 简体中文
 
-与模型供应商无关的 agent 工具集，供 RingKo 的各个人类界面共用（TUI、Web UI、VS Code
-扩展）。
+RingKo Harness 是一个与模型供应商无关的 agent harness。安装后的同一个命令自带两个人类
+界面：交互式终端界面（`ringko tui`）与本地浏览器界面（`ringko serve`），另有 VS Code
+扩展。所有界面跑的是同一套工具注册表、同一个审批门和同一份事件溯源会话日志，所以在一个
+界面里开的会话，可以在另一个界面里查看和续接。
+
+下面这些包是 harness 本体：
 
 - **`packages/harness`** — 与供应商无关的工具注册表、风险/审批门，以及 agent 回合循环。
 - **`packages/tools`** — 受审批门约束的内置工具：workspace 文件、出站网络、shell 执行。
@@ -20,12 +24,14 @@
 
 ## 安装与首次运行
 
-CLI 以 `@ringko-ai/rkh` 发布在 npm 上，按全局安装使用。它要求 `PATH` 上有 Node.js 24+
-**与** Bun 1.2+ —— 可执行文件是 Bun 打包产物，Bun 不是可选项：
+RingKo 以 `@ringko-ai/rkh` 发布在 npm 上，按全局安装使用。它只安装一个 `ringko`
+命令，用它启动任一界面。它要求 `PATH` 上有 Node.js 24+ **与** Bun 1.2+ —— 可执行文件是
+Bun 打包产物，Bun 不是可选项：
 
 ```sh
 npm install -g @ringko-ai/rkh
-ringko tui
+ringko tui      # 终端界面
+ringko serve    # 本地后端 + 浏览器界面，会打印访问地址（默认端口 8787）
 ```
 
 `ringko help` 列出命令；不想全局安装时可以用 `npx @ringko-ai/rkh tui`。从源码检出运行时，

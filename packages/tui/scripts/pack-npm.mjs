@@ -33,7 +33,7 @@ if (!result.success || result.outputs.length !== 1) {
 writeFileSync(resolve(output, "package.json"), `${JSON.stringify({
   name: npmName,
   version: manifest.version,
-  description: "RingKo interactive agent CLI",
+  description: "RingKo agent harness: terminal and web interfaces",
   type: "module",
   license: manifest.license,
   bin: { [command]: `bin/${entry}` },
