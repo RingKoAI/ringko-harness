@@ -228,6 +228,9 @@ importers:
       '@ringko-ai/harness':
         specifier: workspace:*
         version: link:../harness
+      '@ringko-ai/session':
+        specifier: workspace:*
+        version: link:../session
       htmlparser2:
         specifier: ^10.1.0
         version: 10.1.0

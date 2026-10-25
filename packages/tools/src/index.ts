@@ -18,6 +18,23 @@ export { AskManager, ASK_LIMITS, validateAskOutput } from "./ask.ts";
 export type { AskEvent } from "./ask.ts";
 export type { FileVersion, ResolvedTarget, Workspace };
 export {
+  createSessionListTool,
+  createSessionReadTool,
+  createSessionSearchTool,
+  registerSessionQueryTools,
+  SESSION_QUERY_LIMITS,
+} from "./session-query.ts";
+export type {
+  SessionEventRecord,
+  SessionListOutput,
+  SessionQueryLimits,
+  SessionQueryOptions,
+  SessionReadOutput,
+  SessionSearchMatch,
+  SessionSearchOutput,
+  SessionSummary,
+} from "./session-query.ts";
+export {
   createAskTool,
   createEditTool,
   createGlobTool,

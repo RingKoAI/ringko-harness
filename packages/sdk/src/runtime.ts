@@ -3,7 +3,7 @@ import { instructionsText, loadInstructions, writeDiagnostic, type RingkoConfig 
 import { registerMcpTools } from "@ringko-ai/mcp";
 import { EventBus, EventLog, Scheduler, createTimeSource } from "@ringko-ai/runtime";
 import { sessionTodos } from "@ringko-ai/session";
-import { createTodoStore, registerNetworkTools, registerSessionTools, registerShellTools, registerWorkspaceTools, type AskHandler, type TodoItem } from "@ringko-ai/tools";
+import { createTodoStore, registerNetworkTools, registerSessionQueryTools, registerSessionTools, registerShellTools, registerWorkspaceTools, type AskHandler, type TodoItem } from "@ringko-ai/tools";
 import { resolveWorkflow, workflowAllowsTool, workflowInstructions, type Workflow } from "@ringko-ai/workflow";
 import { abortable } from "@ringko-ai/harness";
 import { createRingKo, isAccessMode, type AgentEvent, type RingKo, type RingKoConfig as AgentConfig } from "./index.ts";
@@ -39,6 +39,7 @@ export function registerRuntimeTools(agent: RingKo, config: RingkoConfig, worksp
   });
   todos.todos = session ? sessionTodos(session.all()) : [];
   registerSessionTools(agent.tools, { todos, ask: host.ask ?? (async () => { throw new Error("Questions require an interactive host."); }) });
+  registerSessionQueryTools(agent.tools, { workspace });
   if (config.capabilities?.network) registerNetworkTools(agent.tools, {
     allowPrivateHosts: config.capabilities.privateNetwork === true,
     search: { provider: config.capabilities.websearchProvider },

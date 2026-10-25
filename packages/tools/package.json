@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@ringko-ai/harness": "workspace:*",
+    "@ringko-ai/session": "workspace:*",
     "htmlparser2": "^10.1.0",
     "turndown": "^7.2.4"
   },

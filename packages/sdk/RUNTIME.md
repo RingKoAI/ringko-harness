@@ -7,15 +7,25 @@ The manager owns shared MCP connections, event logging, time ticks and schedules
 Call the returned agent handle's `close()` when its session or model is replaced;
 call the manager's asynchronous `close()` when the workspace shuts down.
 
-All executing CLI, TUI and Web agents use the same assembly for project
-instructions, workflows, permission modes, files, session tools, optional shell
-and network capabilities, and installed skills. Hosts prewarm MCP connections
+Every executing host uses the same assembly for project instructions,
+workflows, permission modes, files, session tools, optional shell and network
+capabilities, and installed skills: the non-interactive `ringko run` / `loop`
+commands, the TUI in embedded mode, and the shared backend that serves
+`ringko serve` and the Web UI. A TUI attached to the shared backend executes
+nothing locally; it is a client of that backend. Hosts prewarm MCP connections
 at startup; concurrent agents share each server's connection attempt. A failed
 server retries twice in the background (three attempts total) and then stops
 automatically until its configuration is reset or the workspace restarts.
 Individual server failures are reported while other capabilities remain usable.
 Resetting MCP configuration closes old connections, clears retry counters and
 reconnects immediately. Active tool lists refresh at the next model run.
+
+Session history is exposed read-only through three tools: `session_list` lists the
+workspace's recorded sessions newest first, `session_search` matches a
+case-insensitive substring across their events, and `session_read` pages one
+session's events by sequence cursor. Sessions resolve through the
+workspace-scoped store, ids from another workspace are refused, every batch is
+character- and count-bounded, and nothing writes to or locks a session.
 
 Workflow deny rules override allow rules. Filtering runs before and after the
 `run/before` hooks and covers MCP tools as well as built-in tools. Workflow model
