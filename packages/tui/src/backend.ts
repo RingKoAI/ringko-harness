@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { BackendClient, BackendError, PROTOCOL_VERSION } from "@ringko-ai/client";
 import { canonicalWorkspace, sharedPort } from "@ringko-ai/client/local";
-import { DEFAULT_BACKEND_PORT, localBackendOrigin, readBackendRegistration } from "@ringko-ai/config";
+import { backendKey, DEFAULT_BACKEND_PORT, localBackendOrigin, readBackendRegistration } from "@ringko-ai/config";
 import { cliCommand } from "./cli-identity.ts";
 export { sharedPort } from "@ringko-ai/client/local";
 
@@ -33,7 +33,7 @@ async function probe(client: BackendClient, workspace: string, configPath: strin
     }
     return { status: "unreachable" };
   }
-  if (identity.protocol !== PROTOCOL_VERSION || resolve(identity.workspace) !== workspace || (identity.configPath ?? undefined) !== configPath) {
+  if (identity.protocol !== PROTOCOL_VERSION || backendKey(identity.workspace, identity.configPath ?? undefined) !== backendKey(workspace, configPath)) {
     return { status: "mismatch", message: "This port belongs to a different backend/workspace/configuration. Use --server with the correct local backend address." };
   }
   return { status: "ok" };

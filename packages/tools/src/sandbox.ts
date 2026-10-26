@@ -101,7 +101,7 @@ export class Sandbox {
       if (within(realpathSync(this.temp()), target)) return;
       throw new SandboxDeniedError(`Sandbox mode read-only denies writes outside its private temp: ${path}`);
     }
-    if (!this.writable(target)) throw new SandboxDeniedError(`Write outside the workspace is denied: ${path}`);
+    if (!this.writable(target)) throw new SandboxDeniedError(`Write outside the workspace is denied: ${path} (resolved: ${target}; workspace: ${this.workspaceRoot})`);
   }
 
   private temp(): string {

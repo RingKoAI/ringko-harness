@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "@ringko-ai/app";
@@ -92,5 +92,27 @@ it("reclaims a stale owner and refuses a second backend for the same workspace",
 it("rejects non-local and credential-bearing backend URLs before connecting", async () => {
   for (const url of ['https://remote.invalid', 'http://user:secret@127.0.0.1:8787', 'http://127.0.0.1:8787/path', 'http://127.0.0.1:8787/?token=secret']) {
     await expect(connectBackend({ workspace: process.cwd(), url, startIfMissing: false })).rejects.toThrow("local HTTP origin");
+  }
+});
+
+it("connects through a workspace alias without accepting a foreign workspace", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rkh-backend-alias-"));
+  const workspace = join(root, "workspace");
+  const alias = join(root, "alias");
+  const foreign = join(root, "foreign");
+  const previous = process.env.RINGKO_HOME;
+  process.env.RINGKO_HOME = root;
+  mkdirSync(workspace); mkdirSync(foreign);
+  symlinkSync(workspace, alias, process.platform === "win32" ? "junction" : "dir");
+  const app = startServer({ workspace: alias, port: 0, shared: true });
+  try {
+    const connected = await connectBackend({ workspace, url: app.url, startIfMissing: false });
+    const owner = await (await fetch(`${app.url}/api/backend`)).json() as { instance: string };
+    expect((await connected.client.identity()).instance).toBe(owner.instance);
+    await expect(connectBackend({ workspace: foreign, url: app.url, startIfMissing: false })).rejects.toThrow();
+  } finally {
+    app.stop();
+    if (previous === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previous;
+    rmSync(root, { recursive: true, force: true });
   }
 });

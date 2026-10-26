@@ -37,6 +37,7 @@ import {
   type AskHandler,
 } from "@ringko-ai/tools";
 import {
+  backendKey,
   claimBackendRegistration,
   createSkill,
   configuredModelIds,
@@ -1809,7 +1810,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname.startsWith("/api/") && origin && origin !== url.origin && origin !== options.devServerUrl) return json({ error: "Cross-origin backend request denied." }, 403);
       const expectedWorkspace = request.headers.get("x-ringko-workspace");
       if (expectedWorkspace) {
-        try { if (resolve(decodeURIComponent(expectedWorkspace)) !== workspace) return json({ error: "Backend workspace changed. Reconnect to the correct workspace." }, 409); }
+        try { if (backendKey(decodeURIComponent(expectedWorkspace)) !== backendKey(workspace)) return json({ error: "Backend workspace changed. Reconnect to the correct workspace." }, 409); }
         catch { return json({ error: "Invalid workspace header." }, 400); }
       }
       if (url.pathname === "/api/info") return await handleInfo();
