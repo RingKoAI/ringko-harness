@@ -1,4 +1,4 @@
-name: release
+﻿name: release
 
 on:
   push:
@@ -114,6 +114,13 @@ jobs:
 
       - name: Install
         run: pnpm install --frozen-lockfile
+
+      - name: Install bubblewrap
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
       - name: Test
         run: pnpm test
@@ -250,3 +257,4 @@ jobs:
           else
             gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest
           fi
+

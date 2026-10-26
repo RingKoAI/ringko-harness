@@ -1,7 +1,8 @@
-import { expect, it } from "bun:test";
+﻿import { expect, it } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { Sandbox } from "@ringko-ai/tools";
 import { McpManager } from "../src/mcp-manager.ts";
 
@@ -31,9 +32,12 @@ it("runs a local stdio MCP server inside the workspace sandbox", async () => {
   const server = join(root, "server.cjs");
   writeFileSync(server, SERVER);
   writeFileSync(join(root, ".mcp.json"), JSON.stringify({ mcpServers: { local: { command: process.execPath, args: [server], cwd: root } } }));
+  const sandbox = new Sandbox({ workspace: root, mode: "workspace-write" });
+  if (sandbox.runner === "none") return;
+  if (process.platform === "linux" && spawnSync("bwrap", ["--unshare-pid", "--ro-bind", "/", "/", "--", "true"], { stdio: "ignore" }).status !== 0) return;
   const manager = new McpManager(root);
   try {
-    const started = await manager.start(new Sandbox({ workspace: root, mode: "workspace-write" }));
+    const started = await manager.start(sandbox);
     const connection = started.connections.find(item => item.name === "local");
     expect(connection?.local).toBe(true);
     expect(connection?.tools.map(tool => tool.name)).toEqual(["write_file"]);
@@ -47,6 +51,8 @@ it("runs a local stdio MCP server inside the workspace sandbox", async () => {
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }, 30_000);
+
+
 
 
 
