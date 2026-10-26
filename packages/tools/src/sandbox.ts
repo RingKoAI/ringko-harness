@@ -43,7 +43,25 @@ function canonicalDirectory(path: string): string {
 
 function within(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+  if (rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) return true;
+  if (process.platform !== "win32") return false;
+  // A Windows realpath can retain an 8.3 spelling. Resolve ancestry by file
+  // identity when lexical components differ, without trusting string prefixes.
+  const boundary = statSync(root, { bigint: true });
+  if (!boundary.isDirectory() || boundary.ino === 0n) return false;
+  let ancestor = candidate;
+  for (let depth = 0; depth <= MAX_NEW_PATH_DEPTH; depth += 1) {
+    try {
+      const entry = statSync(ancestor, { bigint: true });
+      if (entry.isDirectory() && entry.dev === boundary.dev && entry.ino === boundary.ino) return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const parent = dirname(ancestor);
+    if (parent === ancestor) return false;
+    ancestor = parent;
+  }
+  return false;
 }
 
 function detectRunner(): SandboxRunner {

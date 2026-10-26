@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { executeTool } from "@ringko-ai/harness";
 import { Sandbox, SandboxDeniedError, SandboxUnavailableError, createWorkspace, createWriteTool } from "../src/index.ts";
 
@@ -73,6 +74,21 @@ describe("Sandbox", () => {
     const readOnly = new Sandbox({ workspace, mode: "read-only", runner: "bwrap" });
     const blocked = createWriteTool(createWorkspace(workspace), undefined, readOnly);
     await expect(executeTool(blocked, { path: "inside.txt", content: "y" }, approve)).rejects.toBeInstanceOf(SandboxDeniedError);
+  });
+
+  it("authorizes the same Windows directory through short and long path spellings", async () => {
+    if (process.platform !== "win32") return;
+    const workspace = join(dir, "workspace with a long name");
+    await mkdir(workspace);
+    const result = spawnSync("cmd.exe", ["/d", "/s", "/c", `for %I in ("${workspace}") do @echo %~fsI`], { encoding: "utf8", windowsVerbatimArguments: true });
+    expect(result.status).toBe(0);
+    const shortPath = result.stdout.trim();
+    expect(shortPath.length).toBeGreaterThan(0);
+    const sandbox = new Sandbox({ workspace: shortPath });
+    const write = createWriteTool(createWorkspace(workspace), undefined, sandbox);
+    const written = await executeTool(write, { path: "inside.txt", content: "allowed" }, async () => true);
+    expect(written).toMatchObject({ path: "inside.txt" });
+    expect(() => sandbox.assertWrite(join(dir, "outside.txt"))).toThrow(SandboxDeniedError);
   });
 });
 
