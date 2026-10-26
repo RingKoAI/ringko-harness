@@ -66,8 +66,9 @@ ringko --workspace /path/to/project --server http://127.0.0.1:8787
 CLI、TUI 与 Web 聊天都支持 `task`，`mode` 可取 `"read"`、`"write"` 或 `"full"`。
 `write` 模式自动放行对 workspace 的编辑；`full` 模式打开父级已配置的全部能力。子任务
 拥有独立上下文，并可选一个宿主已配置的模型。任务与 shell 都支持后台执行、事件订阅与取消；
-完成后会用结果恢复父模型。`ask` 在 TUI/Web 中渲染提问；`todowrite`/`todoread` 负责
-会话计划的持久化与恢复。任务与作业工具的上限、权限边界记录在仓库之外的维护者笔记中。
+完成后会用结果恢复父模型。`ask` 在 TUI/Web 中渲染提问；`update_plan`/`plan` 负责
+会话计划的持久化与恢复：`plan` 读取，`update_plan` 整表替换。已有会话计划及保存的权限/工作流规则仍有效。
+任务与作业工具的上限、权限边界记录在仓库之外的维护者笔记中。
 
 ### 会话轨迹
 
@@ -101,6 +102,23 @@ CLI、TUI 与 Web 聊天都支持 `task`，`mode` 可取 `"read"`、`"write"` �
 它支持深度/条目上限、隐藏文件与排除项控制，超出 workspace 的路径需要审批。
 
 ## 模型供应商
+
+后端统一解析模型 Token 限制，并将同一结果用于上下文 API 和 SDK 压缩预算；WebUI/TUI 从后端获取上限。
+未填写的容量字段由 [Models.dev](https://models.dev/api.json) 自动补全。
+RingKo 自行维护 `~/.ringko/cache/models-<来源哈希>.json`，并附带离线元数据快照。
+缓存或快照立即可用；过期一小时后，在使用模型时触发后台刷新，失败后间隔五分钟重试。
+下载、校验或落盘失败时保留旧数据。`RINGKO_MODELS_URL` 可指定公共 JSON 镜像，目录请求不携带供应商凭证。
+每日快照工作流同时更新模型名称和容量元数据。
+
+手动配置的 `contextWindow`、`maxInputTokens`、`maxOutputTokens` 优先于目录字段；为兼容旧配置，
+仅设置 `maxInputTokens` 时仍将其作为窗口覆盖值。匹配依据供应商地址/标识、精确模型 ID 和无歧义的
+canonical ID；自定义别名可用 `catalogId: "provider/model-id"` 指定映射，不会改变实际请求中的模型 ID。
+本地模型需显式映射才使用目录容量。自动补全结果不会写回用户配置，也不会放入模型提示词。
+
+总上下文窗口和输入上限分开处理。默认预留输出为 4,096 Tokens，并受目录中的最大输出量约束；
+显式 `maxOutputTokens` 会覆盖该预算。未匹配模型沿用统一的 128,000 Tokens 回退窗口，
+它是运行预算，并非探测出的容量。独立使用 SDK 时也采用同一份默认值，或使用宿主传入的限制。
+Models.dev 的授权声明包含在 [NOTICE](NOTICE) 中。
 
 模型供应商适配自 [Vercel AI SDK](https://ai-sdk.dev)。`@ringko-ai/providers` 把任意
 AI SDK 语言模型包装成 harness 的 `ModelClient`；工具循环与审批门仍由 harness 持有

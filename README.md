@@ -76,8 +76,9 @@ Write mode auto-approves workspace edits; full mode opens all parent-configured
 capabilities. Children have independent context and may select a configured model.
 Task and shell support background execution, event subscriptions and cancellation;
 completion resumes the parent model with results. `ask` renders questions in TUI/Web;
-`todowrite`/`todoread` persist and restore the session plan. Task and job tool
-limits and permission boundaries are documented in maintainer notes kept
+`plan` reads the session plan and `update_plan` replaces the full list.
+Existing session plan snapshots and saved permission/workflow rules remain valid.
+Task and job tool limits and permission boundaries are documented in maintainer notes kept
 outside this repository.
 
 ### Session trajectory
@@ -118,6 +119,30 @@ an OS `tree` command through `shell`. It supports depth/entry limits, hidden-fil
 and exclusion controls, and external-path approval.
 
 ## Providers
+
+The backend resolves model token limits once and uses them for both context API
+responses and SDK compaction. WebUI/TUI clients read the backend's context limit.
+Missing capacity fields are filled from [Models.dev](https://models.dev/api.json).
+RingKo owns its cache under `~/.ringko/cache/models-<source-hash>.json` and ships an
+offline metadata snapshot. Cached/snapshot data is available immediately; access
+triggers a background refresh after one hour, with a five-minute retry delay on
+failure. Failed downloads or writes retain previous metadata. `RINGKO_MODELS_URL`
+can select a public JSON mirror; provider credentials are never sent to this URL.
+The daily snapshot workflow updates both model names and capacity metadata.
+
+Explicit model `contextWindow`, `maxInputTokens`, and `maxOutputTokens` win over
+catalog fields. Legacy `maxInputTokens` alone still overrides the context window.
+Matching uses provider endpoints/identities, exact model IDs and unambiguous
+canonical IDs; `catalogId: "provider/model-id"` maps a custom alias without changing
+the requested model ID. Local models require this explicit mapping to use catalog
+metadata. Automatic values are not saved into user configuration or model prompts.
+
+The total context window and input-only cap are distinct. The normal reserved
+output budget is 4,096 tokens, capped by the catalog's output ceiling; an explicit
+`maxOutputTokens` replaces that budget. Unmatched models use the shared 128,000-token
+window, a running budget rather than a detected capacity. Standalone SDK callers
+use the same defaults unless their host supplies limits. Models.dev's notice is
+included in [NOTICE](NOTICE).
 
 Model providers are adapted from the [Vercel AI SDK](https://ai-sdk.dev).
 `@ringko-ai/providers` wraps any AI SDK language model as a harness
