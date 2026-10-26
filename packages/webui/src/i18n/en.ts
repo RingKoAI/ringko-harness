@@ -118,6 +118,7 @@ export const en = {
   'thinking.max': 'Max',
   'thinking.changed': 'Reasoning effort changed.',
   'todo.title': 'Tasks',
+  'todo.compactTitle': 'Tasks',
   'todo.status.pending': 'Pending',
   'todo.status.in_progress': 'In progress',
   'todo.status.completed': 'Completed',

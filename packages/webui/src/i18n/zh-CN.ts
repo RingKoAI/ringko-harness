@@ -119,6 +119,7 @@ export const zhCN: Record<MessageKey, string> = {
   'thinking.max': '最高',
   'thinking.changed': '已切换思考程度。',
   'todo.title': '任务清单',
+  'todo.compactTitle': '任务',
   'todo.status.pending': '待处理',
   'todo.status.in_progress': '进行中',
   'todo.status.completed': '已完成',

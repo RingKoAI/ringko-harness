@@ -21,24 +21,29 @@ describe('task presentation', () => {
     expect(todoLabel({ ...items[1], activeForm: ' ' })).toBe('Run checks')
   })
 
-  it('renders real status, accessible progress and read-only official checkboxes', () => {
+  it('defaults to a collapsed summary with the current task instead of a large list', () => {
     const html = renderToStaticMarkup(<I18nProvider><TodoListCard todos={items} /></I18nProvider>)
-    expect(html).toContain('role="progressbar"')
-    expect(html).toContain('aria-valuenow="33"')
-    expect(html).toContain('data-state="loading"')
-    expect(html).toContain('data-task-state="in_progress"')
-    expect(html).toContain('data-slot="checkbox"')
+    expect(html).toContain('aria-expanded="false"')
     expect(html).toContain('Running checks')
-    expect(html).toContain('Run checks')
-    expect(html).toContain('disabled=""')
+    expect(html).not.toContain('role="listitem"')
+    expect(html).not.toContain('role="progressbar"')
+  })
+
+  it('expands into compact read-only rows with the original active-task text available', () => {
+    const html = renderToStaticMarkup(<I18nProvider><TodoListCard todos={items} defaultOpen /></I18nProvider>)
+    expect(html).toContain('aria-expanded="true"')
+    expect(html).toContain('data-task-state="in_progress"')
+    expect(html.match(/role="listitem"/g)).toHaveLength(3)
+    expect(html).toContain('Running checks')
+    expect(html).toContain('title="Run checks"')
+    expect(html).not.toContain('role="checkbox"')
     expect(html).not.toContain('Inspecting files')
   })
 
   it('hides empty lists and displays completed progress without an active spinner', () => {
     expect(renderToStaticMarkup(<I18nProvider><TodoListCard todos={[]} /></I18nProvider>)).toBe('')
-    const html = renderToStaticMarkup(<I18nProvider><TodoListCard todos={[items[0]]} /></I18nProvider>)
-    expect(html).toContain('aria-valuenow="100"')
-    expect(html).toContain('data-state="complete"')
+    const html = renderToStaticMarkup(<I18nProvider><TodoListCard todos={[items[0]]} defaultOpen /></I18nProvider>)
+    expect(html).toContain('data-task-state="completed"')
     expect(html).not.toContain('animate-spin')
   })
 })

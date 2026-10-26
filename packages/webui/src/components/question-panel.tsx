@@ -10,7 +10,7 @@ function Questions({ request }: { request: QuestionRequest }) {
   const { t } = useI18n()
   const [answers, setAnswers] = useState<QuestionOutput['answers']>(request.input.questions.map(question => ({ id: question.id, selected: [] })))
   const ready = answers.every(answer => answer.selected.length > 0 || Boolean(answer.custom?.trim()))
-  return <section aria-label={t('ask.title')} className="mx-auto mb-3 max-h-[50vh] max-w-3xl space-y-4 overflow-auto rounded-xl border bg-card p-4">
+  return <section aria-label={t('ask.title')} className="mb-3 w-full max-h-[50vh] space-y-4 overflow-auto rounded-xl border bg-card p-4">
     <h3 className="text-sm font-semibold">{t('ask.title')}</h3>
     {request.input.questions.map((question, index) => <fieldset key={question.id} className="space-y-2">
       <legend className="text-sm font-medium">{question.header ? `${question.header} · ` : ''}{question.question}</legend>

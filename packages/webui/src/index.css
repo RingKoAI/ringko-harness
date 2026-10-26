@@ -160,6 +160,31 @@ body {
   color: var(--shiki-dark);
 }
 
+/* Transcript text and composer text share one width axis. Only the card paints
+   a surface; the composer seat remains transparent across the conversation. */
+.chat-layout {
+  container-type: inline-size;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  --chat-content-width: clamp(680px, 64cqw, 920px);
+  --chat-card-width: calc(var(--chat-content-width) + 32px);
+}
+
+.chat-column {
+  width: 100%;
+  min-width: 0;
+  max-width: var(--chat-card-width);
+  margin-inline: auto;
+}
+
+/* Radix's inline table wrapper otherwise lets long code set the column width. */
+[data-chat-scroll] [data-slot='scroll-area-viewport'] > div {
+  display: block !important;
+}
+
 /* GFM tasks use the same read-only marker as the live task panel. Keep copy
    decoration separate from nested lists so completed parents do not strike
    through unfinished children. These scoped rules override prose list spacing. */

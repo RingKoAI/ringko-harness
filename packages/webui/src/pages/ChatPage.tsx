@@ -141,19 +141,21 @@ function MessageRow({
   const isUser = message.role === 'user'
   const isTool = message.role === 'tool'
   return (
-    <div className="group flex gap-3.5">
-      <div
-        className={cn(
-          'mt-0.5 grid size-7 shrink-0 place-items-center rounded-full ring-1 ring-border',
-          isUser ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
-        )}
-      >
-        {isUser ? <User className="size-3.5" /> : isTool ? <Terminal className="size-3.5" /> : <Brain className="size-3.5" />}
-      </div>
-      <div className="min-w-0 flex-1 space-y-2">
+    <div className="group min-w-0 space-y-2" data-chat-message>
+      <div className="flex items-center gap-2">
+        <div
+          className={cn(
+            'mt-0.5 grid size-7 shrink-0 place-items-center rounded-full ring-1 ring-border',
+            isUser ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
+          )}
+        >
+          {isUser ? <User className="size-3.5" /> : isTool ? <Terminal className="size-3.5" /> : <Brain className="size-3.5" />}
+        </div>
         <div className="text-xs font-medium text-muted-foreground">
           {isUser ? t('message.you') : isTool ? t('message.tool', { name: message.name ?? '' }) : t('message.assistant')}
         </div>
+      </div>
+      <div className="min-w-0 space-y-2">
         {message.reasoning && showThinking ? (
           <Card className="gap-0 border-dashed bg-muted/30 py-0 shadow-none">
             <CardContent className="px-3 py-2">
@@ -278,7 +280,7 @@ export function ChatPage() {
     if (!id && app.sessionId) navigate(`/${app.sessionId}`, { replace: true })
   }, [id, app.sessionId, navigate])
 
-  // Refresh the context-usage ring as the conversation grows.
+  // Refresh on conversation growth or backend-resolved capacity changes.
   useEffect(() => {
     if (!app.sessionId) {
       setContext(null)
@@ -289,11 +291,13 @@ export function ChatPage() {
       .then((usage) => {
         if (!cancelled) setContext({ used: usage.used, limit: usage.limit })
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled) setContext(null)
+      })
     return () => {
       cancelled = true
     }
-  }, [app.sessionId, app.messages.length, app.info?.modelId])
+  }, [app.sessionId, app.messages.length, app.info?.modelId, app.info?.context.limit])
 
   async function onFiles(files: FileList | null): Promise<void> {
     if (!files || files.length === 0) return
@@ -393,14 +397,15 @@ export function ChatPage() {
     draft.startsWith('/') && !draft.includes(' ') ? COMMANDS.filter((command) => command.name.startsWith(draft.slice(1))) : []
 
   return (
-    <>
+    <div className="chat-layout">
       <div className="flex shrink-0 gap-1 border-b px-3 py-2">
         <Button size="sm" variant={view === 'chat' ? 'secondary' : 'ghost'} aria-pressed={view === 'chat'} onClick={() => setView('chat')}><MessageSquare />{t('trajectory.chat')}</Button>
         <Button size="sm" variant={view === 'trajectory' ? 'secondary' : 'ghost'} aria-pressed={view === 'trajectory'} onClick={() => setView('trajectory')}><Activity />{t('trajectory.title')}</Button>
         <Button size="sm" variant="ghost" onClick={() => openRightSidebar('files')}><ListTree />{t('workspace.title')}</Button>
       </div>
-      {view === 'trajectory' ? <TrajectoryView key={app.sessionId ?? 'new'} sessionId={app.sessionId} /> : !empty ? <ScrollArea className="min-h-0 flex-1">
-          <div className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
+      {view === 'trajectory' ? <TrajectoryView key={app.sessionId ?? 'new'} sessionId={app.sessionId} /> : !empty ? <ScrollArea data-chat-scroll className="min-h-0 flex-1">
+        <div className="px-3 sm:px-4">
+          <div className="chat-column flex min-w-0 flex-col gap-6 px-4 py-6 [overflow-wrap:anywhere]" data-chat-transcript>
             {app.messages.map((message, index) => message.role === 'system' || toolActivity.attached.has(index) ? null : (
               <MessageRow
                 key={index}
@@ -428,12 +433,14 @@ export function ChatPage() {
               </div>
             ) : null}
           </div>
+        </div>
       </ScrollArea> : null}
 
-      <div className={cn(landing
-        ? 'flex min-h-0 flex-1 flex-col justify-center overflow-y-auto px-4 py-8 sm:px-8'
-        : 'shrink-0 border-t bg-background/60 p-3 backdrop-blur sm:p-4')}>
-        {landing ? <div className="mx-auto mb-6 flex w-full max-w-[850px] flex-col gap-6">
+      <div data-chat-composer-seat className={cn(landing
+        ? 'flex min-h-0 flex-1 flex-col justify-center overflow-y-auto px-3 py-8 sm:px-4'
+        : 'shrink-0 px-3 pt-2 pb-3 sm:px-4 sm:pb-4')}>
+        <div className="chat-column">
+        {landing ? <div className="mb-6 flex w-full flex-col gap-6">
           <div className="flex items-center justify-center gap-3">
             <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-lg font-semibold text-primary-foreground" aria-hidden="true">R</span>
             <LandingGreeting />
@@ -447,7 +454,7 @@ export function ChatPage() {
           </div>
         </div> : null}
         {app.loop ? (
-          <div aria-live="off" className="mx-auto mb-2 flex w-full max-w-3xl items-center gap-2 text-xs text-muted-foreground">
+          <div aria-live="off" className="mb-2 flex w-full items-center gap-2 text-xs text-muted-foreground">
             <span className="inline-block size-2 animate-pulse rounded-full bg-primary" aria-hidden="true" />
             <span>{t('loop.running', { iteration: app.loop.iteration })}{app.loop.maxIterations > 0 ? ` / ${app.loop.maxIterations}` : ''}{app.loop.promise ? ` → ${app.loop.promise}` : ''}</span>
           </div>
@@ -455,7 +462,7 @@ export function ChatPage() {
         <TodoPanel />
         <QuestionPanel />
         <QueuePanel key={app.sessionId ?? 'new'} />
-        <div className={cn("mx-auto w-full rounded-2xl border bg-card shadow-sm transition-all focus-within:ring-2 focus-within:ring-ring/40", landing ? "max-w-[850px]" : "max-w-3xl")}>
+        <div data-chat-composer className="w-full rounded-2xl border bg-card shadow-sm transition-all focus-within:ring-2 focus-within:ring-ring/40">
           {commandHints.length > 0 ? (
             <div className="flex flex-col gap-0.5 px-2 pt-2">
               {commandHints.map((command) => (
@@ -584,9 +591,10 @@ export function ChatPage() {
             </div>
           </div>
         </div>
-        {!landing ? <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-muted-foreground">{t('composer.hint')}</p> : null}
+        {!landing ? <p className="mt-2 text-center text-[11px] text-muted-foreground">{t('composer.hint')}</p> : null}
+        </div>
       </div>
       <ToolLogSheet open={toolLogOpen} onOpenChange={setToolLogOpen} sessionId={app.sessionId} busy={app.busy} />
-    </>
+    </div>
   )
 }
