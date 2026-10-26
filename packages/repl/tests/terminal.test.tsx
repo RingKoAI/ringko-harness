@@ -31,6 +31,12 @@ function terminal() {
 // Ink batches frames; wait beyond its default 32ms render interval.
 const settle = () => new Promise(resolve => setTimeout(resolve, 50));
 
+async function waitForRender(predicate: () => boolean, description: string): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!predicate() && Date.now() < deadline) await settle();
+  if (!predicate()) throw new Error(`Timed out waiting for terminal render: ${description}`);
+}
+
 describe("terminal component interactions", () => {
   it("uses cached model capacity when an embedded host resumes and submits a plan", async () => {
     const io = terminal();
@@ -233,18 +239,23 @@ describe("terminal component interactions", () => {
     };
     const app = render(<Repl workspace={root} model={model} modelLabel="Echo/alpha" config={{ model: "Echo/alpha", providers: [{ name: "Echo", type: "echo", models: [{ name: "alpha", id: "alpha" }, { name: "beta", id: "beta" }] }] }} createModel={async () => model} />, { stdin: io.input as unknown as NodeJS.ReadStream, stdout: io.output as unknown as NodeJS.WriteStream, stderr: io.output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
     try {
-      await settle(); expect(io.read()).toContain("What would you like to work on?");
+      await waitForRender(() => io.read().includes("What would you like to work on?"), "initial welcome");
+      expect(io.read()).toContain("What would you like to work on?");
       const beforeFirstPrompt = io.read().length;
       await settle(); io.input.write("first"); await settle(); io.input.write("\r"); await settle();
+      await waitForRender(() => io.read().slice(beforeFirstPrompt).split("\u001b[?2026h").at(-1)?.includes("offline answer") === true, "first reply");
       expect(captured).toHaveLength(1);
       expect(io.read().slice(beforeFirstPrompt).split("\u001b[?2026h").at(-1)).not.toContain("What would you like to work on?");
       io.input.write("\x10"); await settle();
       io.input.write("second"); await settle(); io.input.write("\r"); await settle();
+      await waitForRender(() => captured.length === 2, "second request");
       expect(captured[1].some(message => message.content === "first")).toBe(true);
       const beforeNewSession = io.read().length;
       io.input.write("/new"); await settle(); io.input.write("\r"); await settle();
+      await waitForRender(() => io.read().slice(beforeNewSession).includes("What would you like to work on?"), "new-session welcome");
       expect(io.read().slice(beforeNewSession)).toContain("What would you like to work on?");
       io.input.write("third"); await settle(); io.input.write("\r"); await settle();
+      await waitForRender(() => captured.length === 3, "third request");
       expect(captured[2].map(message => message.content)).toEqual(["third"]);
     } finally {
       app.unmount(); io.input.destroy(); io.output.destroy();
