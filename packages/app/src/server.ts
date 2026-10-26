@@ -157,6 +157,7 @@ const MAX_ACTIVE_RUNS = 8;
 const META_TIMEOUT_MS = 30_000;
 const MAX_TERMINAL_SESSIONS = 4;
 const TERMINAL_SESSION_TTL_MS = 30 * 60 * 1000;
+const TERMINAL_START_TIMEOUT_MS = 10_000;
 
 interface TerminalSocketData {
   terminalId: string;
@@ -297,6 +298,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     return controller;
   }
   const terminalSessions = new Map<string, TerminalSession>();
+  let pendingTerminals = 0;
   const baseWorkspace = workspace;
   let projects = (() => {
     try {
@@ -1581,13 +1583,13 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     session.cleanupTimer.unref?.();
   }
 
-  function startInteractiveTerminal(
+  async function startInteractiveTerminal(
     shell: string,
     args: string[],
     cwd: string,
     cols: number,
     rows: number,
-  ): InteractiveTerminal {
+  ): Promise<InteractiveTerminal> {
     const nodePath = Bun.which("node");
     if (!nodePath) throw new Error("Interactive terminals require Node.js in PATH.");
     const bridgePath = join(import.meta.dir, "terminal-bridge.mjs");
@@ -1602,13 +1604,26 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     let errorHandler: (message: string) => void = () => {};
     let exitHandler: (event: { exitCode: number; signal?: number }) => void = () => {};
     let exitReceived = false;
+    let startupSettled = false;
+    let resolveStartup!: () => void;
+    let rejectStartup!: (error: Error) => void;
+    const ready = new Promise<void>((resolve, reject) => { resolveStartup = resolve; rejectStartup = reject; });
+    const startupTimer = setTimeout(() => failStartup(new Error("Terminal bridge startup timed out.")), TERMINAL_START_TIMEOUT_MS);
+    const failStartup = (error: Error) => {
+      if (startupSettled) return;
+      startupSettled = true;
+      clearTimeout(startupTimer);
+      rejectStartup(error);
+    };
 
     const sendControl = (message: Record<string, unknown>): void => {
       try {
         child.stdin.write(`${JSON.stringify(message)}\n`);
         child.stdin.flush();
       } catch (cause) {
-        errorHandler(cause instanceof Error ? cause.message : String(cause));
+        const error = cause instanceof Error ? cause : new Error(String(cause));
+        failStartup(error);
+        errorHandler(error.message);
       }
     };
 
@@ -1626,8 +1641,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     };
 
     void new Response(child.stderr).text().then((stderr) => {
-      if (stderr.trim() && !exitReceived) errorHandler(stderr.trim());
-    });
+      if (stderr.trim() && !exitReceived) { failStartup(new Error(stderr.trim())); errorHandler(stderr.trim()); }
+    }).catch(cause => failStartup(cause instanceof Error ? cause : new Error(String(cause))));
 
     void (async () => {
       const reader = child.stdout.getReader();
@@ -1644,8 +1659,12 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
             pending = pending.slice(newline + 1);
             if (line) {
               const event = JSON.parse(line) as { type?: unknown; data?: unknown; message?: unknown; exitCode?: unknown; signal?: unknown };
-              if (event.type === "output" && typeof event.data === "string") dataHandler(event.data);
-              else if (event.type === "error" && typeof event.message === "string") errorHandler(event.message);
+              if (event.type === "ready" && !startupSettled) {
+                startupSettled = true;
+                clearTimeout(startupTimer);
+                resolveStartup();
+              } else if (event.type === "output" && typeof event.data === "string") dataHandler(event.data);
+              else if (event.type === "error" && typeof event.message === "string") { failStartup(new Error(event.message)); errorHandler(event.message); }
               else if (event.type === "exit") {
                 exitReceived = true;
                 exitHandler({
@@ -1660,21 +1679,25 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         pending += decoder.decode();
         if (pending.trim()) throw new Error("Terminal bridge ended with an incomplete event.");
       } catch (cause) {
-        errorHandler(cause instanceof Error ? cause.message : String(cause));
+        const error = cause instanceof Error ? cause : new Error(String(cause));
+        failStartup(error);
+        errorHandler(error.message);
       } finally {
         reader.releaseLock();
         const exitCode = await child.exited;
+        failStartup(new Error(`Terminal bridge exited before becoming ready (exit ${exitCode}).`));
         if (!exitReceived) exitHandler({ exitCode });
       }
     })();
 
     sendControl({ type: "start", shell, args, cwd, cols, rows });
-    return terminal;
+    try { await ready; return terminal; }
+    catch (error) { child.kill(); await child.exited; throw error; }
   }
 
   async function handleCreateTerminal(request: Request): Promise<Response> {
     if (!terminalOriginAllowed(request)) return json({ error: "Terminal requests must come from this server's origin." }, 403);
-    if (terminalSessions.size >= MAX_TERMINAL_SESSIONS) {
+    if (terminalSessions.size + pendingTerminals >= MAX_TERMINAL_SESSIONS) {
       return json({ error: `At most ${MAX_TERMINAL_SESSIONS} terminal sessions may be active.` }, 429);
     }
     let body: { cols?: unknown; rows?: unknown } | undefined;
@@ -1705,13 +1728,14 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       ? (shell.toLowerCase().includes("powershell") ? ["-NoLogo", "-NoExit"] : [])
       : ["-i"];
     let terminal: InteractiveTerminal;
+    pendingTerminals += 1;
     try {
       const sandbox = new Sandbox({ workspace, mode: config.sandbox?.mode ?? "workspace-write", additionalWritableRoots: config.sandbox?.additionalWritableRoots });
       const wrapped = sandbox.pty(shell, args, workspace);
-      terminal = startInteractiveTerminal(wrapped.executable, wrapped.args, wrapped.cwd, cols, rows);
+      terminal = await startInteractiveTerminal(wrapped.executable, wrapped.args, wrapped.cwd, cols, rows);
     } catch (cause) {
       return json({ error: cause instanceof Error ? cause.message : "Could not start a terminal." }, 500);
-    }
+    } finally { pendingTerminals -= 1; }
 
     const id = randomUUID();
     const session: TerminalSession = { terminal, exited: false, pendingOutput: "" };

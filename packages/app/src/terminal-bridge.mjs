@@ -41,6 +41,7 @@ controls.on("line", (line) => {
         emit({ type: "exit", exitCode, signal });
         process.stdout.write("", () => process.exit(0));
       });
+      emit({ type: "ready" });
     } catch (error) {
       reportError(error);
       process.exitCode = 1;

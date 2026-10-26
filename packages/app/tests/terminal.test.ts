@@ -44,6 +44,7 @@ it("starts an authenticated interactive PTY and streams command output over WebS
       headers,
       body: JSON.stringify({ cols: 80, rows: 24 }),
     });
+    if (created.status !== 200) throw new Error(`Terminal startup failed (HTTP ${created.status}): ${await created.text()}`);
     expect(created.status).toBe(200);
     const { id } = await created.json() as { id: string };
 
@@ -62,11 +63,14 @@ it("starts an authenticated interactive PTY and streams command output over WebS
 
     const output = new Promise<string>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error("Interactive shell did not return command output.")), 2_500);
+      let received = "";
       socket!.addEventListener("message", (event) => {
-        const message = JSON.parse(String(event.data)) as { type: string; data?: string };
-        if (message.type === "output" && message.data?.includes("RINGKO_PTY_READY")) {
+        const message = JSON.parse(String(event.data)) as { type: string; data?: string; message?: string };
+        if (message.type === "error") { clearTimeout(timeout); reject(new Error(message.message ?? "Terminal bridge failed.")); return; }
+        if (message.type === "output") received += message.data ?? "";
+        if (received.includes("RINGKO_PTY_READY")) {
           clearTimeout(timeout);
-          resolve(message.data);
+          resolve(received);
         }
       });
     });
@@ -101,6 +105,32 @@ it("starts an authenticated interactive PTY and streams command output over WebS
     rmSync(root, { recursive: true, force: true });
   }
 }, process.platform === "win32" ? 30_000 : 15_000);
+
+it("returns a startup error when the PTY shell cannot be spawned", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rkh-terminal-failure-"));
+  const previousHome = process.env.RINGKO_HOME;
+  const shellVariable = process.platform === "win32" ? "COMSPEC" : "SHELL";
+  const previousShell = process.env[shellVariable];
+  process.env.RINGKO_HOME = root;
+  process.env[shellVariable] = join(root, "missing-shell-executable");
+  mkdirSync(join(root, ".ringko"), { recursive: true });
+  writeFileSync(join(root, ".ringko", "settings.local.json"), JSON.stringify({ sandbox: { mode: "danger-full-access" } }));
+  const app = startServer({ workspace: root, port: 0, authToken: "terminal-failure-token" });
+  try {
+    const response = await fetch(`${app.url}/api/terminal`, {
+      method: "POST",
+      headers: { origin: app.url, authorization: "Bearer terminal-failure-token", "content-type": "application/json" },
+      body: JSON.stringify({ cols: 80, rows: 24 }),
+    });
+    expect(response.status).toBe(500);
+    expect((await response.json() as { error: string }).error.length).toBeGreaterThan(0);
+  } finally {
+    app.stop();
+    if (previousHome === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previousHome;
+    if (previousShell === undefined) delete process.env[shellVariable]; else process.env[shellVariable] = previousShell;
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}, 15_000);
 
 
 
