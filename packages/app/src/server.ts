@@ -1724,6 +1724,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     const shell = process.platform === "win32"
       ? process.env.COMSPEC ?? "powershell.exe"
       : process.env.SHELL ?? "/bin/bash";
+    const shellExecutable = Bun.which(shell);
+    if (!shellExecutable) return json({ error: `Interactive shell is unavailable: ${shell}` }, 500);
     const args = process.platform === "win32"
       ? (shell.toLowerCase().includes("powershell") ? ["-NoLogo", "-NoExit"] : [])
       : ["-i"];
@@ -1731,7 +1733,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     pendingTerminals += 1;
     try {
       const sandbox = new Sandbox({ workspace, mode: config.sandbox?.mode ?? "workspace-write", additionalWritableRoots: config.sandbox?.additionalWritableRoots });
-      const wrapped = sandbox.pty(shell, args, workspace);
+      const wrapped = sandbox.pty(shellExecutable, args, workspace);
       terminal = await startInteractiveTerminal(wrapped.executable, wrapped.args, wrapped.cwd, cols, rows);
     } catch (cause) {
       return json({ error: cause instanceof Error ? cause.message : "Could not start a terminal." }, 500);
