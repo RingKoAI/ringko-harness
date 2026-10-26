@@ -1,7 +1,23 @@
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
+import { accessSync, chmodSync, constants, existsSync, lstatSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const require = createRequire(import.meta.url);
+// The macOS launcher is an executable shipped beside the native addon. Some
+// package extractors omit its executable bit; repair only this dependency asset.
+if (process.platform === "darwin") {
+  const packageRoot = dirname(require.resolve("node-pty/package.json"));
+  for (const directory of ["build/Release", "build/Debug", `prebuilds/${process.platform}-${process.arch}`]) {
+    if (!existsSync(join(packageRoot, directory, "pty.node"))) continue;
+    const helper = join(packageRoot, directory, "spawn-helper");
+    const metadata = lstatSync(helper);
+    if (!metadata.isFile()) throw new Error("The PTY spawn helper must be a regular dependency file.");
+    if ((metadata.mode & 0o111) === 0) chmodSync(helper, metadata.mode | 0o100);
+    accessSync(helper, constants.X_OK);
+    break;
+  }
+}
 const pty = require("node-pty");
 const controls = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let terminal;
