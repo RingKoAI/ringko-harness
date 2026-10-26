@@ -3,7 +3,7 @@ import { ToolRegistry } from "@ringko-ai/harness";
 import { createTodoStore, registerSessionTools } from "../src/index.ts";
 
 describe("registerSessionTools", () => {
-  it("registers todowrite and ask, and shares the store", async () => {
+  it("registers update_plan, plan and ask, and shares the store", async () => {
     const registry = new ToolRegistry();
     const seen: string[] = [];
     const store = registerSessionTools(registry, {
@@ -13,16 +13,16 @@ describe("registerSessionTools", () => {
       ask: async () => ({ answers: [{ id: "go", selected: ["Yes"] }] }),
     });
 
-    expect(registry.names()).toEqual(["todowrite", "todoread", "ask"]);
-    expect(registry.get("todowrite")?.concurrency).toBe("exclusive");
+    expect(registry.names()).toEqual(["update_plan", "plan", "ask"]);
+    expect(registry.get("update_plan")?.concurrency).toBe("exclusive");
     expect(registry.get("ask")?.concurrency).toBe("exclusive");
 
-    await registry.call("todowrite", {
+    await registry.call("update_plan", {
       todos: [{ content: "ship ask", status: "in_progress", activeForm: "shipping" }],
     });
     expect(store.todos).toHaveLength(1);
     expect(seen).toEqual(["in_progress"]);
-    expect(await registry.call("todoread", {})).toMatchObject({ todos: [{ content: "ship ask", status: "in_progress" }] });
+    expect(await registry.call("plan", {})).toMatchObject({ todos: [{ content: "ship ask", status: "in_progress" }] });
 
     const answer = await registry.call("ask", {
       questions: [{ id: "go", question: "Ship it?", options: [{ label: "Yes" }] }],
@@ -36,8 +36,21 @@ describe("registerSessionTools", () => {
     const returned = registerSessionTools(registry, { todos: existing });
 
     expect(returned).toBe(existing);
-    expect(registry.names()).toEqual(["todowrite", "todoread"]);
+    expect(registry.names()).toEqual(["update_plan", "plan"]);
+    expect(registry.has("todowrite")).toBe(false);
+    expect(registry.has("todoread")).toBe(false);
     expect(registry.has("ask")).toBe(false);
+  });
+
+  it("keeps plan read-only, rejects nonempty arguments and returns independent snapshots", async () => {
+    const registry = new ToolRegistry();
+    const store = registerSessionTools(registry);
+    store.todos = [{ content: "Existing plan", status: "pending" }];
+    expect(registry.get("plan")?.taskAccess).toBe("read");
+    const result = await registry.call("plan", {}) as { todos: Array<{ content: string }> };
+    result.todos[0].content = "Changed copy";
+    expect(store.todos[0].content).toBe("Existing plan");
+    await expect(registry.call("plan", { todos: [] })).rejects.toThrow("empty object");
   });
 
   it("does not ask for approval and rejects a bad question", async () => {
@@ -49,7 +62,7 @@ describe("registerSessionTools", () => {
       throw new Error("session tools must not request approval");
     };
     await expect(
-      registry.call("todowrite", { todos: [{ content: "note", status: "pending" }] }, deny),
+      registry.call("update_plan", { todos: [{ content: "note", status: "pending" }] }, deny),
     ).resolves.toMatchObject({ todos: [{ content: "note" }] });
     await expect(
       registry.call("ask", { questions: [{ id: "q", question: "Anything else?" }] }, deny),

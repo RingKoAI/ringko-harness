@@ -79,6 +79,8 @@ try {
   await script.body?.cancel();
   const info = await (await fetch(`${url}/api/info`, { signal })).json();
   assert.equal(info.context.limit, catalogModel.limit.context, "Bundled offline model metadata was not restored");
+  assert.ok(info.tools.includes("plan") && info.tools.includes("update_plan"), "Plan tools are missing from the packaged backend");
+  assert.ok(!info.tools.includes("todoread") && !info.tools.includes("todowrite"), "Legacy todo names must not be offered to models");
   console.log(`Verified relocated ${manifest.name}@${manifest.version}: CLI, echo, WebUI and offline model capacity.`);
 } finally {
   if (server) {

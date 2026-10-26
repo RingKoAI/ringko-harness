@@ -6,7 +6,7 @@
 // data; hosts ask this package to resolve and route them.
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { workflowsPath } from "@ringko-ai/config";
+import { canonicalToolName, workflowsPath } from "@ringko-ai/config";
 
 export interface WorkflowTools {
   /** When non-empty, only these tool names are allowed. */
@@ -137,9 +137,10 @@ export function resolveWorkflow(id: string | undefined, env: NodeJS.ProcessEnv =
 /** Whether a tool is permitted under a workflow (deny wins; empty allow = all). */
 export function workflowAllowsTool(workflow: Workflow, toolName: string): boolean {
   const deny = workflow.tools?.deny ?? [];
-  if (deny.includes(toolName)) return false;
+  const matches = (name: string) => canonicalToolName(name) === canonicalToolName(toolName);
+  if (deny.some(matches)) return false;
   const allow = workflow.tools?.allow ?? [];
-  return allow.length === 0 || allow.includes(toolName);
+  return allow.length === 0 || allow.some(matches);
 }
 
 /** The workflow's extra instructions (trimmed), or an empty string. */

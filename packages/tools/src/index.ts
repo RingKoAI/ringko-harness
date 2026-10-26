@@ -119,7 +119,7 @@ export function registerShellTools(registry: ToolRegistry, options: ShellOptions
 }
 
 export interface SessionToolsOptions {
-  /** Shared list the `todowrite` tool replaces. Created when omitted. */
+  /** Shared list the `update_plan` tool replaces. Created when omitted. */
   todos?: TodoStore;
   /** Notified whenever the todo list changes. Ignored when `todos` is set. */
   onTodosChange?: (todos: TodoItem[]) => void;
@@ -131,7 +131,7 @@ export interface SessionToolsOptions {
 }
 
 /**
- * Register the in-session tools: `todowrite`, `todoread`, and `ask` when an answerer is
+ * Register the in-session tools: `update_plan`, `plan`, and `ask` when an answerer is
  * supplied. Returns the store the host UI can read.
  */
 export function registerSessionTools(registry: ToolRegistry, options: SessionToolsOptions = {}): TodoStore {

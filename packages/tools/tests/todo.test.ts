@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { executeTool } from "@ringko-ai/harness";
 import { createTodoStore, createTodoTool } from "../src/todo.ts";
 
-describe("todowrite", () => {
+describe("update_plan", () => {
   it("retains the previous snapshot when persistence fails", async () => {
     const store = createTodoStore(() => { throw new Error("Disk full"); });
     store.todos = [{ content: "Previous", status: "pending" }];
@@ -22,7 +22,7 @@ describe("todowrite", () => {
         ],
       },
       async () => {
-        throw new Error("todowrite must not request approval");
+        throw new Error("update_plan must not request approval");
       },
     );
 

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { ringkoRoot, writeDiagnostic } from "@ringko-ai/config";
+import { canonicalToolName, ringkoRoot, writeDiagnostic } from "@ringko-ai/config";
 import type { ApprovalHandler } from "./index.ts";
 
 export interface PermissionRule { tool: string; target?: string; behavior: "allow" | "deny" | "ask" }
@@ -19,7 +19,7 @@ function validateRules(value: unknown): PermissionRule[] {
   });
 }
 
-/** Exact tool and assessed-target matching; grants never originate in model input. */
+/** Canonical tool-name and exact assessed-target matching; grants never originate in model input. */
 export class PermissionManager {
   readonly path: string;
   private readonly sessions = new Map<string, PermissionRule[]>();
@@ -47,7 +47,7 @@ export class PermissionManager {
     return validateRules(parsed.rules);
   }
   decide(session: string, tool: string, target?: string): "allow" | "deny" | "ask" | "default" {
-    const rules = [...this.saved(), ...(this.sessions.get(session) ?? [])].filter(rule => rule.tool === tool && (rule.target === undefined || rule.target === target));
+    const rules = [...this.saved(), ...(this.sessions.get(session) ?? [])].filter(rule => canonicalToolName(rule.tool) === canonicalToolName(tool) && (rule.target === undefined || rule.target === target));
     for (const behavior of ["deny", "ask", "allow"] as const) if (rules.some(rule => rule.behavior === behavior)) return behavior;
     return "default";
   }

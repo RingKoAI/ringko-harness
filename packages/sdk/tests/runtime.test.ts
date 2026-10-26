@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineTool } from "@ringko-ai/harness";
 import { saveWorkflowFile } from "@ringko-ai/workflow";
+import { SessionStore, sessionTodos } from "@ringko-ai/session";
 import { RuntimeManager } from "../src/runtime.ts";
 
 async function isolated(test: (directory: string) => Promise<void>) {
@@ -18,6 +19,33 @@ async function isolated(test: (directory: string) => Promise<void>) {
     rmSync(directory, { recursive: true, force: true });
   }
 }
+
+it("restores historical task snapshots through plan and persists update_plan changes", async () => isolated(async directory => {
+  const store = new SessionStore({ root: join(directory, "sessions") });
+  const session = store.create();
+  session.appendEvent("session/todo", { todos: [{ content: "Historical step", status: "pending" }] });
+  session.flush();
+  const runtime = new RuntimeManager(directory);
+  let turns = 0;
+  const managed = runtime.createAgent({}, { session, model: async request => {
+    expect(request.tools.some(tool => tool.name === "plan")).toBe(true);
+    expect(request.tools.some(tool => tool.name === "update_plan")).toBe(true);
+    expect(request.tools.some(tool => tool.name === "todoread" || tool.name === "todowrite")).toBe(false);
+    if (++turns === 1) return { content: "", toolCalls: [{ id: "read-plan", name: "plan", arguments: {} }] };
+    if (turns === 2) {
+      expect(request.messages.at(-1)?.content).toContain("Historical step");
+      return { content: "", toolCalls: [{ id: "write-plan", name: "update_plan", arguments: { todos: [{ content: "Historical step", status: "completed" }] } }] };
+    }
+    return { content: "done", toolCalls: [] };
+  } });
+  try {
+    expect((await managed.agent.run("Complete the historical plan")).content).toBe("done");
+    expect(sessionTodos(session.all())).toEqual([{ content: "Historical step", status: "completed" }]);
+    runtime.permissions.add(session.id, { tool: "todowrite", behavior: "deny" }, "saved");
+    await expect(managed.agent.tools.call("update_plan", { todos: [] })).rejects.toThrow();
+    expect(sessionTodos(session.all())).toEqual([{ content: "Historical step", status: "completed" }]);
+  } finally { managed.close(); await runtime.close(); session.close(); }
+}));
 
 it("applies ambient instructions, workflow policy, permission and ordered hooks", async () => isolated(async directory => {
   writeFileSync(join(directory, "AGENTS.md"), "Project guidance");

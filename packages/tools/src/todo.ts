@@ -60,19 +60,20 @@ function parseTodos(value: unknown): TodoInput {
   return { todos };
 }
 
-/** Replace the session todo list. Safe: local state only. */
+/** Read the current session plan. Safe: local state only. */
 export function createTodoReadTool(store: TodoStore): ToolDefinition<Record<string, never>, TodoOutput> {
-  return defineTool({ name: "todoread", taskAccess: "read", description: "Read the current session todo list, including pending, in_progress and completed items.", inputSchema: { type: "object", properties: {}, additionalProperties: false }, parseInput: value => {
-    if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length) throw new TypeError("todoread expects an empty object.");
+  return defineTool({ name: "plan", taskAccess: "read", description: "Read the current session plan, including pending, in_progress and completed steps. Use update_plan to create or replace the plan.", inputSchema: { type: "object", properties: {}, additionalProperties: false }, parseInput: value => {
+    if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length) throw new TypeError("plan expects an empty object.");
     return {};
-  }, assessRisk: () => ({ kind: "safe", reason: "Read session todos." }), execute: () => ({ todos: store.todos.map(todo => ({ ...todo })) }) });
+  }, assessRisk: () => ({ kind: "safe", reason: "Read the session plan." }), execute: () => ({ todos: store.todos.map(todo => ({ ...todo })) }) });
 }
+/** Replace the complete session plan and publish its persisted snapshot to the host. */
 export function createTodoTool(store: TodoStore): ToolDefinition<TodoInput, TodoOutput> {
   return defineTool<TodoInput, TodoOutput>({
-    name: "todowrite",
+    name: "update_plan",
     concurrency: "exclusive",
     description:
-      "Create and update the session task list. Send the full list each time; status is pending, in_progress, or completed.",
+      "Create or update the session plan. Send the complete todos array each time; step status is pending, in_progress, or completed. Use plan to read the current steps. An empty array clears the plan.",
     inputSchema: {
       type: "object",
       properties: {
@@ -94,7 +95,7 @@ export function createTodoTool(store: TodoStore): ToolDefinition<TodoInput, Todo
     },
     parseInput: parseTodos,
     assessRisk() {
-      return { kind: "safe", reason: "Update the in-memory task list." };
+      return { kind: "safe", reason: "Update the session plan." };
     },
     execute({ todos }) {
       const next = todos.map((todo) => ({ ...todo }));

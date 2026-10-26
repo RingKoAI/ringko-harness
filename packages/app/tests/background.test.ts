@@ -13,7 +13,7 @@ function completion(model: string, content: string, calls: Array<{ id: string; n
   return Response.json({ id: "fixture", object: "chat.completion", created: 1, model, choices: [{ index: 0, message: { role: "assistant", content, ...(calls.length ? { tool_calls: calls.map(call => ({ id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } })) } : {}) }, finish_reason: calls.length ? "tool_calls" : "stop" }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } });
 }
 
-it("serves ask answers, todo persistence, sub/shell subscriptions and parent continuation", async () => {
+it("serves ask answers, plan persistence, sub/shell subscriptions and parent continuation", async () => {
   const root = mkdtempSync(join(tmpdir(), "rkh-background-api-"));
   const previousHome = process.env.RINGKO_HOME; process.env.RINGKO_HOME = root;
   let childDone!: () => void;
@@ -24,7 +24,7 @@ it("serves ask answers, todo persistence, sub/shell subscriptions and parent con
     if (body.model === "child") { await child; return completion("child", "child findings", [], false); }
     if (++turns === 1) return completion("parent", "", [
       { id: "ask", name: "ask", arguments: { questions: [{ id: "scope", question: "Which scope?", options: [{ label: "Auth" }, { label: "All" }] }] } },
-      { id: "todo", name: "todowrite", arguments: { todos: [{ content: "Review auth", status: "in_progress" }] } },
+      { id: "plan-update", name: "update_plan", arguments: { todos: [{ content: "Review auth", status: "in_progress" }] } },
       { id: "sub", name: "task", arguments: { description: "Inspect auth", prompt: "Inspect auth", mode: "read", model: "Mock/child" } },
       { id: "shell", name: "shell", arguments: { command: "echo fixture-output", background: true } },
     ]);

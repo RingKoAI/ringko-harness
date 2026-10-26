@@ -3,6 +3,7 @@ export * from "./config.ts";
 export * from "./context.ts";
 export * from "./model-metadata.ts";
 export * from "./model-cache.ts";
+export * from "./tool-names.ts";
 export * from "./auth.ts";
 export * from "./tool-auth.ts";
 export * from "./catalog.ts";
