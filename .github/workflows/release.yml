@@ -4,6 +4,15 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag to backfill (requires artifact_run_id)
+        type: string
+        required: false
+      artifact_run_id:
+        description: Successful release run containing the original binaries
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -14,6 +23,7 @@ concurrency:
 
 jobs:
   binaries:
+    if: ${{ !inputs.artifact_run_id }}
     name: ${{ matrix.artifact }}
     strategy:
       fail-fast: false
@@ -69,7 +79,7 @@ jobs:
   npm:
     name: Publish npm package
     needs: binaries
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && !inputs.artifact_run_id
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -127,3 +137,116 @@ jobs:
       - name: Publish to npmjs with OIDC
         working-directory: dist/npm-tui
         run: npm publish --access public --tag "${{ steps.version.outputs.tag }}"
+
+  github-release:
+    name: Publish GitHub Release
+    needs: [binaries, npm]
+    if: >-
+      ${{ always() &&
+          ((startsWith(github.ref, 'refs/tags/v') && needs.binaries.result == 'success' && needs.npm.result == 'success') ||
+           (github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && inputs.artifact_run_id != '')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+      ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id || github.run_id }}
+      WORKFLOW_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release_tag || github.ref_name }}
+
+      - name: Validate tag and original build
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('packages/tui/package.json', 'utf8'));
+          if (!/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(process.env.RELEASE_TAG) || process.env.RELEASE_TAG !== `v${version}`) {
+            throw new Error('Release tag must match the tagged CLI version.');
+          }
+          if (!/^[0-9]+$/.test(process.env.ARTIFACT_RUN_ID)) throw new Error('Invalid artifact run ID.');
+          NODE
+          if [ "$ARTIFACT_RUN_ID" != "$GITHUB_RUN_ID" ]; then
+            gh api "repos/$GH_REPO/actions/runs/$ARTIFACT_RUN_ID" > "$RUNNER_TEMP/source-run.json"
+            jq -e --arg tag "$RELEASE_TAG" --arg sha "$(git rev-parse HEAD)" --arg repo "$GH_REPO" '
+              .conclusion == "success" and .event == "push" and .head_branch == $tag and
+              .head_sha == $sha and .head_repository.full_name == $repo and
+              .path == ".github/workflows/release.yml"
+            ' "$RUNNER_TEMP/source-run.json" > /dev/null
+          fi
+          mkdir -p "$RUNNER_TEMP/release-stage" "$RUNNER_TEMP/release-assets"
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/release-artifacts
+          run-id: ${{ inputs.artifact_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Read versioned release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          NOTES="CHANGELOG/$RELEASE_TAG.md"
+          if [ -f "$NOTES" ]; then
+            cp "$NOTES" "$RUNNER_TEMP/release-notes.md"
+          elif gh api "repos/$GH_REPO/contents/$NOTES?ref=$WORKFLOW_SHA" --jq .content > "$RUNNER_TEMP/release-notes.base64"; then
+            base64 --decode "$RUNNER_TEMP/release-notes.base64" > "$RUNNER_TEMP/release-notes.md"
+          fi
+
+      - name: Package standalone downloads
+        working-directory: ${{ runner.temp }}/release-stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64; do
+            binary="ringko-$target"
+            entry="ringko"
+            if [ "$target" = "windows-x64" ]; then binary="$binary.exe"; entry="ringko.exe"; fi
+            source="$RUNNER_TEMP/release-artifacts/$binary"
+            test -s "$source/$binary"
+            test -f "$source/webui/index.html"
+            bundle="ringko-$RELEASE_TAG-$target"
+            mkdir "$bundle"
+            cp "$source/$binary" "$bundle/$entry"
+            if [ "$target" != "windows-x64" ]; then chmod 755 "$bundle/$entry"; fi
+            cp -R "$source/webui" "$bundle/webui"
+            cp "$GITHUB_WORKSPACE/LICENSE" "$GITHUB_WORKSPACE/NOTICE" "$bundle/"
+            if [ -s "$RUNNER_TEMP/release-notes.md" ]; then
+              mkdir "$bundle/CHANGELOG"
+              cp "$RUNNER_TEMP/release-notes.md" "$bundle/CHANGELOG/$RELEASE_TAG.md"
+            fi
+            if [ "$target" = "windows-x64" ]; then
+              zip -qr "$RUNNER_TEMP/release-assets/$bundle.zip" "$bundle"
+            else
+              tar -czf "$RUNNER_TEMP/release-assets/$bundle.tar.gz" "$bundle"
+            fi
+          done
+          test "$("$RUNNER_TEMP/release-stage/ringko-$RELEASE_TAG-linux-x64/ringko" version)" = "ringko ${RELEASE_TAG#v}"
+          cd "$RUNNER_TEMP/release-assets"
+          sha256sum ./*.tar.gz ./*.zip > SHA256SUMS.txt
+
+      - name: Publish release and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            if [ -s "$RUNNER_TEMP/release-notes.md" ]; then
+              gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+            else
+              gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes
+            fi
+          elif [ -s "$RUNNER_TEMP/release-notes.md" ]; then
+            gh release edit "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP"/release-assets/* --clobber
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease
+          else
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest
+          fi
