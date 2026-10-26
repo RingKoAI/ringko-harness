@@ -7,6 +7,7 @@ import { BackendClient } from "@ringko-ai/client";
 import { startServer } from "../src/server.ts";
 
 const TOKEN = "tool-stage-token";
+type CapturedTool = { function?: { name?: string; parameters?: { properties?: { name?: { enum?: string[] } } } } };
 
 function completion(model: string, content: string, calls: Array<{ id: string; name: string; arguments: unknown }> = []): Response {
   const frame = (delta: unknown, finish: string | null) => `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", created: 1, model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
@@ -42,9 +43,9 @@ it("registers, discovers and executes an MCP tool with recorded events", async (
     }
     return Response.json({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "unknown" } });
   } });
-  let requestTools: string[] = [];
+  const requestTools: string[][] = [];
   const chat = provider((turn, body) => {
-    requestTools = Array.isArray(body.tools) ? (body.tools as Array<{ function?: { name?: string } }>).flatMap(tool => tool.function?.name ? [tool.function.name] : []) : [];
+    if (Array.isArray(body.tools) && body.tools.length > 0) requestTools.push((body.tools as CapturedTool[]).flatMap(tool => tool.function?.name ? [tool.function.name] : []));
     return turn === 1
       ? completion("parent", "", [{ id: "mcp-call", name: "fixture__echo", arguments: { text: "mcp-ok" } }])
       : completion("parent", "mcp done");
@@ -75,7 +76,8 @@ it("registers, discovers and executes an MCP tool with recorded events", async (
     expect(response.status).toBe(200);
     await response.text();
     expect(mcpCalls).toBe(1);
-    expect(requestTools).toContain("fixture__echo");
+    expect(requestTools).toHaveLength(2);
+    for (const tools of requestTools) expect(tools).toContain("fixture__echo");
     const client = new BackendClient({ url: app.url, token: TOKEN, workspace: root });
     const session = await client.sessions();
     const snapshot = await client.snapshot(session[0]!.id);
@@ -106,9 +108,9 @@ it("lists project/global skills with precedence and exposes them for execution",
   writeFileSync(join(globalAlpha, "SKILL.md"), "---\nname: alpha\ndescription: Global alpha\n---\nGlobal alpha instructions");
   writeFileSync(join(globalBeta, "SKILL.md"), "---\nname: beta\ndescription: Global beta\n---\nGlobal beta instructions");
   mkdirSync(join(home, ".ringko", "skills", "broken"), { recursive: true });
-  let requestTools: Array<{ function?: { name?: string; parameters?: { properties?: { name?: { enum?: string[] } } } } }> = [];
+  const requestTools: CapturedTool[][] = [];
   const chat = provider((turn, body) => {
-    requestTools = Array.isArray(body.tools) ? body.tools as typeof requestTools : [];
+    if (Array.isArray(body.tools) && body.tools.length > 0) requestTools.push(body.tools as CapturedTool[]);
     return turn === 1
       ? completion("parent", "", [{ id: "skill-call", name: "skill", arguments: { name: "alpha" } }])
       : completion("parent", "skill done");
@@ -129,9 +131,12 @@ it("lists project/global skills with precedence and exposes them for execution",
     const response = await fetch(`${app.url}/api/chat`, { method: "POST", headers: headers(), body: JSON.stringify({ prompt: "Use the project skill" }) });
     expect(response.status).toBe(200);
     await response.text();
-    const skillTool = requestTools.find(tool => tool.function?.name === "skill");
-    expect(skillTool?.function?.parameters?.properties?.name?.enum).toEqual(expect.arrayContaining(["alpha", "beta"]));
-    expect(skillTool?.function?.parameters?.properties?.name?.enum).not.toContain("broken");
+    expect(requestTools).toHaveLength(2);
+    for (const tools of requestTools) {
+      const skillTool = tools.find(tool => tool.function?.name === "skill");
+      expect(skillTool?.function?.parameters?.properties?.name?.enum).toEqual(expect.arrayContaining(["alpha", "beta"]));
+      expect(skillTool?.function?.parameters?.properties?.name?.enum).not.toContain("broken");
+    }
     const client = new BackendClient({ url: app.url, token: TOKEN, workspace: root });
     const snapshot = await client.snapshot((await client.sessions())[0]!.id);
     const result = snapshot.events.find(event => event.type === "tool/result" && event.data?.name === "skill");
