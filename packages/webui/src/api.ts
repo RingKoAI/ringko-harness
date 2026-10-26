@@ -54,6 +54,8 @@ export interface ModelDefinition {
   thinking?: boolean;
   vision?: boolean;
   toolCalling?: boolean;
+  contextWindow?: number;
+  catalogId?: string;
   maxInputTokens?: number;
   maxOutputTokens?: number;
   url?: string;

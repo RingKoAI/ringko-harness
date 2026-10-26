@@ -73,16 +73,8 @@
       "name": "GPT-5.2"
     },
     {
-      "id": "gpt-5.2-chat-latest",
-      "name": "GPT-5.2 Chat"
-    },
-    {
       "id": "gpt-5.2-pro",
       "name": "GPT-5.2 Pro"
-    },
-    {
-      "id": "gpt-5.3-chat-latest",
-      "name": "GPT-5.3 Chat (latest)"
     },
     {
       "id": "gpt-5.3-codex",
@@ -143,6 +135,18 @@
     {
       "id": "gpt-6-sol",
       "name": "GPT-6 Sol"
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "name": "GPT-6.1 Sol"
+    },
+    {
+      "id": "gpt-daybreak-blue-latest",
+      "name": "Daybreak Blue"
+    },
+    {
+      "id": "gpt-daybreak-red-latest",
+      "name": "Daybreak Red"
     },
     {
       "id": "gpt-image-1",
@@ -219,6 +223,10 @@
       "name": "Claude Haiku 4.5"
     },
     {
+      "id": "claude-haiku-5-5",
+      "name": "Claude Haiku 5.5"
+    },
+    {
       "id": "claude-opus-4-5",
       "name": "Claude Opus 4.5 (latest)"
     },
@@ -261,6 +269,10 @@
     {
       "id": "claude-sonnet-5",
       "name": "Claude Sonnet 5"
+    },
+    {
+      "id": "claude-sonnet-5-5",
+      "name": "Claude Sonnet 5.5"
     }
   ],
   "google": [
@@ -373,6 +385,10 @@
       "name": "Gemini 3.8 Flash"
     },
     {
+      "id": "gemini-4-argon",
+      "name": "Gemini 4 Argon"
+    },
+    {
       "id": "gemini-embedding-001",
       "name": "Gemini Embedding 001"
     },
@@ -393,6 +409,10 @@
       "name": "Gemini Omni Flash Preview"
     },
     {
+      "id": "gemini-pro-latest",
+      "name": "Gemini Pro Latest"
+    },
+    {
       "id": "gemma-4-26b-a4b-it",
       "name": "Gemma 4 26B A4B IT"
     },
@@ -407,18 +427,6 @@
     {
       "id": "lyria-3-pro-preview",
       "name": "Lyria 3 Pro Preview"
-    },
-    {
-      "id": "veo-3.1-fast-generate-preview",
-      "name": "Veo 3.1 fast"
-    },
-    {
-      "id": "veo-3.1-generate-preview",
-      "name": "Veo 3.1"
-    },
-    {
-      "id": "veo-3.1-lite-generate-preview",
-      "name": "Veo 3.1 lite"
     }
   ],
   "github-copilot": [
@@ -433,6 +441,10 @@
     {
       "id": "claude-haiku-4.5",
       "name": "Claude Haiku 4.5 (latest)"
+    },
+    {
+      "id": "claude-haiku-5.5",
+      "name": "Claude Haiku 5.5"
     },
     {
       "id": "claude-opus-4.7",
@@ -459,6 +471,10 @@
       "name": "Claude Sonnet 5"
     },
     {
+      "id": "claude-sonnet-5.5",
+      "name": "Claude Sonnet 5.5"
+    },
+    {
       "id": "gemini-3.5-flash",
       "name": "Gemini 3.5 Flash"
     },
@@ -473,6 +489,10 @@
     {
       "id": "gemini-3.8-flash",
       "name": "Gemini 3.8 Flash"
+    },
+    {
+      "id": "gemini-4-argon",
+      "name": "Gemini 4 Argon"
     },
     {
       "id": "gpt-5-mini",
@@ -523,6 +543,10 @@
       "name": "GPT-6 Sol"
     },
     {
+      "id": "gpt-6.1-sol",
+      "name": "GPT-6.1 Sol"
+    },
+    {
       "id": "grok-4.5",
       "name": "Grok 4.5"
     },
@@ -541,10 +565,6 @@
     {
       "id": "kimi-k3",
       "name": "Kimi K3"
-    },
-    {
-      "id": "mai-code-1-flash-picker",
-      "name": "MAI-Code-1-Flash"
     },
     {
       "id": "mai-code-1.1-flash",

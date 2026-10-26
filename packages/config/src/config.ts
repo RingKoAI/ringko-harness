@@ -20,6 +20,10 @@ export interface ModelDefinition {
   thinking?: boolean;
   vision?: boolean;
   toolCalling?: boolean;
+  /** Total context window; populated from Models.dev when not configured. */
+  contextWindow?: number;
+  /** Optional exact Models.dev provider/model mapping for a custom alias. */
+  catalogId?: string;
   maxInputTokens?: number;
   maxOutputTokens?: number;
   /** Optional per-model chat-completions URL (base URL is derived from it). */

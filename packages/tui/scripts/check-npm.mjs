@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -23,6 +23,17 @@ try {
   delete env.RINGKO_SERVER;
   delete env.RINGKO_WEBUI_DIR;
   delete env.RINGKO_WEB_TOKEN;
+  // A relocated bundle must resolve offline capacity without source JSON files.
+  const metadata = JSON.parse(readFileSync(resolve(import.meta.dir, "../../config/models.metadata.json"), "utf8"));
+  const [catalogProvider, catalogEntry] = Object.entries(metadata)[0];
+  const [catalogModel] = Object.values(catalogEntry.models);
+  const configRoot = join(env.RINGKO_HOME, ".ringko");
+  mkdirSync(configRoot, { recursive: true });
+  writeFileSync(join(configRoot, "provider.json"), JSON.stringify({
+    model: "Smoke/alias",
+    providers: [{ name: "Smoke", type: "echo", models: [{ id: "alias", name: "Offline model", catalogId: `${catalogProvider}/${catalogModel.id}` }] }],
+  }));
+  env.RINGKO_MODELS_URL = "http://127.0.0.1:0/catalog.json";
 
   for (const [args, expected] of [
     [["version"], `ringko ${manifest.version}`],
@@ -66,7 +77,9 @@ try {
   assert.ok(script.ok, `Packaged WebUI asset failed: ${script.status}`);
   assert.match(script.headers.get("content-type") ?? "", /javascript/);
   await script.body?.cancel();
-  console.log(`Verified relocated ${manifest.name}@${manifest.version}: CLI, echo and WebUI.`);
+  const info = await (await fetch(`${url}/api/info`, { signal })).json();
+  assert.equal(info.context.limit, catalogModel.limit.context, "Bundled offline model metadata was not restored");
+  console.log(`Verified relocated ${manifest.name}@${manifest.version}: CLI, echo, WebUI and offline model capacity.`);
 } finally {
   if (server) {
     server.kill();

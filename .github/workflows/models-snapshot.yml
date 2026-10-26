@@ -32,13 +32,13 @@ jobs:
       - name: Commit changes
         run: |
           set -euo pipefail
-          FILE="packages/config/models.dev.json"
-          if [ -z "$(git status --short -- "$FILE")" ]; then
+          FILES=(packages/config/models.dev.json packages/config/models.metadata.json)
+          if [ -z "$(git status --short -- "${FILES[@]}")" ]; then
             echo "No changes to commit"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "$FILE"
+          git add "${FILES[@]}"
           git commit -m "chore(config): refresh model catalog snapshot"
           git push

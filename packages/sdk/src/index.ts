@@ -30,7 +30,7 @@ import {
   type SessionHandle,
 } from "@ringko-ai/session";
 import { createScheduleTool, createSubscribeTool, Scheduler, type EventLog } from "@ringko-ai/runtime";
-import { recordUsage } from "@ringko-ai/config";
+import { recordUsage, resolveContextLimits } from "@ringko-ai/config";
 import { TaskManager, type TaskEvent } from "./task.ts";
 export { TASK_LIMITS, TaskManager } from "./task.ts";
 export type { TaskInput, TaskMode, TaskResult, TaskEvent, TaskStatus } from "./task.ts";
@@ -134,8 +134,10 @@ export interface RingKoConfig {
   onJobEvent?: (event: JobEvent) => void;
   /** Cheaper model used for session titles and compaction (defaults to `model`). */
   smallModel?: ModelClient;
-  /** Model context window in tokens (used for the compaction budget). */
+  /** Host-resolved context window. Standalone callers use the shared config default when omitted. */
   contextWindow?: number;
+  /** Optional input-only cap, independent of the shared context window. */
+  maxInputTokens?: number;
   /** Reserved output tokens, subtracted from the context window. */
   reserveOutputTokens?: number;
   /** Automatic compaction settings. */
@@ -233,9 +235,10 @@ export function createRingKo(config: RingKoConfig): RingKo {
     ...(config.compaction ?? {}),
   };
   const summarizer: ModelClient = config.smallModel ? trackModel(config.smallModel) : recordingModel;
+  const contextLimits = resolveContextLimits(config);
   const historyTokens = (): number => estimateMessagesTokens(history) + estimateToolsTokens(tools.list());
   const budget = (): number =>
-    Math.max(1024, (config.contextWindow ?? 128_000) - (config.reserveOutputTokens ?? 4096) - compaction.margin);
+    Math.max(1024, Math.min(contextLimits.maxInputTokens ?? Infinity, contextLimits.contextWindow - contextLimits.reserveOutputTokens) - compaction.margin);
   const overThreshold = (extra = 0): boolean =>
     compaction.enabled && (lastInputTokens ?? historyTokens()) + extra >= budget() * compaction.ratio;
 

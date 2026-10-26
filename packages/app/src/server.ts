@@ -49,6 +49,8 @@ import {
   loadProviders,
   knownModels,
   modelLabel,
+  resolveContextLimits,
+  ModelCatalogCache,
   OAUTH_DOMAINS,
   PROVIDER_PRESETS,
   removeOAuthAccount,
@@ -104,7 +106,7 @@ import {
   type SessionEvent,
   type SessionHandle,
 } from "@ringko-ai/session";
-import { loadModel } from "./model.ts";
+import { loadModel as resolveLoadedModel } from "./model.ts";
 import { WorkspaceReview } from "./workspace-review.ts";
 import { RuntimeManager, registerRuntimeTools, type RuntimeAgent } from "@ringko-ai/sdk/runtime";
 import { PROTOCOL_VERSION } from "@ringko-ai/protocol";
@@ -236,6 +238,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   const activeRuns = new Map<string, AbortController>();
   const activeHandles = new Map<string, SessionHandle>();
   const sync = new SyncManager();
+  const modelCatalog = new ModelCatalogCache({ onRefresh: () => sync.publish("config") });
+  const loadModel = (config: RingkoConfig) => resolveLoadedModel(config, modelCatalog);
   const runStates = new RunStateManager();
   // Single-threaded reservation: persistence validation and ownership happen without an await boundary.
   function beginRun(session: SessionHandle, record: () => void): AbortController {
@@ -342,7 +346,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       })),
       context: {
         used: estimateToolsTokens(tools.tools.list()),
-        limit: typeof model === "string" ? 128_000 : (model.selection.model.maxInputTokens ?? 128_000),
+        limit: (typeof model === "string" ? resolveContextLimits() : model.limits).contextWindow,
       },
       thinking: config.thinking ?? null,
       expandThinking: config.expandThinking ?? false,
@@ -964,8 +968,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         history,
         modelId: model.selection.model.id,
         ...(small && typeof small !== "string" ? { smallModel: small.client } : {}),
-        ...(model.selection.model.maxInputTokens ? { contextWindow: model.selection.model.maxInputTokens } : {}),
-        ...(model.selection.model.maxOutputTokens ? { reserveOutputTokens: model.selection.model.maxOutputTokens } : {}),
+        ...model.limits,
         ...(config.compaction ? { compaction: config.compaction } : {}),
       });
       const result = await ringko.compact(typeof body?.instructions === "string" ? body.instructions : undefined);
@@ -1118,7 +1121,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     if (typeof config === "string") return json({ error: config }, 500);
     const model = await loadModel(config);
     if (typeof model === "string") return json({ error: model }, 400);
-    const limit = model.selection.model.maxInputTokens ?? 128_000;
+    const limit = model.limits.contextWindow;
     let used: number;
     try {
       const history = toChatMessages(store.open(id, "read").all());
@@ -1337,8 +1340,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
             history,
             modelId: model.selection.model.id,
             ...(small && typeof small !== "string" ? { smallModel: small.client } : {}),
-            ...(model.selection.model.maxInputTokens ? { contextWindow: model.selection.model.maxInputTokens } : {}),
-            ...(model.selection.model.maxOutputTokens ? { reserveOutputTokens: model.selection.model.maxOutputTokens } : {}),
+            ...model.limits,
             ...(config.compaction ? { compaction: config.compaction } : {}),
             ...(isAccessMode(config.permission)
               ? { accessMode: config.permission }
@@ -1773,7 +1775,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname === "/api/backend" && request.method === "GET") return json({ protocol: PROTOCOL_VERSION, instance: sync.instance, workspace, configPath: options.configPath ? resolve(options.configPath) : null });
       if (url.pathname === "/api/backend/stop" && request.method === "POST") {
         if (activeRuns.size) return json({ error: "Stop active sessions before stopping the backend." }, 409);
-        setTimeout(() => { sync.close(); stopTimeSource(); for (const id of terminalSessions.keys()) removeTerminal(id, true); for (const runtime of runtimes.values()) void runtime.close().catch(error => writeDiagnostic("runtime.close", String(error))); server.stop(true); }, 50);
+        setTimeout(() => { modelCatalog.dispose(); sync.close(); stopTimeSource(); for (const id of terminalSessions.keys()) removeTerminal(id, true); for (const runtime of runtimes.values()) void runtime.close().catch(error => writeDiagnostic("runtime.close", String(error))); server.stop(true); }, 50);
         return json({ ok: true });
       }
       if (url.pathname === "/api/sync" && request.method === "GET") return sync.stream(request.signal);
@@ -1935,6 +1937,6 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   return {
     url: `http://${host}:${boundPort}`,
     port: boundPort,
-    stop: () => { sync.close(); stopTimeSource(); for (const run of activeRuns.values()) run.abort(); for (const id of terminalSessions.keys()) removeTerminal(id, true); for (const runtime of runtimes.values()) void runtime.close().catch(() => {}); server.stop(true); },
+    stop: () => { modelCatalog.dispose(); sync.close(); stopTimeSource(); for (const run of activeRuns.values()) run.abort(); for (const id of terminalSessions.keys()) removeTerminal(id, true); for (const runtime of runtimes.values()) void runtime.close().catch(() => {}); server.stop(true); },
   };
 }
