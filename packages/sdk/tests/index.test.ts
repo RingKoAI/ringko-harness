@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionStore } from "@ringko-ai/session";
-import { recordAssistantMessage, toChatMessages } from "@ringko-ai/session";
+import { recordAssistantMessage, sessionUsage, toChatMessages } from "@ringko-ai/session";
 import { createRingKo, type ModelClient, type ToolDefinition } from "../src/index.ts";
 
 const echo: ToolDefinition<{ text: string }, string> = {
@@ -110,5 +110,30 @@ describe("RingKo SDK facade", () => {
     expect(() => createRingKo({ model: undefined as unknown as ModelClient })).toThrow(
       "RingKo requires a model client.",
     );
+  });
+
+  it("records primary and alternate delegated-model usage exactly once in the same session", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ringko-session-usage-"));
+    const previous = process.env.RINGKO_HOME; process.env.RINGKO_HOME = root;
+    try {
+      const store = new SessionStore({ root: join(root, "sessions") });
+      const session = store.create();
+      let turns = 0;
+      const ringko = createRingKo({
+        session, task: true, modelId: "parent", taskModels: ["Fixture/child"],
+        resolveTaskModel: async () => async () => ({ content: "child result", toolCalls: [], usage: { inputTokens: 30, outputTokens: 5, cacheReadTokens: 15 } }),
+        model: async () => ++turns === 1
+          ? { content: "", toolCalls: [{ id: "delegate", name: "task", arguments: { description: "Inspect", prompt: "Inspect", mode: "read", model: "Fixture/child" } }], usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 5 } }
+          : { content: "done", toolCalls: [], usage: { inputTokens: 20, outputTokens: 3, cacheReadTokens: 10 } },
+      });
+      await ringko.run("Delegate inspection");
+      session.close();
+      const events = store.open(session.id, "read").all();
+      expect(events.filter(event => event.type === "model/usage")).toHaveLength(3);
+      expect(sessionUsage(events)).toMatchObject({ calls: 3, inputTokens: 60, outputTokens: 10, totalTokens: 70, cacheReadTokens: 30, cacheHitRate: 0.5 });
+    } finally {
+      if (previous === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

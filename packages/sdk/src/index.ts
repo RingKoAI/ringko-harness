@@ -22,6 +22,7 @@ import {
 import {
   recordAgentEvent,
   recordModelCall,
+  recordSessionUsage,
   repairInterruptedToolCalls,
   recordSessionCompaction,
   recordUserMessage,
@@ -185,18 +186,20 @@ export function createRingKo(config: RingKoConfig): RingKo {
   } : undefined;
   const session = config.session;
   // Record token/cache usage for every model call (agent, task, summarizer).
-  const recordingModel: ModelClient = async request => {
-    const turn = await config.model(request);
+  const trackModel = (client: ModelClient, modelId?: string): ModelClient => async request => {
+    const turn = await client(request);
     if (turn.usage) {
-      recordUsage(config.modelId ?? "", {
+      recordUsage(modelId ?? "", {
         ...(turn.usage.inputTokens !== undefined ? { inputTokens: turn.usage.inputTokens } : {}),
         ...(turn.usage.outputTokens !== undefined ? { outputTokens: turn.usage.outputTokens } : {}),
         ...(turn.usage.cacheReadTokens !== undefined ? { cacheReadTokens: turn.usage.cacheReadTokens } : {}),
         ...(turn.usage.cacheWriteTokens !== undefined ? { cacheWriteTokens: turn.usage.cacheWriteTokens } : {}),
       });
+      if (session && recordSessionUsage(session, turn.usage, modelId)) session.flush();
     }
     return turn;
   };
+  const recordingModel = trackModel(config.model, config.modelId);
   const jobs = new JobManager(event => {
     if (session) { session.appendEvent(`job/${event.kind}/${event.type}`, event); session.flush(); }
     config.log?.append("job", event);
@@ -207,7 +210,7 @@ export function createRingKo(config: RingKoConfig): RingKo {
     tools.register(createSubscribeTool(config.log));
     tools.register(createScheduleTool(config.scheduler ?? new Scheduler(config.log)));
   }
-  const tasks = config.task ? new TaskManager({ model: recordingModel, modelId: config.modelId, models: config.taskModels, resolveModel: config.resolveTaskModel, tools, onEvent: event => {
+  const tasks = config.task ? new TaskManager({ model: recordingModel, modelId: config.modelId, models: config.taskModels, resolveModel: config.resolveTaskModel ? async id => trackModel(await config.resolveTaskModel!(id), id) : undefined, tools, onEvent: event => {
     if (session) { session.appendEvent(`task/${event.type}`, event); session.flush(); }
     config.log?.append("task", event);
     config.onTaskEvent?.(event);
@@ -229,7 +232,7 @@ export function createRingKo(config: RingKoConfig): RingKo {
     margin: 2000,
     ...(config.compaction ?? {}),
   };
-  const summarizer: ModelClient = config.smallModel ?? recordingModel;
+  const summarizer: ModelClient = config.smallModel ? trackModel(config.smallModel) : recordingModel;
   const historyTokens = (): number => estimateMessagesTokens(history) + estimateToolsTokens(tools.list());
   const budget = (): number =>
     Math.max(1024, (config.contextWindow ?? 128_000) - (config.reserveOutputTokens ?? 4096) - compaction.margin);

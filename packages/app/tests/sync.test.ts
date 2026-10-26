@@ -3,20 +3,20 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "@ringko-ai/config";
-import { BackendClient, BackendError, type SessionSnapshot } from "@ringko-ai/client";
+import { BackendClient, BackendError, consumeSse, type SessionSnapshot } from "@ringko-ai/client";
 import { startServer } from "../src/server.ts";
 
 const TOKEN = "isolated-fixture-token";
-function completion(content: string, calls: Array<{ id: string; name: string; arguments: unknown }> = []): Response {
+function completion(content: string, calls: Array<{ id: string; name: string; arguments: unknown }> = [], usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; prompt_tokens_details: { cached_tokens: number } }): Response {
   const frame = (delta: unknown, finish: string | null) => `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", created: 1, model: "fixture", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
-  return new Response(frame({ role: "assistant", content, ...(calls.length ? { tool_calls: calls.map((call, index) => ({ index, id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } })) } : {}) }, null) + frame({}, calls.length ? "tool_calls" : "stop") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+  return new Response(frame({ role: "assistant", content, ...(calls.length ? { tool_calls: calls.map((call, index) => ({ index, id: call.id, type: "function", function: { name: call.name, arguments: JSON.stringify(call.arguments) } })) } : {}) }, null) + frame({}, calls.length ? "tool_calls" : "stop") + (usage ? `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", created: 1, model: "fixture", choices: [], usage })}\n\n` : "") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
 }
 async function eventually<T>(read: () => Promise<T>, check: (value: T) => boolean): Promise<T> {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) { const value = await read(); if (check(value)) return value; await Bun.sleep(20); }
   throw new Error("Timed out waiting for synchronized state.");
 }
-function fixture(handler: () => Response | Promise<Response>) {
+function fixture(handler: (request: Request) => Response | Promise<Response>) {
   const root = mkdtempSync(join(tmpdir(), "rkh-sync-"));
   const previous = process.env.RINGKO_HOME; process.env.RINGKO_HOME = root;
   const provider = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler });
@@ -91,5 +91,20 @@ it("sync/snapshot endpoints enforce authentication, origin and workspace boundar
     expect((await fetch(`${setup.app.url}/api/sessions`, { headers: { authorization: `Bearer ${TOKEN}`, "x-ringko-workspace": "%broken" } })).status).toBe(400);
     expect((await fetch(`${setup.app.url}/api/sessions`, { headers: { authorization: `Bearer ${TOKEN}`, "x-ringko-workspace": encodeURIComponent(join(setup.root, "other")) } })).status).toBe(409);
     expect((await fetch(`${setup.app.url}/api/sessions/%ZZ/snapshot`, { headers: { authorization: `Bearer ${TOKEN}` } })).status).toBe(400);
+  } finally { setup.close(); }
+});
+
+it("streams provider-reported usage and restores the same session totals through snapshots", async () => {
+  const setup = fixture(async request => {
+    const body = await request.json();
+    return JSON.stringify(body).includes("label an agent conversation") ? completion("metadata unavailable") : completion("usage reply", [], { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120, prompt_tokens_details: { cached_tokens: 60 } });
+  });
+  try {
+    const client = setup.client(); const session = await client.createSession();
+    const response = await fetch(`${setup.app.url}/api/chat`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ sessionId: session.id, prompt: "usage fixture" }) });
+    const seen: unknown[] = [];
+    await consumeSse(response, (event, data) => { if (event === "usage") seen.push(data); });
+    expect(seen).toContainEqual({ usage: { calls: 1, inputTokens: 100, outputTokens: 20, totalTokens: 120, cacheReadTokens: 60, cacheWriteTokens: null, cacheHitRate: 0.6, cacheReportedCalls: 1, partial: false } });
+    expect((await client.snapshot(session.id)).usage).toMatchObject({ totalTokens: 120, cacheHitRate: 0.6 });
   } finally { setup.close(); }
 });

@@ -1,6 +1,6 @@
 // Typed client for the RingKo local server (see @ringko-ai/app).
-import { BackendClient, consumeSse, type SessionSnapshot } from '@ringko-ai/client';
-export type { SessionSnapshot } from '@ringko-ai/client';
+import { BackendClient, consumeSse, type SessionSnapshot, type TodoItem, type SessionUsage } from '@ringko-ai/client';
+export type { SessionSnapshot, TodoItem, SessionUsage } from '@ringko-ai/client';
 
 export interface Access {
   id: string;
@@ -141,12 +141,7 @@ export interface ServerMessage {
   reasoning?: string;
 }
 
-export type TodoStatus = 'pending' | 'in_progress' | 'completed'
-
-export interface TodoItem {
-  content: string
-  status: TodoStatus
-}
+export type TodoStatus = TodoItem['status']
 
 export interface Approval {
   id: string;
@@ -236,6 +231,7 @@ export interface ChatHandlers {
   onTool(message: { name: string; content: string; toolCallId?: string | null; error: boolean; turn: number }): void;
   onApproval(approval: Approval): void;
   onTodo?(items: TodoItem[]): void;
+  onUsage?(usage: SessionUsage | null): void;
   onLoop?(status: LoopStatus): void;
   onDone(result: { sessionId: string; content: string; turns: number }): void;
   /** A background title/summary update was persisted for this session. */
@@ -924,6 +920,9 @@ export function streamChat(
         break;
       case "todo":
         handlers.onTodo?.(((payload as { items?: TodoItem[] }).items ?? []) as TodoItem[]);
+        break;
+      case "usage":
+        handlers.onUsage?.(payload && typeof payload === 'object' ? (payload as { usage?: SessionUsage | null }).usage ?? null : null);
         break;
       case "loop":
         handlers.onLoop?.(payload as LoopStatus);

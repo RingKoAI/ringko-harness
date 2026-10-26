@@ -16,9 +16,11 @@ export interface I18n {
 const I18nContext = createContext<I18n | null>(null)
 
 function detectLocale(): Locale {
-  const stored = typeof localStorage === 'undefined' ? null : localStorage.getItem(STORAGE_KEY)
+  let stored: string | null = null
+  try { stored = typeof localStorage === 'undefined' ? null : localStorage.getItem(STORAGE_KEY) }
+  catch { /* Use the browser language when storage is unavailable. */ }
   if (stored === 'en' || stored === 'zh-CN') return stored
-  const language = typeof navigator === 'undefined' ? 'en' : navigator.language
+  const language = typeof navigator !== 'undefined' && typeof navigator.language === 'string' ? navigator.language : 'en'
   return language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en'
 }
 

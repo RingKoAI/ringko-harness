@@ -65,7 +65,7 @@ export function trajectoryPage(events: readonly SessionEvent[], options: {
     const data = record(event.data);
     const kind: TrajectoryKind = event.type === "user/message" ? "user"
       : event.type === "assistant/message" ? "assistant"
-      : event.type === "model/call" ? "model"
+      : event.type === "model/call" || event.type === "model/usage" ? "model"
       : event.type.startsWith("tool/") ? "tool"
       : event.type.startsWith("task/") ? "task"
       : event.type === "session/compaction" ? "compaction" : "session";

@@ -2,7 +2,7 @@
 //
 // One record accumulates totals, a per-model breakdown, and a per-day breakdown.
 // Cache read/write tokens come from the provider (AI SDK `inputTokenDetails`);
-// the hit rate is `cacheRead / (input + cacheRead + cacheWrite)`.
+// inputTokens is the total input (already including cache); hit rate is cacheRead / input.
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { usagePath } from "./paths.ts";
@@ -107,6 +107,5 @@ export function recordUsage(model: string, delta: UsageDelta, env: NodeJS.Proces
 
 /** Cache hit rate for a totals bucket: cache reads over all prompt tokens. */
 export function cacheHitRate(totals: UsageTotals): number {
-  const prompt = totals.inputTokens + totals.cacheReadTokens + totals.cacheWriteTokens;
-  return prompt > 0 ? totals.cacheReadTokens / prompt : 0;
+  return totals.inputTokens > 0 ? Math.min(1, Math.max(0, totals.cacheReadTokens / totals.inputTokens)) : 0;
 }

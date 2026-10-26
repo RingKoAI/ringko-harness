@@ -98,6 +98,7 @@ import {
   taskSummaries,
   sessionTodos,
   sessionJobs,
+  sessionUsage,
   toChatMessages,
   type FeedbackValue,
   type SessionEvent,
@@ -1055,6 +1056,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         messages: toChatMessages(events).map(message => message.role === "tool" ? { ...message, failed: message.toolCallId ? failedCalls.has(message.toolCallId) : false } : message),
         tasks: taskSummaries(events, activeRuns.has(id)),
         todos: sessionTodos(events),
+        usage: sessionUsage(events),
         jobs: sessionJobs(events, activeRuns.has(id)),
       });
     } catch (error) {
@@ -1072,6 +1074,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         id, instance: sync.instance, revision: sync.revision,
         title: sessionTitle(events) ?? null, summary: sessionSummary(events) ?? null, archived: sessionArchived(events),
         messages: toChatMessages(events), events, busy,
+        usage: sessionUsage(events),
         tasks: taskSummaries(events, busy), todos: sessionTodos(events), jobs: sessionJobs(events, busy),
         approvals: [...(state?.approvals.values() ?? [])], questions: [...(state?.questions.values() ?? [])],
         partial: state?.partial ?? null, loop: state?.loop ?? null,
@@ -1326,7 +1329,10 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
             taskModels: configuredModelIds(config),
              resolveTaskModel: async id => { const built = await loadModel({ ...config, model: id }); if (typeof built === "string") throw new Error(built); return built.client; },
             onJobEvent: event => send("job", event),
-            onTaskEvent: event => send("task", event),
+            onTaskEvent: event => {
+              send("task", event);
+              if (event.event?.type === "model") send("usage", { usage: sessionUsage(session.all()) });
+            },
             session,
             history,
             modelId: model.selection.model.id,
@@ -1366,6 +1372,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
             onEvent: (event) => {
               sync.publish("activity", session.id);
               if (event.type === "model") {
+                send("usage", { usage: sessionUsage(session.all()) });
                 send("assistant", {
                   turn: event.turn,
                   content: event.message.content,
@@ -1396,11 +1403,13 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
             const target = { appendEvent: (type: string, data?: unknown): SessionEvent => { const event = { type, data, seq: collected.length, time: Date.now() }; collected.push(event); return event; }, flush: () => {} };
             void generateSessionMeta(request => metaModel({ ...request, signal: AbortSignal.timeout(META_TIMEOUT_MS) }), toChatMessages(session.all()), target)
               .then(meta => {
-                if (!meta) return;
+                const usageEvents = collected.filter(event => event.type === "model/usage");
+                if (!meta && !usageEvents.length) return;
                 const current = activeHandles.get(session.id);
                 const writer = current ?? runStore.open(session.id, "write");
                 try {
-                  if (!sessionTitle(writer.all())) { writer.append(collected); writer.flush(); sync.publish("session", session.id); }
+                  const additions = sessionTitle(writer.all()) ? usageEvents : collected;
+                  if (additions.length) { writer.append(additions); writer.flush(); sync.publish("session", session.id); }
                 } finally { if (!current) writer.close(); }
               })
               .catch(error => writeDiagnostic("session.meta", error instanceof Error ? error.message : "Metadata persistence failed."));

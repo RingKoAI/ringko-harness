@@ -33,6 +33,7 @@ export interface ModelToolCall {
 }
 
 export interface ModelUsage {
+  /** Total input tokens, including cache read/write tokens when present. */
   inputTokens?: number;
   outputTokens?: number;
   /** Prompt-cache read tokens, when the provider reports them. */

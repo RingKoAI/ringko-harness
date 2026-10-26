@@ -1,5 +1,6 @@
 import type { Approval, ChatHandlers, JobSummary, LoopStatus, QuestionRequest, ServerMessage, TaskSummary, TodoItem } from '../api'
-import type { SessionSnapshot } from '@ringko-ai/client'
+import type { SessionSnapshot, SessionUsage } from '@ringko-ai/client'
+import { normalizeSessionUsage } from './session-usage'
 
 export const CONVERSATION_LIMITS = { queued: 16, prompt: 65536, partial: 262144, cached: 64 } as const
 export interface QueuedMessage { id: string; prompt: string; attachments: string[] }
@@ -7,8 +8,9 @@ export interface Conversation {
   messages: ServerMessage[]; busy: boolean; approval: Approval | null; question: QuestionRequest | null
   tasks: TaskSummary[]; jobs: JobSummary[]; todos: TodoItem[]; queue: QueuedMessage[]
   partial: { content: string; reasoning: string } | null; draft: string; error: string | null; loop: LoopStatus | null
+  usage: SessionUsage | null
 }
-export const emptyConversation = (): Conversation => ({ messages: [], busy: false, approval: null, question: null, tasks: [], jobs: [], todos: [], queue: [], partial: null, draft: '', error: null, loop: null })
+export const emptyConversation = (): Conversation => ({ messages: [], busy: false, approval: null, question: null, tasks: [], jobs: [], todos: [], queue: [], partial: null, draft: '', error: null, loop: null, usage: null })
 type Transport = (input: { sessionId: string; prompt: string; attachments: string[]; loop?: { args: string } }, handlers: ChatHandlers) => { abort(): void }
 
 /** Owns each stream independently of the currently visible route. Late callbacks are discarded. */
@@ -55,6 +57,7 @@ export class Conversations {
       busy: snapshot.busy, partial: snapshot.partial, approval: snapshot.approvals[0] ?? null,
       question: snapshot.questions[0] ?? null, tasks: snapshot.tasks, todos: snapshot.todos, jobs: snapshot.jobs,
       loop: snapshot.loop, error: snapshot.error,
+      usage: normalizeSessionUsage(snapshot.usage),
     })
     this.revisions.set(snapshot.id, { instance: snapshot.instance, revision: snapshot.revision })
     if (!snapshot.busy && !snapshot.error && !this.paused.has(snapshot.id)) queueMicrotask(() => this.resume(snapshot.id))
@@ -119,6 +122,7 @@ export class Conversations {
         onAsk: question => update(() => ({ question })),
         onAskClosed: key => update(state => ({ question: state.question?.id === key ? null : state.question })),
         onTodo: todos => update(() => ({ todos })),
+        onUsage: usage => update(() => ({ usage: normalizeSessionUsage(usage) })),
         onLoop: status => update(() => ({ loop: status })),
         onTask: event => update(state => {
           const existing = state.tasks.find(task => task.taskId === event.taskId)

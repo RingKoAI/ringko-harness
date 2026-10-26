@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/button'
 import { DirectoryBrowser } from '@/components/directory-browser'
 import { RightSidebar, type RightSidebarTab } from '@/components/right-sidebar'
 import { SettingsDialog } from '@/components/settings-dialog'
+import { SidebarUsage } from '@/components/session-usage'
 import {
   Dialog,
   DialogContent,
@@ -374,6 +375,9 @@ export function Layout() {
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
+              <SidebarUsage />
+            </SidebarMenuItem>
+            <SidebarMenuItem>
               <SettingsDialog>
                 <SidebarMenuButton tooltip={t('nav.settings')}>
                   <SettingsIcon />
@@ -396,6 +400,7 @@ export function Layout() {
 
       <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+          <SidebarTrigger className="md:hidden" />
           <Separator orientation="vertical" className="mr-1 h-4" />
           <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             <Folder className="size-3.5 shrink-0" />

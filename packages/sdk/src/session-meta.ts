@@ -1,4 +1,4 @@
-import { recordSessionSummary, recordSessionTitle } from "@ringko-ai/session";
+import { recordSessionSummary, recordSessionTitle, recordSessionUsage } from "@ringko-ai/session";
 import type { ChatMessage, ModelClient } from "./index.ts";
 
 export interface SessionMeta {
@@ -88,6 +88,7 @@ export async function generateSessionMeta(
       ],
       tools: [],
     });
+    if (turn.usage && recordSessionUsage(session, turn.usage)) session.flush();
     const meta = parseMeta(turn.content);
     if (!meta) return undefined;
     if (meta.title) recordSessionTitle(session, meta.title);

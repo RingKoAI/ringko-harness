@@ -23,7 +23,18 @@ export interface SessionMeta { id: string; createdAt: number; cwd: string | null
 export interface Approval { id: string; toolName: string; riskLevel: "low" | "medium" | "high"; riskKind: "safe" | "workspace_file" | "workspace_write" | "external_file" | "network" | "shell"; reason: string; target: string | null }
 export interface QuestionRequest { id: string; input: { questions: Array<{ id: string; question: string; header?: string; detail?: string; multiSelect?: boolean; options?: Array<{ label: string; description?: string }> }> } }
 export interface QuestionOutput { answers: Array<{ id: string; selected: string[]; custom?: string }> }
-export interface TodoItem { content: string; status: "pending" | "in_progress" | "completed" }
+export interface TodoItem { content: string; status: "pending" | "in_progress" | "completed"; activeForm?: string }
+export interface SessionUsage {
+  calls: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  cacheHitRate: number | null;
+  cacheReportedCalls: number;
+  partial: boolean;
+}
 export interface TaskSummary {
   taskId: string; parentCallId: string | null; description: string; mode: "read" | "write" | "full"; model?: string;
   status: "running" | "completed" | "failed" | "cancelled" | "unknown"; startedAt: number; completedAt: number | null;
@@ -36,6 +47,7 @@ export interface SessionSnapshot {
   messages: ServerMessage[]; events: SessionEvent[];
   busy: boolean; approvals: Approval[]; questions: QuestionRequest[]; tasks: TaskSummary[]; todos: TodoItem[]; jobs: JobSummary[];
   partial: { content: string; reasoning: string } | null; loop: LoopStatus | null; error: string | null;
+  usage?: SessionUsage | null;
 }
 export interface SyncNotice { instance: string; revision: number; sessionId?: string; kind: "session" | "activity" | "config" | "workspace" | "reset" }
 export interface RunInput { sessionId: string; prompt: string; attachments?: string[]; loop?: { args: string } }

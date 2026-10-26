@@ -7,7 +7,7 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -97,6 +97,7 @@ body {
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
@@ -157,4 +158,63 @@ body {
 }
 .dark .shiki-host .shiki span {
   color: var(--shiki-dark);
+}
+
+/* GFM tasks use the same read-only marker as the live task panel. Keep copy
+   decoration separate from nested lists so completed parents do not strike
+   through unfinished children. These scoped rules override prose list spacing. */
+.markdown-content ul.contains-task-list {
+  list-style: none;
+  padding-inline-start: 0;
+  margin-block: 0.75rem;
+}
+
+.markdown-content li.markdown-task-item {
+  position: relative;
+  list-style: none;
+  min-width: 0;
+  margin-block: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0.625rem 0.75rem 0.625rem 2.25rem;
+  background: color-mix(in oklch, var(--muted) 25%, transparent);
+}
+
+.markdown-content li.markdown-task-item + li.markdown-task-item {
+  margin-block-start: 0.5rem;
+}
+
+.markdown-content .markdown-task-marker {
+  position: absolute;
+  inset-inline-start: 0.75rem;
+  top: 0.9rem;
+  margin: 0;
+}
+
+.markdown-content .markdown-task-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.markdown-content .markdown-task-copy > :first-child {
+  margin-block-start: 0;
+}
+
+.markdown-content .markdown-task-copy > :last-child {
+  margin-block-end: 0;
+}
+
+.markdown-content .markdown-task-copy[data-completed='true'] {
+  color: var(--muted-foreground);
+  text-decoration-line: line-through;
+  text-decoration-color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+}
+
+.markdown-content li.markdown-task-item > :is(ul, ol) {
+  margin-block: 0.625rem 0;
+}
+
+.markdown-content li.markdown-task-item[data-task-state='completed'] {
+  border-color: color-mix(in oklch, var(--color-emerald-600) 15%, transparent);
+  background: color-mix(in oklch, var(--color-emerald-600) 4%, transparent);
 }
