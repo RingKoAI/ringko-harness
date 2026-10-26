@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -33,7 +33,7 @@ it("round-trips a live owner and separates workspace/config keys", () => {
   try {
     const path = writeBackendRegistration(input, env);
     expect(path).toBe(backendRegistrationPath(workspace, undefined, env));
-    expect(readBackendRegistration(workspace, undefined, env)).toMatchObject({ workspace, url: input.url, instance: "instance-a" });
+    expect(readBackendRegistration(workspace, undefined, env)).toMatchObject({ workspace: realpathSync(workspace), url: input.url, instance: "instance-a" });
     expect(backendKey(workspace, join(root, "a.json"))).not.toBe(backendKey(workspace, join(root, "b.json")));
     expect(readBackendRegistration(workspace, join(root, "a.json"), env)).toBeUndefined();
     expect(removeBackendRegistration(workspace, undefined, "instance-a", env)).toBe(true);
