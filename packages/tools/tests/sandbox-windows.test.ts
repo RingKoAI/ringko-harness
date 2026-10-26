@@ -20,6 +20,9 @@ function run(sandbox: Sandbox, command: string): { status: number; stderr: strin
 
 it("enforces the native Windows workspace-write and read-only boundaries", () => {
   if (process.platform !== "win32") return;
+  const originalModulePath = process.env.PSModulePath;
+  // A PowerShell 7 caller must not change Windows PowerShell's cmdlet loader.
+  process.env.PSModulePath = join(root, "foreign-powershell-modules");
   const outside = mkdtempSync(join(tmpdir(), "ringko-win-outside-"));
   try {
     const workspace = new Sandbox({ workspace: root, mode: "workspace-write" });
@@ -36,6 +39,8 @@ it("enforces the native Windows workspace-write and read-only boundaries", () =>
     expect(existsSync(join(root, "blocked.txt"))).toBe(false);
     expect(run(readOnly, "type seed.txt").status).toBe(0);
   } finally {
+    if (originalModulePath === undefined) delete process.env.PSModulePath;
+    else process.env.PSModulePath = originalModulePath;
     rmSync(outside, { recursive: true, force: true });
   }
 });

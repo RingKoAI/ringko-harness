@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -50,9 +50,13 @@ function sidFor(path: string, temp: boolean): string {
 
 function powershell(script: string): void {
   const encoded = Buffer.from(script, "utf16le").toString("base64");
-  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], {
+  // The parent may be PowerShell 7, whose module path is incompatible with
+  // Windows PowerShell. Load the security cmdlets from this engine's modules.
+  const engineRoot = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0");
+  const result = spawnSync(join(engineRoot, "powershell.exe"), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], {
     encoding: "utf8",
     windowsHide: true,
+    env: { ...process.env, PSModulePath: join(engineRoot, "Modules") },
   });
   if (result.status !== 0) throw new SandboxUnavailableError(`Could not prepare the Windows sandbox ACL: ${result.stderr || result.stdout}`);
 }

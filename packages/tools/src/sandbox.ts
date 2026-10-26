@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { ensureWindowsSandbox, prepareWindowsAcl } from "./windows-runner.ts";
 import { SandboxDeniedError, SandboxUnavailableError } from "./sandbox-errors.ts";
@@ -10,6 +10,24 @@ export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access"
 export type SandboxRunner = "bwrap" | "seatbelt" | "windows-acl" | "none";
 
 const MODES: readonly SandboxMode[] = ["read-only", "workspace-write", "danger-full-access"];
+const MAX_NEW_PATH_DEPTH = 256;
+
+/** Resolve aliases through the nearest existing ancestor of a new target. */
+function canonicalTarget(path: string): string {
+  let candidate = resolve(path);
+  const suffix: string[] = [];
+  for (let depth = 0; depth <= MAX_NEW_PATH_DEPTH; depth += 1) {
+    try { return join(realpathSync(candidate), ...suffix.reverse()); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = dirname(candidate);
+      if (parent === candidate) throw error;
+      suffix.push(basename(candidate));
+      candidate = parent;
+    }
+  }
+  throw new SandboxDeniedError("Sandbox target path exceeds the supported nesting depth.");
+}
 
 function canonicalDirectory(path: string): string {
   const absolute = resolve(path);
@@ -78,11 +96,12 @@ export class Sandbox {
   /** Enforce a write/delete target before the operation touches disk. */
   assertWrite(path: string): void {
     if (this.mode === "danger-full-access") return;
+    const target = canonicalTarget(path);
     if (this.mode === "read-only") {
-      if (within(this.temp(), path)) return;
+      if (within(realpathSync(this.temp()), target)) return;
       throw new SandboxDeniedError(`Sandbox mode read-only denies writes outside its private temp: ${path}`);
     }
-    if (!this.writable(path)) throw new SandboxDeniedError(`Write outside the workspace is denied: ${path}`);
+    if (!this.writable(target)) throw new SandboxDeniedError(`Write outside the workspace is denied: ${path}`);
   }
 
   private temp(): string {

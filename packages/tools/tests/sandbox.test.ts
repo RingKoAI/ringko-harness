@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeTool } from "@ringko-ai/harness";
@@ -47,6 +47,19 @@ describe("Sandbox", () => {
     expect(() => unavailable.shell("echo ok")).toThrow(SandboxUnavailableError);
   });
 
+  it("accepts workspace aliases but rejects junctions escaping the write boundary", async () => {
+    const workspace = join(dir, "workspace");
+    const external = join(dir, "external");
+    const alias = join(dir, "alias");
+    await Promise.all([mkdir(workspace), mkdir(external)]);
+    const type = process.platform === "win32" ? "junction" : "dir";
+    await symlink(workspace, alias, type);
+    await symlink(external, join(workspace, "escape"), type);
+    const sandbox = new Sandbox({ workspace: alias });
+    expect(() => sandbox.assertWrite(join(alias, "nested", "new.txt"))).not.toThrow();
+    expect(() => sandbox.assertWrite(join(alias, "escape", "new.txt"))).toThrow(SandboxDeniedError);
+  });
+
   it("denies file tools before they touch the filesystem", async () => {
     const workspace = join(dir, "workspace");
     await Bun.write(join(workspace, ".keep"), "");
@@ -54,7 +67,8 @@ describe("Sandbox", () => {
     const confined = new Sandbox({ workspace, mode: "workspace-write", runner: "bwrap" });
     const write = createWriteTool(createWorkspace(workspace), undefined, confined);
     await expect(executeTool(write, { path: join(dir, "outside.txt"), content: "x" }, approve)).rejects.toBeInstanceOf(SandboxDeniedError);
-    await expect(executeTool(write, { path: "inside.txt", content: "x" }, approve)).resolves.toMatchObject({ path: "inside.txt" });
+    const written = await executeTool(write, { path: "inside.txt", content: "x" }, approve);
+    expect(written).toMatchObject({ path: "inside.txt" });
 
     const readOnly = new Sandbox({ workspace, mode: "read-only", runner: "bwrap" });
     const blocked = createWriteTool(createWorkspace(workspace), undefined, readOnly);
