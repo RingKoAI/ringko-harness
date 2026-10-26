@@ -1,6 +1,7 @@
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { NPM_PACKAGE_NAME, NPM_CLI_COMMAND } from "../src/cli-identity.ts";
+import "./check-version.mjs";
 
 const packageRoot = resolve(import.meta.dir, "..");
 const repositoryRoot = resolve(packageRoot, "../..");
@@ -46,6 +47,8 @@ writeFileSync(resolve(output, "package.json"), `${JSON.stringify({
 copyFileSync(resolve(repositoryRoot, "LICENSE"), resolve(output, "LICENSE"));
 copyFileSync(resolve(repositoryRoot, "NOTICE"), resolve(output, "NOTICE"));
 copyFileSync(resolve(repositoryRoot, "packages/app/src/terminal-bridge.mjs"), resolve(output, "bin/terminal-bridge.mjs"));
+cpSync(resolve(repositoryRoot, "packages/tools/native"), resolve(output, "native"), { recursive: true });
 cpSync(webui, resolve(output, "webui"), { recursive: true });
 copyFileSync(resolve(packageRoot, "NPM.md"), resolve(output, "README.md"));
 console.log(`Prepared ${npmName}@${manifest.version} in ${output}`);
+

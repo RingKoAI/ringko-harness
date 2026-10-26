@@ -11,7 +11,7 @@
     },
     "packages/tui": {
       "name": "@ringko-ai/tui",
-      "version": "0.4.5",
+      "version": "0.6.2-rc2",
       "bin": {
         "ringko": "./src/cli.ts",
       },
@@ -35,3 +35,4 @@
     "@ringko-ai/webui": ["@ringko-ai/webui@workspace:packages/webui"],
   }
 }
+

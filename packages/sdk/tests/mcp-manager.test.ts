@@ -4,6 +4,34 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { McpManager } from "../src/mcp-manager.ts";
 
+it("reports discovery without starting or probing servers", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ringko-mcp-current-"));
+  const old = process.env.RINGKO_HOME; process.env.RINGKO_HOME = join(root, "home");
+  let attempts = 0;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    attempts++;
+    const message = await request.json() as { id?: string; method: string };
+    if (message.method === "initialize") {
+      return Response.json({ jsonrpc: "2.0", id: message.id, result: { serverInfo: { name: "fixture" } } });
+    }
+    return Response.json({ jsonrpc: "2.0", id: message.id, result: { tools: [{ name: "ping", inputSchema: { type: "object" } }] } });
+  } });
+  writeFileSync(join(root, ".mcp.json"), JSON.stringify({ mcpServers: { fixture: { url: `http://127.0.0.1:${server.port}` } } }));
+  const manager = new McpManager(root);
+  try {
+    expect(manager.current()).toEqual({ connections: [], errors: [] });
+    expect(attempts).toBe(0);
+    await manager.start();
+    expect(manager.current().connections.map(connection => connection.name)).toEqual(["fixture"]);
+    expect(manager.current().connections[0]?.tools.map(tool => tool.name)).toEqual(["ping"]);
+    expect(attempts).toBeGreaterThan(0);
+  } finally {
+    await manager.close(); server.stop(true);
+    if (old === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = old;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it("prewarms configured MCP servers, stops after three failures and retries after reset", async () => {
   const root = mkdtempSync(join(tmpdir(), "ringko-mcp-retry-"));
   const old = process.env.RINGKO_HOME; process.env.RINGKO_HOME = join(root, "home");

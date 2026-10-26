@@ -7,6 +7,7 @@
     "packages/*"
   ],
   "scripts": {
+    "check:version": "bun packages/tui/scripts/check-version.mjs",
     "build": "pnpm --filter @ringko-ai/code build && pnpm --filter @ringko-ai/webui build && pnpm --filter @ringko-ai/tui build",
     "test:transport": "pnpm --filter @ringko-ai/client test",
     "typecheck:transport": "pnpm exec tsc -p packages/protocol/tsconfig.json && pnpm exec tsc -p packages/client/tsconfig.json",
@@ -18,7 +19,7 @@
     "dev:tui": "bun packages/tui/src/cli.ts tui",
     "dev:webui": "pnpm --filter @ringko-ai/webui dev",
     "dev:app": "bun packages/app/src/main.ts --shared",
-    "test": "pnpm test:transport && pnpm --filter @ringko-ai/config test && pnpm --filter @ringko-ai/runtime test && pnpm --filter @ringko-ai/auth test && pnpm --filter @ringko-ai/session test && pnpm --filter @ringko-ai/harness test && pnpm --filter @ringko-ai/tools test && pnpm --filter @ringko-ai/sdk test && pnpm --filter @ringko-ai/providers test && pnpm --filter @ringko-ai/mcp test && pnpm --filter @ringko-ai/workflow test && pnpm --filter @ringko-ai/repl test && pnpm --filter @ringko-ai/tui test && pnpm --filter @ringko-ai/app test && pnpm --filter @ringko-ai/webui test",
+    "test": "pnpm check:version && pnpm test:transport && pnpm --filter @ringko-ai/config test && pnpm --filter @ringko-ai/runtime test && pnpm --filter @ringko-ai/auth test && pnpm --filter @ringko-ai/session test && pnpm --filter @ringko-ai/harness test && pnpm --filter @ringko-ai/tools test && pnpm --filter @ringko-ai/sdk test && pnpm --filter @ringko-ai/providers test && pnpm --filter @ringko-ai/mcp test && pnpm --filter @ringko-ai/workflow test && pnpm --filter @ringko-ai/repl test && pnpm --filter @ringko-ai/tui test && pnpm --filter @ringko-ai/app test && pnpm --filter @ringko-ai/webui test",
     "typecheck": "pnpm typecheck:transport && pnpm exec tsc -p packages/config/tsconfig.json && pnpm exec tsc -p packages/runtime/tsconfig.json && pnpm exec tsc -p packages/auth/tsconfig.json && pnpm exec tsc -p packages/session/tsconfig.json && pnpm exec tsc -p packages/harness/tsconfig.json && pnpm exec tsc -p packages/tools/tsconfig.json && pnpm exec tsc -p packages/sdk/tsconfig.json && pnpm exec tsc -p packages/providers/tsconfig.json && pnpm exec tsc -p packages/mcp/tsconfig.json && pnpm exec tsc -p packages/workflow/tsconfig.json && pnpm exec tsc -p packages/repl/tsconfig.json && pnpm exec tsc -p packages/tui/tsconfig.json && pnpm exec tsc -p packages/app/tsconfig.json && pnpm --filter @ringko-ai/webui exec tsc -b"
   },
   "devDependencies": {

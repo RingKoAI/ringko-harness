@@ -1,11 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { defineTool, type ToolDefinition, type JobSnapshot } from "@ringko-ai/harness";
+import type { Sandbox } from "./sandbox.ts";
 
 export const SHELL_LIMITS = Object.freeze({ defaultTimeoutMs: 300_000, commandCharacters: 16_384, outputCharacters: 65_536, outputEvents: 200 });
 export interface ShellInput { command: string; timeout?: number; description?: string; background?: boolean }
 export interface ShellOutput { command: string; exitCode: number; stdout: string; stderr: string; timedOut?: boolean; truncated?: boolean; eventsTruncated?: boolean }
-export interface ShellOptions { cwd: string; defaultTimeoutMs?: number }
+export interface ShellOptions { cwd: string; defaultTimeoutMs?: number; sandbox?: Sandbox }
 function parseShell(value: unknown): ShellInput {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Expected an object input.");
   const data = value as Record<string, unknown>;
@@ -43,9 +44,12 @@ export function createShellTool(options: ShellOptions): ToolDefinition<ShellInpu
       if (input.background && !context?.jobs) throw new Error("This host does not support background shell jobs.");
       const work = (signal?: AbortSignal, emit?: (type: string, data: unknown) => void): Promise<ShellOutput> => new Promise((resolve, reject) => {
         signal?.throwIfAborted();
-        const executable = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
-        const args = process.platform === "win32" ? ["/d", "/s", "/c", input.command] : ["-c", input.command];
-        const proc = spawn(executable, args, { cwd: options.cwd, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+        const invocation = options.sandbox
+          ? options.sandbox.shell(input.command, options.cwd)
+          : process.platform === "win32"
+            ? { executable: "cmd.exe", args: ["/d", "/s", "/c", input.command], cwd: options.cwd }
+            : { executable: "/bin/sh", args: ["-c", input.command], cwd: options.cwd };
+        const proc = spawn(invocation.executable, invocation.args, { cwd: invocation.cwd, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
         let stdout = "", stderr = "", truncated = false, timedOut = false, chunks = 0, stopping = false, eventsTruncated = false;
         let failure: unknown;
         const stop = () => { if (!stopping) { stopping = true; void terminate(proc); } };

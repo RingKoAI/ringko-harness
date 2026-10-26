@@ -214,10 +214,7 @@ export function Layout() {
                   }}
                 >
                   <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground">R</div>
-                  <div className="flex min-w-0 flex-col gap-0.5 leading-none">
-                    <span className="font-medium">{t('app.name')}</span>
-                    <span className="text-xs text-muted-foreground">{app.info?.model ?? t('header.noModel')}</span>
-                  </div>
+                  <span className="truncate font-medium">{t('app.name')}</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>

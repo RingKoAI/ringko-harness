@@ -34,6 +34,8 @@ export interface SessionUsage {
   cacheHitRate: number | null;
   cacheReportedCalls: number;
   partial: boolean;
+  /** Most recent recorded primary call: actual output tokens / total call time. */
+  outputTokensPerSecond?: number | null;
 }
 export interface TaskSummary {
   taskId: string; parentCallId: string | null; description: string; mode: "read" | "write" | "full"; model?: string;

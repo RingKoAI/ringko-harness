@@ -5,8 +5,8 @@
 // `~/.ringko/skills` and `~/.agents/skills` (and the singular `skill` alias);
 // ringko-specific skills take precedence over shared ones with the same name.
 import { closeSync, openSync, readSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
-import { agentsRoot, projectSkillsDirs, ringkoRoot, SKILLS_DIR_NAMES, skillsDirs } from "./paths.ts";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { agentsRoot, ancestorSkillsDirs, projectSkillsDirs, RINGKO_DIR_NAME, ringkoRoot, SKILLS_DIR_NAMES, skillsDirs } from "./paths.ts";
 
 export const SKILL_FILE_NAME = "SKILL.md";
 const SKILL_METADATA_BYTES = 16 * 1024;
@@ -74,14 +74,28 @@ export function discoverSkills(options: DiscoverSkillsOptions = {}): Skill[] {
   const cwd = options.cwd ?? process.cwd();
   const roots: ReadonlyArray<{ dir: string; source: SkillSource; scope: SkillScope }> = [
     ...projectSkillsDirs(cwd, env).map((dir) => ({ dir, source: "project" as const, scope: "project" as const })),
+    // Shared skills above a nested repository are workspace-level, not owned
+    // by the inner project. Project-root skills still take precedence.
+    ...ancestorSkillsDirs(cwd, env).map((dir) => ({
+      dir,
+      source: basename(dirname(dir)) === RINGKO_DIR_NAME ? "ringko" as const : "agents" as const,
+      scope: "global" as const,
+    })),
     ...SKILLS_DIR_NAMES.flatMap((name) => [
       { dir: join(ringkoRoot(env), name), source: "ringko" as const, scope: "global" as const },
       { dir: join(agentsRoot(env), name), source: "agents" as const, scope: "global" as const },
     ]),
   ];
+  const seenRoots = new Set<string>();
+  const uniqueRoots = roots.filter((root) => {
+    const key = resolve(root.dir);
+    if (seenRoots.has(key)) return false;
+    seenRoots.add(key);
+    return true;
+  });
 
   const found = new Map<string, Skill>();
-  for (const root of roots) {
+  for (const root of uniqueRoots) {
     for (const entry of listDirectories(root.dir)) {
       const dir = join(root.dir, entry);
       const skillFile = join(dir, SKILL_FILE_NAME);
@@ -138,7 +152,7 @@ export function removeSkill(
   cwd: string = process.cwd(),
 ): boolean {
   const target = resolve(dir);
-  const roots = [...projectSkillsDirs(cwd, env), ...skillsDirs(env)];
+  const roots = [...projectSkillsDirs(cwd, env), ...ancestorSkillsDirs(cwd, env), ...skillsDirs(env)];
   const inside = roots.some((root) => {
     const rel = relative(resolve(root), target);
     return rel.length > 0 && !rel.startsWith("..") && !isAbsolute(rel);

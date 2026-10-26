@@ -1,6 +1,6 @@
 # RingKo Harness
 
-English | [简体中文](README.zh-CN.md)
+English | [绠€浣撲腑鏂嘳(README.zh-CN.md)
 
 RingKo Harness is a provider-neutral agent harness. One installed command offers
 two interface styles: an interactive terminal UI (plain `ringko`, the default) and
@@ -10,17 +10,17 @@ session log, so a session started in one can be inspected and resumed in the oth
 
 The packages below are the harness itself:
 
-- **`packages/harness`** — provider-neutral tool registry, risk/approval gate,
+- **`packages/harness`** 鈥?provider-neutral tool registry, risk/approval gate,
   and the agent turn loop.
-- **`packages/tools`** — gated built-in tools: workspace files, outbound
+- **`packages/tools`** 鈥?gated built-in tools: workspace files, outbound
   network, and shell execution.
-- **`packages/sdk`** — stable public facade (`createRingKo`) for hosts.
-- **`packages/session`** — event-sourced session storage (`~/.ringko/sessions`).
-- **`packages/providers`** — AI SDK-backed model providers (OpenAI, Anthropic).
-- **`packages/repl`** — interactive Ink terminal UI (`ringko`).
-- **`packages/protocol` / `client`** — platform-neutral wire contracts and shared HTTP/SSE client.
-- **`packages/app/src/services`** — backend-owned synchronization and in-flight run state.
-- **`packages/tui` / `webui` / `app` / `code`** — the user-facing surfaces.
+- **`packages/sdk`** 鈥?stable public facade (`createRingKo`) for hosts.
+- **`packages/session`** 鈥?event-sourced session storage (`~/.ringko/sessions`).
+- **`packages/providers`** 鈥?AI SDK-backed model providers (OpenAI, Anthropic).
+- **`packages/repl`** 鈥?interactive Ink terminal UI (`ringko`).
+- **`packages/protocol` / `client`** 鈥?platform-neutral wire contracts and shared HTTP/SSE client.
+- **`packages/app/src/services`** 鈥?backend-owned synchronization and in-flight run state.
+- **`packages/tui` / `webui` / `app` / `code`** 鈥?the user-facing surfaces.
 
 Every tool invocation passes through the harness approval gate; hosts supply the
 approval handler, and risky operations fail closed when none is configured.
@@ -29,7 +29,7 @@ approval handler, and risky operations fail closed when none is configured.
 
 RingKo is published on npm as `@ringko-ai/rkh` and is meant to be installed
 globally. It installs one command, `ringko`, which starts either interface. It
-needs Node.js 24+ **and** Bun 1.2+ on `PATH` — the executable is a Bun bundle, so
+needs Node.js 24+ **and** Bun 1.2+ on `PATH` 鈥?the executable is a Bun bundle, so
 Bun is not optional:
 
 ```sh
@@ -44,17 +44,37 @@ install. From a source checkout, every `ringko <command>` in this document maps 
 
 In the Web UI, open a session and select **Tool call log** beside the composer
 controls to inspect recorded call arguments, results, status, and timestamps.
+The compact status row below the composer shows generation speed, session cache
+hit rate, and context usage. Speed uses the most recent recorded primary call's
+actual output tokens divided by its total duration, including initial wait;
+compaction, metadata and delegated calls do not replace that speed. Missing
+historical timing/cache data stays unknown.
 Older sessions without separate `tool/call` events remain readable. The log is
 available through `GET /api/sessions/:id/tool-log` in pages of up to 100 calls.
 
 ### Shared terminal/browser sessions
 
-`ringko` automatically starts or reuses a local backend for the canonical
-workspace/config pair. Open the printed backend URL in a browser, then select
-the same session in both clients (`ringko -s <id>`). Messages, partial output,
-tool activity, approvals, questions, todos and running state synchronize.
-Disconnecting a client does not cancel a run; use the client's explicit stop action.
-Concurrent submissions to a busy session return HTTP 409.
+`ringko` and `ringko serve` share one backend per canonical workspace/config
+pair. The backend records its owner in `~/.ringko/backends/`; TUI startup
+discovers that record (with the rendezvous port and the legacy 8787 port as
+fallbacks) and attaches instead of starting a second backend. A second `serve`
+for the same workspace/config prints the existing URL and exits; a competing
+programmatic backend is rejected. Open the printed backend URL in a browser,
+then select the same session in both clients (`ringko -s <id>`). Messages,
+partial output, tool activity, approvals, questions, todos and running state
+synchronize through that one process. Disconnecting a client does not cancel a
+run; use the client's explicit stop action. Concurrent submissions to a busy
+session return HTTP 409.
+
+`ringko` and `ringko serve` default to the **active registered project**, not the
+directory they were launched from. `--workspace` is an explicit override for
+CLI compatibility. With no registered project, the launch directory is used only
+as a first-run bootstrap so the UI can add one. Skills and MCP configuration are
+resolved from the selected project (plus the documented shared/global roots).
+
+`ringko run` / `loop` and an embedded REPL still execute locally and are not yet
+routed through the owning backend; avoid pointing them at a session that another
+live backend is writing.
 
 ```sh
 ringko service status             # the local backend started by `ringko`
@@ -69,6 +89,33 @@ ringko --workspace /path/to/project --server http://127.0.0.1:8787
 Shared backend architecture and limitations are documented in maintainer
 notes kept outside this repository.
 
+### Sandbox
+
+Host execution defaults to `sandbox.mode = "workspace-write"`. The three modes
+are `read-only`, `workspace-write`, and the explicit `danger-full-access`.
+Workspace writes are allowed only in the middle mode; commands run through the
+platform runner. A missing runner fails closed rather than falling back to an
+unsandboxed process.
+
+```json
+{
+  "sandbox": {
+    "mode": "workspace-write",
+    "additionalWritableRoots": []
+  }
+}
+```
+
+Linux uses bubblewrap, macOS uses Seatbelt, and Windows uses a restricted-token
+runner with a low-integrity workspace/temp label and capability-SID write ACLs.
+Local stdio MCP servers are launched through the same runner. The Windows
+runner does not yet support PTY terminals, so confined terminals fail closed
+there. Remote MCP tools
+without a positive read-only declaration are withheld in `read-only` mode;
+`workspace-write` keeps them approval-gated because their remote side effects
+cannot be host-confined. Windows enforcement is partial: reads are not confined,
+and child processes that create piped stdio may fail with `EPERM`.
+
 ### Delegated tasks
 
 CLI, TUI and Web chat support `task` with `mode: "read"`, `"write"` or `"full"`.
@@ -78,6 +125,7 @@ Task and shell support background execution, event subscriptions and cancellatio
 completion resumes the parent model with results. `ask` renders questions in TUI/Web;
 `plan` reads the session plan and `update_plan` replaces the full list.
 Existing session plan snapshots and saved permission/workflow rules remain valid.
+Prompts and skills using the old tool names must be updated; see [migration notes](CHANGELOG/v0.4.5.md#tool-migration).
 Task and job tool limits and permission boundaries are documented in maintainer notes kept
 outside this repository.
 
@@ -112,6 +160,28 @@ Configuration, skills, and MCP servers live outside the project, under two roots
 `RINGKO_HOME` / `AGENTS_HOME` override the home directories. Inspect them with
 `ringko config show`, `ringko skills`, `ringko mcp`, and `ringko session list`.
 
+Skill discovery is layered: the project root wins, then shared `.agents` /
+`.ringko` skill directories in ancestor workspaces **inside the user home**, then
+the home-level roots above. This lets a nested repository use skills installed by
+its parent projects directory. MCP registration loads at backend startup;
+`GET /api/mcp/connected` only reports the current connections, and MCP
+configuration cannot be changed while a session is running.
+
+### Instruction context
+
+Runtime-managed agents reload applicable global/project `AGENTS.md` (or project
+`CLAUDE.md` fallback) before every main-model request, including tool continuations
+and requests after automatic/manual compaction. Current rules replace earlier
+runtime instruction blocks while conversation summaries remain separate. Resume
+loads rules from disk even when the stored history contains only a summary.
+Deleted rules are removed; unreadable or oversized discovered files fail the
+request instead of silently omitting policy. Limits are 256 KiB per file, 1 MiB
+of file content in total, and 64 files. Rule changes invalidate earlier input-token
+estimates. Compaction requests use their own summarization prompt.
+
+Standalone SDK hosts can supply `resolveInstructions` for the same per-request
+refresh behavior. Ambient file discovery is provided by `RuntimeManager`.
+
 ## Directory structure
 
 For directory structure, the model has a native `tree` tool instead of needing
@@ -128,6 +198,7 @@ offline metadata snapshot. Cached/snapshot data is available immediately; access
 triggers a background refresh after one hour, with a five-minute retry delay on
 failure. Failed downloads or writes retain previous metadata. `RINGKO_MODELS_URL`
 can select a public JSON mirror; provider credentials are never sent to this URL.
+Remote mirrors require HTTPS; HTTP is accepted only for loopback development mirrors.
 The daily snapshot workflow updates both model names and capacity metadata.
 
 Explicit model `contextWindow`, `maxInputTokens`, and `maxOutputTokens` win over
@@ -144,6 +215,9 @@ window, a running budget rather than a detected capacity. Standalone SDK callers
 use the same defaults unless their host supplies limits. Models.dev's notice is
 included in [NOTICE](NOTICE).
 
+Headless CLI and standalone embedded REPL hosts use the same shared resolver.
+See [unreleased fixes](CHANGELOG/unreleased.md) for changes after `v0.4.5`.
+
 Model providers are adapted from the [Vercel AI SDK](https://ai-sdk.dev).
 `@ringko-ai/providers` wraps any AI SDK language model as a harness
 `ModelClient`; the harness still owns the tool loop and the approval gate (tools
@@ -158,7 +232,7 @@ they are never compiled into the CLI binary:
 
 Custom OpenAI-compatible endpoints and reading a VS Code providers file are
 covered by maintainer notes kept outside this repository. Never commit real API
-keys or endpoint URLs — the examples use placeholders only.
+keys or endpoint URLs 鈥?the examples use placeholders only.
 
 ## Development
 
@@ -185,3 +259,7 @@ in-repo reference.
 ## License
 
 [Apache-2.0](LICENSE) - Copyright 2025-2026 KaguyaRing (RingKoAI)
+
+
+
+

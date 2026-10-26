@@ -2,8 +2,8 @@
 //
 // A project names a workspace directory; exactly one may be active. The active
 // project determines the workspace used for tools and where sessions are grouped.
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { projectsPath } from "./paths.ts";
 
 export interface ProjectEntry {
@@ -53,6 +53,33 @@ export function loadProjects(env: NodeJS.ProcessEnv = process.env): ProjectsFile
   }
   const current = typeof parsed.current === "string" && projects.some((p) => p.id === parsed.current) ? parsed.current : undefined;
   return { projects, ...(current ? { current } : {}) };
+}
+
+export interface DefaultWorkspace {
+  path: string;
+  source: "project" | "bootstrap";
+}
+
+/**
+ * Resolve the project a host should open when no explicit workspace was given.
+ * The active project wins, then the first registered project that still exists.
+ * With no usable project, the launch directory is used only as a bootstrap so
+ * the UI can add the first project.
+ */
+export function defaultProjectWorkspace(cwd: string = process.cwd(), env: NodeJS.ProcessEnv = process.env): DefaultWorkspace {
+  const file = loadProjects(env);
+  const ordered = file.current
+    ? [...file.projects].sort((left, right) => (left.id === file.current ? -1 : right.id === file.current ? 1 : 0))
+    : file.projects;
+  for (const project of ordered) {
+    try {
+      const path = resolve(project.path);
+      if (statSync(path).isDirectory()) return { path, source: "project" };
+    } catch {
+      // Missing/unreadable project: try the next registered directory.
+    }
+  }
+  return { path: resolve(cwd), source: "bootstrap" };
 }
 
 export function saveProjects(file: ProjectsFile, env: NodeJS.ProcessEnv = process.env): string {

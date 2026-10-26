@@ -27,6 +27,7 @@ import {
   PROVIDER_PRESETS,
   saveConfig,
   selectModel,
+  resolveSelectionContext,
   setOAuthAccount,
   upsertProviderModels,
   writeDiagnostic,
@@ -165,6 +166,7 @@ export function Repl(props: ReplProps) {
   const transcriptSize = useBoxMetrics(transcriptBox);
   const ringkoRef = useRef<RingKo | null>(null);
   const runtimeRef = useRef<RuntimeManager | null>(null);
+  const initializationRef = useRef<Promise<void> | null>(null);
   const sessionRef = useRef<SessionHandle | null>(null);
   const historyRef = useRef<ChatMessage[]>([]);
   const titledRef = useRef(false);
@@ -444,41 +446,49 @@ export function Repl(props: ReplProps) {
     askRef.current = asker;
     const runtime = runtimeRef.current;
     if (!runtime) return;
-    const managed = runtime.createAgent(config, {
-      model: modelRef.current,
-      task: true,
-      taskModels: createModel ? configuredModelIds(config) : [],
-      resolveTaskModel: async id => { if (!createModel) throw new Error("Model selection unavailable."); const client = await createModel({ ...config, model: id }); if (typeof client === "string") throw new Error(client); return client; },
-      onJobEvent: event => {
-        if (event.type === "started") {
-          const data = event.data as { description: string; background: boolean };
-          setJobs(previous => [...previous, { jobId: event.jobId, description: data.description, kind: event.kind, status: "running", background: data.background }]);
-        } else if (["completed", "failed", "cancelled", "background"].includes(event.type)) setJobs(previous => previous.map(job => job.jobId === event.jobId ? { ...job, ...(event.type === "background" ? { background: true } : { status: event.type }) } : job));
-        if (event.kind === "shell" && ["stdout", "stderr"].includes(event.type)) print(`shell ${event.jobId.slice(0, 8)} ${event.type}: ${(event.data as { content?: string }).content ?? "[truncated output]"}`);
-      },
-      ...(config.mode === "approval" || config.mode === "assist" || config.mode === "full" ? { accessMode: config.mode } : {}),
-      onTaskEvent: event => {
-        if (sessionRef.current?.id === session.id) setTaskViews(previous => applyTaskView(previous, event));
-      },
-      session,
-      requestApproval: (request) => new Promise<boolean>((resolve) => {
-        let settled = false;
-        const finish = (approved: boolean) => { if (settled) return; settled = true; request.signal?.removeEventListener("abort", cancel); resolve(approved); };
-        const cancel = () => { finish(false); setPending(current => current?.request === request ? null : current); };
-        request.signal?.addEventListener("abort", cancel, { once: true });
-        if (request.signal?.aborted) cancel(); else setPending({ request, resolve: finish });
-      }),
-      onEvent: (event) => {
-        setItems((previous) => applyAgentEvent(previous, event));
-      },
-      history: historyRef.current,
-      ...(modelId ? { modelId } : {}),
-    }, { ask: asker.request, onTodo: setTodos, report: print });
-    const ringko = managed.agent;
-    ringkoRef.current = ringko;
+    let active = true;
+    let managed: ReturnType<RuntimeManager["createAgent"]> | undefined;
+    const ready = resolveSelectionContext(selectModel(config)).then(limits => {
+      if (!active) return;
+      managed = runtime.createAgent(config, {
+        model: modelRef.current,
+        ...limits,
+        task: true,
+        taskModels: createModel ? configuredModelIds(config) : [],
+        resolveTaskModel: async id => { if (!createModel) throw new Error("Model selection unavailable."); const client = await createModel({ ...config, model: id }); if (typeof client === "string") throw new Error(client); return client; },
+        onJobEvent: event => {
+          if (event.type === "started") {
+            const data = event.data as { description: string; background: boolean };
+            setJobs(previous => [...previous, { jobId: event.jobId, description: data.description, kind: event.kind, status: "running", background: data.background }]);
+          } else if (["completed", "failed", "cancelled", "background"].includes(event.type)) setJobs(previous => previous.map(job => job.jobId === event.jobId ? { ...job, ...(event.type === "background" ? { background: true } : { status: event.type }) } : job));
+          if (event.kind === "shell" && ["stdout", "stderr"].includes(event.type)) print(`shell ${event.jobId.slice(0, 8)} ${event.type}: ${(event.data as { content?: string }).content ?? "[truncated output]"}`);
+        },
+        ...(config.mode === "approval" || config.mode === "assist" || config.mode === "full" ? { accessMode: config.mode } : {}),
+        onTaskEvent: event => {
+          if (sessionRef.current?.id === session.id) setTaskViews(previous => applyTaskView(previous, event));
+        },
+        session,
+        requestApproval: (request) => new Promise<boolean>((resolve) => {
+          let settled = false;
+          const finish = (approved: boolean) => { if (settled) return; settled = true; request.signal?.removeEventListener("abort", cancel); resolve(approved); };
+          const cancel = () => { finish(false); setPending(current => current?.request === request ? null : current); };
+          request.signal?.addEventListener("abort", cancel, { once: true });
+          if (request.signal?.aborted) cancel(); else setPending({ request, resolve: finish });
+        }),
+        onEvent: (event) => {
+          setItems((previous) => applyAgentEvent(previous, event));
+        },
+        history: historyRef.current,
+        ...(modelId ? { modelId } : {}),
+      }, { ask: asker.request, onTodo: setTodos, report: print });
+      ringkoRef.current = managed.agent;
+    }).catch(error => { if (active) print(`Model capacity initialization failed: ${error instanceof Error ? error.message : "Unknown error"}`); });
+    initializationRef.current = ready;
     return () => {
-      managed.close();
-      asker.cancelAll(); ringko.jobs.cancelAll();
+      active = false;
+      managed?.close();
+      asker.cancelAll(); managed?.agent.jobs.cancelAll();
+      if (initializationRef.current === ready) initializationRef.current = null;
       askRef.current = null;
       ringkoRef.current = null;
     };
@@ -942,8 +952,8 @@ export function Repl(props: ReplProps) {
         } catch (error) { print(`Cannot list permission rules: ${error instanceof Error ? error.message : "unknown error"}`); }
       },
       showTodos: () => {
-        if (!todos.length) { print("No todos."); return; }
-        setPicker({ title: "Todos", items: todos.map((todo, index) => ({ value: String(index), label: todo.content, group: todo.status })), onSelect: value => { const todo = todos[Number(value)]; if (todo) print(`${todo.status}: ${todo.content}`); setPicker(null); } });
+        if (!todos.length) { print("No plan steps."); return; }
+        setPicker({ title: "Plan", items: todos.map((todo, index) => ({ value: String(index), label: todo.content, group: todo.status })), onSelect: value => { const todo = todos[Number(value)]; if (todo) print(`${todo.status}: ${todo.content}`); setPicker(null); } });
       },
       startLoop,
       cancelLoop,
@@ -982,6 +992,7 @@ export function Repl(props: ReplProps) {
 
   /** One agent turn: run the prompt and record the session title after the first run. */
   async function runPrompt(text: string, controller: AbortController): Promise<string> {
+    await initializationRef.current;
     const ringko = ringkoRef.current;
     if (!ringko) throw new Error("Agent is not ready.");
     controller.signal.throwIfAborted();
@@ -1048,6 +1059,8 @@ export function Repl(props: ReplProps) {
   }
 
   async function submit(input: string): Promise<void> {
+    if (busyRef.current) return;
+    if (!backend) await initializationRef.current;
     if (busyRef.current) return;
     setHistory(previous => [...previous.filter(value => value !== input), input].slice(-HISTORY_LIMIT));
     setScrollOffset(0);

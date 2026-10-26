@@ -6,13 +6,22 @@ import {
   createSseTransport,
   createStdioTransport,
   type JsonRpcMessage,
+  type ProcessWrapper,
   type Transport,
 } from "./transport.ts";
+
+export interface McpToolAnnotations {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+}
 
 export interface McpTool {
   name: string;
   description?: string;
   inputSchema: Record<string, unknown>;
+  annotations?: McpToolAnnotations;
 }
 
 export interface McpServerTools {
@@ -113,7 +122,7 @@ export class McpClient {
     do {
       if (++pages > MAX_TOOL_PAGES) throw new Error("MCP tool listing exceeds 32 pages.");
       const result = (await this.request("tools/list", cursor === undefined ? {} : { cursor })) as
-        | { tools?: Array<{ name?: unknown; description?: unknown; inputSchema?: unknown }>; nextCursor?: unknown }
+        | { tools?: Array<{ name?: unknown; description?: unknown; inputSchema?: unknown; annotations?: unknown }>; nextCursor?: unknown }
         | undefined;
       for (const tool of result?.tools ?? []) {
         if (tools.length >= MAX_SERVER_TOOLS) throw new Error("MCP server exposes more than 512 tools.");
@@ -126,6 +135,12 @@ export class McpClient {
           name: tool.name,
           ...(typeof tool.description === "string" ? { description: tool.description } : {}),
           inputSchema: schema,
+          ...(isRecord(tool.annotations) ? { annotations: {
+            ...(typeof tool.annotations.readOnlyHint === "boolean" ? { readOnlyHint: tool.annotations.readOnlyHint } : {}),
+            ...(typeof tool.annotations.destructiveHint === "boolean" ? { destructiveHint: tool.annotations.destructiveHint } : {}),
+            ...(typeof tool.annotations.idempotentHint === "boolean" ? { idempotentHint: tool.annotations.idempotentHint } : {}),
+            ...(typeof tool.annotations.openWorldHint === "boolean" ? { openWorldHint: tool.annotations.openWorldHint } : {}),
+          } } : {}),
         });
       }
       cursor = typeof result?.nextCursor === "string" && result.nextCursor.length > 0 ? result.nextCursor : undefined;
@@ -161,7 +176,7 @@ function storedHeaders(name: string): Record<string, string> {
 }
 
 /** Build the transport named by a server config (stdio, SSE, or Streamable HTTP). */
-export function createTransport(name: string, config: McpServerConfig): Transport {
+export function createTransport(name: string, config: McpServerConfig, options: { wrap?: ProcessWrapper } = {}): Transport {
   const headers = { ...storedHeaders(name), ...stringMap(config.headers) };
   if (typeof config.command === "string" && config.command.trim().length > 0) {
     return createStdioTransport({
@@ -170,6 +185,7 @@ export function createTransport(name: string, config: McpServerConfig): Transpor
       args: Array.isArray(config.args) ? config.args.map((arg) => String(arg)) : [],
       env: stringMap(config.env),
       ...(typeof config.cwd === "string" ? { cwd: config.cwd } : {}),
+      ...(options.wrap ? { wrap: options.wrap } : {}),
     });
   }
   if (typeof config.url === "string" && config.url.trim().length > 0) {
@@ -183,20 +199,21 @@ export function createTransport(name: string, config: McpServerConfig): Transpor
 /** A live connection: the client stays open so its tools remain callable. */
 export interface McpConnection {
   name: string;
+  local: boolean;
   serverInfo: Record<string, unknown>;
   tools: McpTool[];
   client: McpClient;
 }
 
 /** Connect to one configured server, keep it open, and list its tools. */
-export async function openMcpServer(name: string, config: McpServerConfig): Promise<McpConnection> {
+export async function openMcpServer(name: string, config: McpServerConfig, options: { wrap?: ProcessWrapper } = {}): Promise<McpConnection> {
   // Refresh a stored OAuth token before connecting (remote servers).
   await ensureToolAuth(name).catch(() => undefined);
-  const client = new McpClient(name, createTransport(name, config));
+  const client = new McpClient(name, createTransport(name, config, options));
   try {
     await client.initialize();
     const tools = await client.listTools();
-    return { name, serverInfo: client.info, tools, client };
+    return { name, local: typeof config.command === "string" && config.command.trim().length > 0, serverInfo: client.info, tools, client };
   } catch (error) {
     await client.close().catch(() => {});
     throw error;
@@ -227,3 +244,6 @@ export async function openMcpServers(
 export async function closeMcpConnections(connections: readonly McpConnection[]): Promise<void> {
   await Promise.all(connections.map((connection) => connection.client.close().catch(() => {})));
 }
+
+
+

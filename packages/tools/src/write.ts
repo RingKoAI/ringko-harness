@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
 import { FileTracker } from "./file-tracker.ts";
 import { resolveWriteTarget, type Workspace } from "./workspace.ts";
+import type { Sandbox } from "./sandbox.ts";
 
 export interface WriteInput {
   path: string;
@@ -42,7 +43,7 @@ async function exists(path: string): Promise<boolean> {
 }
 
 /** Create or overwrite a UTF-8 text file; overwrites and external targets require approval. */
-export function createWriteTool(workspace: Workspace, tracker: FileTracker = new FileTracker()): ToolDefinition<WriteInput, WriteOutput> {
+export function createWriteTool(workspace: Workspace, tracker: FileTracker = new FileTracker(), sandbox?: Sandbox): ToolDefinition<WriteInput, WriteOutput> {
   return defineTool<WriteInput, WriteOutput>({
     name: "write",
     serialGroup: `files:${process.platform === "win32" ? workspace.root.toLowerCase() : workspace.root}`,
@@ -70,6 +71,7 @@ export function createWriteTool(workspace: Workspace, tracker: FileTracker = new
     async execute({ path, content }, context) {
       const target = await resolveWriteTarget(workspace, path);
       if (context?.approvedTarget && context.approvedTarget !== target.absolute) throw new Error("Write target changed after approval; retry the call.");
+      sandbox?.assertWrite(target.absolute);
       const existed = await exists(target.absolute);
       context?.signal?.throwIfAborted();
       await mkdir(dirname(target.absolute), { recursive: true });

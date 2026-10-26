@@ -24,7 +24,9 @@ export function registerRuntimeSkills(registry: ToolRegistry, workspace: string)
     async execute(input) {
       const skill = skills.find(skill => skill.name === input.name);
       if (!skill) throw new Error("Skill is no longer available.");
-      const file = await open(join(skill.dir, SKILL_FILE_NAME), "r");
+      const file = await open(join(skill.dir, SKILL_FILE_NAME), "r").catch(() => {
+        throw new Error(`Skill "${input.name}" is no longer available.`);
+      });
       try {
         const stat = await file.stat();
         if (!stat.isFile() || stat.size > MAX_SKILL_BYTES) throw new Error("Skill must be a regular file no larger than 64 KiB.");

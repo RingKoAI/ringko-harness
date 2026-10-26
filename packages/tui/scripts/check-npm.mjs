@@ -17,6 +17,11 @@ try {
   assert.equal(manifest.name, "@ringko-ai/rkh");
   assert.equal(manifest.bin.ringko, "bin/ringko.mjs");
   assert.ok(manifest.dependencies["node-pty"]);
+  const runtimeDependencies = { ...manifest.dependencies, ...manifest.optionalDependencies, ...manifest.peerDependencies };
+  for (const desktopPackage of ["@ringko-ai/rkh-desktop", "electron", "electron-builder", "electron-vite"]) {
+    assert.equal(runtimeDependencies[desktopPackage], undefined, `CLI must not install desktop dependency ${desktopPackage}`);
+  }
+  assert.equal(existsSync(join(installed, "packages/rkh-desktop")), false, "Desktop workspace must not be shipped in the CLI package");
   assert.ok(existsSync(join(installed, "bin/terminal-bridge.mjs")));
   const cli = join(installed, manifest.bin.ringko);
   const env = { ...process.env, RINGKO_HOME: join(root, "home"), AGENTS_HOME: join(root, "agents") };

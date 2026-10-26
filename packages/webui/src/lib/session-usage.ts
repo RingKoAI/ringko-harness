@@ -12,12 +12,14 @@ export function normalizeSessionUsage(value: unknown): SessionUsage | null {
   if (data.cacheHitRate !== null && (typeof data.cacheHitRate !== 'number' || !Number.isFinite(data.cacheHitRate) || data.cacheHitRate < 0 || data.cacheHitRate > 1)) return null
   if (data.cacheHitRate !== null && data.cacheReportedCalls === 0) return null
   if (data.totalTokens !== null && (typeof data.inputTokens !== 'number' || typeof data.outputTokens !== 'number' || data.totalTokens !== data.inputTokens + data.outputTokens)) return null
+  if (data.outputTokensPerSecond !== undefined && data.outputTokensPerSecond !== null && (typeof data.outputTokensPerSecond !== 'number' || !Number.isFinite(data.outputTokensPerSecond) || data.outputTokensPerSecond < 0)) return null
   return {
     calls: data.calls,
     inputTokens: data.inputTokens as number | null, outputTokens: data.outputTokens as number | null,
     totalTokens: data.totalTokens as number | null, cacheReadTokens: data.cacheReadTokens as number | null,
     cacheWriteTokens: data.cacheWriteTokens as number | null, cacheHitRate: data.cacheHitRate as number | null,
     cacheReportedCalls: data.cacheReportedCalls, partial: data.partial,
+    ...(data.outputTokensPerSecond !== undefined ? { outputTokensPerSecond: data.outputTokensPerSecond as number | null } : {}),
   }
 }
 

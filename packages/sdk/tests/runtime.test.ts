@@ -76,7 +76,7 @@ it("shares pending MCP connections across agents and refreshes after reset", asy
     const message = await request.json() as { id?: string; method: string };
     if (!message.id) return new Response(null, { status: 202 });
     if (message.method === "initialize") { initialized++; await Bun.sleep(20); }
-    return Response.json({ jsonrpc: "2.0", id: message.id, result: message.method === "initialize" ? { serverInfo: {} } : { tools: [{ name: "ping", inputSchema: { type: "object", properties: {} } }] } });
+    return Response.json({ jsonrpc: "2.0", id: message.id, result: message.method === "initialize" ? { serverInfo: {} } : { tools: [{ name: "ping", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } }] } });
   } });
   writeFileSync(join(directory, ".mcp.json"), JSON.stringify({ mcpServers: { fixture: { url: `http://127.0.0.1:${server.port}` }, unavailable: {} } }));
   const runtime = new RuntimeManager(directory);
@@ -233,3 +233,4 @@ it("gives the model a native tree tool and executes it with shell capability dis
   try { expect((await managed.agent.run("Show directory structure using tree")).content).toBe("tree verified"); }
   finally { managed.close(); await runtime.close(); }
 }));
+

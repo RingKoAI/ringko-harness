@@ -81,6 +81,7 @@ export async function generateSessionMeta(
   const text = transcript(messages, options.maxMessages ?? DEFAULT_MAX_MESSAGES, options.maxCharacters ?? DEFAULT_MAX_CHARACTERS);
   if (text.length === 0) return undefined;
   try {
+    const started = performance.now();
     const turn = await model({
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
@@ -88,7 +89,7 @@ export async function generateSessionMeta(
       ],
       tools: [],
     });
-    if (turn.usage && recordSessionUsage(session, turn.usage)) session.flush();
+    if (turn.usage && recordSessionUsage(session, turn.usage, undefined, { kind: "metadata", durationMs: performance.now() - started })) session.flush();
     const meta = parseMeta(turn.content);
     if (!meta) return undefined;
     if (meta.title) recordSessionTitle(session, meta.title);

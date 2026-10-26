@@ -1,6 +1,7 @@
 // Transcript events: the mapping between the harness agent conversation and
 // session-log events. The log is the source of truth; ChatMessage[] is derived.
 import type { AgentEvent, ChatMessage, ModelToolCall, ReasoningDetail } from "@ringko-ai/harness";
+import { compactionSummaryContent, type SurfaceNode } from "./compaction.ts";
 import type { SessionEvent } from "./types.ts";
 
 export const TRANSCRIPT_EVENT = {
@@ -114,11 +115,16 @@ export function recordSessionArchived(handle: HandleLike, archived: boolean): Se
 }
 
 /**
- * Record a compaction: on replay the transcript restarts from this summary, so
- * resume sees the compacted history rather than the full log.
+ * Record a compaction. `shadowedSeqs` names the current surface nodes replaced
+ * by the summary; replay removes exactly those nodes and inserts the summary at
+ * their position. Events without it predate replacement-aware replay and keep
+ * the legacy restart-from-summary behavior.
  */
-export function recordSessionCompaction(handle: HandleLike, summary: string): SessionEvent {
-  return handle.appendEvent(TRANSCRIPT_EVENT.compaction, { summary });
+export function recordSessionCompaction(handle: HandleLike, summary: string, shadowedSeqs?: readonly number[]): SessionEvent {
+  return handle.appendEvent(TRANSCRIPT_EVENT.compaction, {
+    summary,
+    ...(shadowedSeqs && shadowedSeqs.length > 0 ? { shadowedSeqs: [...shadowedSeqs] } : {}),
+  });
 }
 
 function lastString(events: readonly SessionEvent[], type: string, key: string): string | undefined {
@@ -242,43 +248,76 @@ function parseReasoningDetails(value: unknown): ReasoningDetail[] {
   return details;
 }
 
-/** Reconstruct harness chat messages from a session's events. */
-export function toChatMessages(events: readonly SessionEvent[]): ChatMessage[] {
-  const messages: ChatMessage[] = [];
+/**
+ * Reconstruct the current model surface, carrying each message's log seq so a
+ * later replacement can remove exactly the nodes it summarized.
+ */
+export function toChatSurface(events: readonly SessionEvent[]): SurfaceNode[] {
+  let nodes: SurfaceNode[] = [];
   for (const event of events) {
     const data = asRecord(event.data);
     if (!data) continue;
     if (event.type === TRANSCRIPT_EVENT.compaction) {
-      // A compaction resets the conversation to its summary plus everything logged after it.
-      messages.length = 0;
-      if (typeof data.summary === "string" && data.summary.length > 0) {
-        messages.push({ role: "system", content: data.summary });
+      const summary = typeof data.summary === "string" ? data.summary : "";
+      const shadowed = Array.isArray(data.shadowedSeqs)
+        ? data.shadowedSeqs.filter((seq): seq is number => typeof seq === "number")
+        : undefined;
+      if (shadowed === undefined) {
+        // Legacy event: no replacement span was recorded, so resume starts here.
+        nodes = summary.length > 0 ? [{ seq: event.seq, message: { role: "system", content: summary }, summary: true }] : [];
+        continue;
       }
+      const removed = new Set(shadowed);
+      const replaced: SurfaceNode[] = [];
+      let inserted = false;
+      for (const node of nodes) {
+        if (!removed.has(node.seq)) {
+          replaced.push(node);
+        } else if (!inserted && summary.length > 0) {
+          replaced.push({ seq: event.seq, message: { role: "system", content: compactionSummaryContent(summary) }, summary: true });
+          inserted = true;
+        }
+      }
+      if (!inserted && summary.length > 0) {
+        replaced.push({ seq: event.seq, message: { role: "system", content: compactionSummaryContent(summary) }, summary: true });
+      }
+      nodes = replaced;
       continue;
     }
     if (event.type === "session/notification" && typeof data.content === "string") {
-      messages.push({ role: "system", content: data.content });
+      nodes.push({ seq: event.seq, message: { role: "system", content: data.content } });
     } else if (event.type === TRANSCRIPT_EVENT.user) {
-      messages.push({ role: "user", content: typeof data.content === "string" ? data.content : "" });
+      nodes.push({ seq: event.seq, message: { role: "user", content: typeof data.content === "string" ? data.content : "" } });
     } else if (event.type === TRANSCRIPT_EVENT.assistant) {
       const toolCalls = parseToolCalls(data.toolCalls);
       const reasoningDetails = parseReasoningDetails(data.reasoningDetails);
-      messages.push({
-        role: "assistant",
-        content: typeof data.content === "string" ? data.content : "",
-        ...(toolCalls.length > 0 ? { toolCalls } : {}),
-        ...(reasoningDetails.length > 0
-          ? { reasoningDetails, reasoning: reasoningDetails.map((detail) => detail.text).join("") }
-          : {}),
+      nodes.push({
+        seq: event.seq,
+        message: {
+          role: "assistant",
+          content: typeof data.content === "string" ? data.content : "",
+          ...(toolCalls.length > 0 ? { toolCalls } : {}),
+          ...(reasoningDetails.length > 0
+            ? { reasoningDetails, reasoning: reasoningDetails.map((detail) => detail.text).join("") }
+            : {}),
+        },
       });
     } else if (event.type === TRANSCRIPT_EVENT.tool) {
-      messages.push({
-        role: "tool",
-        content: typeof data.content === "string" ? data.content : "",
-        ...(typeof data.toolCallId === "string" ? { toolCallId: data.toolCallId } : {}),
-        ...(typeof data.name === "string" ? { name: data.name } : {}),
+      nodes.push({
+        seq: event.seq,
+        message: {
+          role: "tool",
+          content: typeof data.content === "string" ? data.content : "",
+          ...(typeof data.toolCallId === "string" ? { toolCallId: data.toolCallId } : {}),
+          ...(typeof data.name === "string" ? { name: data.name } : {}),
+        },
       });
     }
   }
-  return messages;
+  return nodes;
+}
+
+/** Reconstruct harness chat messages from a session's events. */
+export function toChatMessages(events: readonly SessionEvent[]): ChatMessage[] {
+  return toChatSurface(events).map(node => node.message);
 }

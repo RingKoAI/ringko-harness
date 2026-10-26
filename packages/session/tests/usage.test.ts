@@ -41,4 +41,25 @@ describe("session reported usage", () => {
     expect(sessionUsage(events)?.inputTokens).toBe(100);
     expect(sessionUsage(history({ inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: 1 }, { inputTokens: 1, outputTokens: 1 }))).toMatchObject({ inputTokens: null, totalTokens: null, partial: true });
   });
+
+  it("computes speed from real primary-call output and duration without helper calls replacing it", () => {
+    const events: SessionEvent[] = [];
+    const target = { appendEvent(type: string, data?: unknown) { const event = { seq: events.length, time: events.length, type, data }; events.push(event); return event; } };
+    recordSessionUsage(target, { inputTokens: 1000, outputTokens: 426 }, "primary", { kind: "primary", durationMs: 2000 });
+    recordSessionUsage(target, { inputTokens: 100, outputTokens: 100 }, "helper", { kind: "metadata", durationMs: 10 });
+    recordSessionUsage(target, { inputTokens: 100, outputTokens: 100 }, "task", { kind: "task", durationMs: 10 });
+    recordSessionUsage(target, { inputTokens: 100, outputTokens: 100 }, "summary", { kind: "compaction", durationMs: 10 });
+    expect(sessionUsage(events)?.outputTokensPerSecond).toBe(213);
+    expect(sessionUsage(events)?.calls).toBe(4);
+    recordSessionUsage(target, { inputTokens: 20, outputTokens: 0 }, "primary", { kind: "primary", durationMs: 1000 });
+    expect(sessionUsage(events)?.outputTokensPerSecond).toBe(0);
+    recordSessionUsage(target, { inputTokens: 20, outputTokens: 10 }, "primary", { kind: "primary", durationMs: 0 });
+    expect(sessionUsage(events)?.outputTokensPerSecond).toBeNull();
+  });
+
+  it("does not derive speed for legacy records or invalid durations", () => {
+    expect(sessionUsage(history({ inputTokens: 100, outputTokens: 20 }))?.outputTokensPerSecond).toBeUndefined();
+    const event: SessionEvent = { type: "model/usage", seq: 0, time: 0, data: { inputIncludesCache: true, kind: "primary", durationMs: Infinity, usage: { outputTokens: 20 } } };
+    expect(sessionUsage([event])?.outputTokensPerSecond).toBeNull();
+  });
 });

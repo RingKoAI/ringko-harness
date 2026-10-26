@@ -3,7 +3,7 @@ import { instructionsText, loadInstructions, writeDiagnostic, type RingkoConfig 
 import { registerMcpTools } from "@ringko-ai/mcp";
 import { EventBus, EventLog, Scheduler, createTimeSource } from "@ringko-ai/runtime";
 import { sessionTodos } from "@ringko-ai/session";
-import { createTodoStore, registerNetworkTools, registerSessionQueryTools, registerSessionTools, registerShellTools, registerWorkspaceTools, type AskHandler, type TodoItem } from "@ringko-ai/tools";
+import { Sandbox, createTodoStore, registerNetworkTools, registerSessionQueryTools, registerSessionTools, registerShellTools, registerWorkspaceTools, type AskHandler, type TodoItem } from "@ringko-ai/tools";
 import { resolveWorkflow, workflowAllowsTool, workflowInstructions, type Workflow } from "@ringko-ai/workflow";
 import { abortable } from "@ringko-ai/harness";
 import { createRingKo, isAccessMode, type AgentEvent, type RingKo, type RingKoConfig as AgentConfig } from "./index.ts";
@@ -32,7 +32,8 @@ function applyToolPolicy(agent: RingKo, workflow: Workflow): void {
 
 /** Shared tool assembly for executing agents and capability previews. */
 export function registerRuntimeTools(agent: RingKo, config: RingkoConfig, workspace: string, host: RuntimeHost = {}, session?: AgentConfig["session"]): void {
-  registerWorkspaceTools(agent.tools, { workspace });
+  const sandbox = new Sandbox({ workspace, mode: config.sandbox?.mode, additionalWritableRoots: config.sandbox?.additionalWritableRoots });
+  registerWorkspaceTools(agent.tools, { workspace, sandbox });
   const todos = createTodoStore(items => {
     if (session) { session.appendEvent("session/todo", { todos: items }); session.flush(); }
     host.onTodo?.(items);
@@ -44,7 +45,7 @@ export function registerRuntimeTools(agent: RingKo, config: RingkoConfig, worksp
     allowPrivateHosts: config.capabilities.privateNetwork === true,
     search: { provider: config.capabilities.websearchProvider },
   });
-  if (config.capabilities?.shell) registerShellTools(agent.tools, { cwd: workspace });
+  if (config.capabilities?.shell) registerShellTools(agent.tools, { cwd: workspace, sandbox });
   registerRuntimeSkills(agent.tools, workspace);
   applyToolPolicy(agent, resolveWorkflow(config.workflow));
 }
@@ -58,6 +59,7 @@ export class RuntimeManager {
   readonly log: EventLog;
   readonly scheduler: Scheduler;
   readonly permissions: PermissionManager;
+  readonly sandbox: Sandbox;
   private readonly stopTime: () => void;
   private readonly mcp: McpManager;
   private readonly agents = new Set<() => void>();
@@ -67,6 +69,7 @@ export class RuntimeManager {
   constructor(workspace: string, log?: EventLog) {
     if (typeof workspace !== "string" || !workspace.trim()) throw new TypeError("Runtime requires a workspace.");
     this.workspace = resolve(workspace);
+    this.sandbox = new Sandbox({ workspace: this.workspace });
     this.permissions = new PermissionManager(this.workspace);
     this.mcp = new McpManager(this.workspace);
     this.log = log ?? new EventLog();
@@ -74,16 +77,26 @@ export class RuntimeManager {
     this.stopTime = log ? () => {} : createTimeSource(this.log);
   }
 
-  connections(): ReturnType<McpManager["start"]> {
+  connections(sandbox: Sandbox = this.sandbox): ReturnType<McpManager["start"]> {
     if (this.closed) return Promise.reject(new Error("Runtime is closed."));
-    return this.mcp.start();
+    return this.mcp.start(sandbox);
   }
 
   /** Begin MCP connections during host startup, before the first model run. */
-  start(): ReturnType<McpManager["start"]> { return this.connections(); }
+  start(sandbox: Sandbox = this.sandbox): ReturnType<McpManager["start"]> { return this.connections(sandbox); }
 
   async resetMcp(): Promise<void> {
     await this.mcp.reset();
+  }
+
+  /** Snapshot connected MCP servers for discovery/status without starting them. */
+  currentConnections(): ReturnType<McpManager["current"]> {
+    return this.mcp.current();
+  }
+
+  /** Await the startup connection pass, then snapshot discovery. */
+  readyConnections(): ReturnType<McpManager["ready"]> {
+    return this.mcp.ready();
   }
 
   createAgent(config: RingkoConfig, options: AgentConfig, host: RuntimeHost = {}): RuntimeAgent {
@@ -94,9 +107,6 @@ export class RuntimeManager {
     for (const names of [workflow.tools?.allow, workflow.tools?.deny]) {
       if (names !== undefined && (!Array.isArray(names) || names.some(name => typeof name !== "string" || !name))) throw new TypeError("Workflow tool policy must contain tool names.");
     }
-    const instructions = [instructionsText(loadInstructions({ cwd: this.workspace })), workflowInstructions(workflow), options.instructions].filter(Boolean).join("\n\n");
-    const runtimeInstructions = `[Runtime instructions]\n${instructions}`;
-    const history = (options.history ?? []).filter(message => !(message.role === "system" && message.content.startsWith("[Runtime instructions]\n")));
     const permission = config.permission ?? config.mode;
     const controller = new AbortController();
     const permissionSession = options.session?.id ?? crypto.randomUUID();
@@ -105,9 +115,13 @@ export class RuntimeManager {
     const reportedErrors = new Map<string, string>();
     let workflowModel: Promise<Awaited<ReturnType<NonNullable<AgentConfig["resolveTaskModel"]>>>> | undefined;
     const agent = createRingKo({
-      ...options, log: this.log, scheduler: this.scheduler, instructions,
+      ...options, log: this.log, scheduler: this.scheduler,
+      resolveInstructions: async () => [
+        instructionsText(loadInstructions({ cwd: this.workspace })),
+        workflowInstructions(workflow),
+        options.resolveInstructions ? await options.resolveInstructions() : undefined,
+      ].filter(Boolean).join("\n\n"),
       requestApproval: this.permissions.approval(permissionSession, options.requestApproval),
-      history: instructions ? [{ role: "system", content: runtimeInstructions }, ...history] : history,
       model: workflow.model ? async request => {
         if (!options.resolveTaskModel || !options.taskModels?.includes(workflow.model!)) throw new Error(`Workflow model "${workflow.model}" is not available in this host.`);
         workflowModel ??= options.resolveTaskModel(workflow.model!);
@@ -140,7 +154,7 @@ export class RuntimeManager {
         const opened = await abortable(this.connections(), signal);
         signal.throwIfAborted();
         for (const name of mcpToolNames) agent.tools.unregister(name);
-        mcpToolNames = registerMcpTools(agent.tools, opened.connections);
+        mcpToolNames = registerMcpTools(agent.tools, opened.connections, { mode: config.sandbox?.mode ?? "workspace-write" });
         for (const error of opened.errors) {
           if (reportedErrors.get(error.name) !== error.message) {
             host.report?.(`MCP ${error.name}: connection failed: ${error.message}`);
@@ -177,3 +191,4 @@ export class RuntimeManager {
     return this.closing ??= this.mcp.close();
   }
 }
+

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverSkills, parseSkillFrontmatter } from "../src/skills.ts";
+import { discoverSkills, parseSkillFrontmatter, removeSkill } from "../src/skills.ts";
 
 let home: string;
 let env: NodeJS.ProcessEnv;
@@ -77,6 +77,23 @@ describe("discoverSkills", () => {
     expect(proj?.source).toBe("project");
 
     rmSync(project, { recursive: true, force: true });
+  });
+
+  it("discovers shared skills in ancestor workspaces without overriding project skills", () => {
+    const tree = join(home, "Desktop", "Projects");
+    const project = join(tree, "Repo", "App");
+    mkdirSync(join(project, ".git"), { recursive: true });
+    writeSkill(join(tree, ".agents"), "shared", "---\nname: shared\ndescription: Shared.\n---\n");
+    writeSkill(join(tree, ".agents"), "dup", "---\nname: dup\ndescription: from ancestors\n---\n");
+    writeSkill(join(project, ".agents"), "dup", "---\nname: dup\ndescription: from project\n---\n");
+
+    const skills = discoverSkills({ env, cwd: project });
+    const shared = skills.find((skill) => skill.name === "shared");
+    expect(shared).toMatchObject({ description: "Shared.", scope: "global", source: "agents", dir: join(tree, ".agents", "skills", "shared") });
+    expect(skills.filter((skill) => skill.name === "dup")).toEqual([expect.objectContaining({ description: "from project", scope: "project" })]);
+    // Ancestor skills are listed, so removing one from the UI must also be allowed.
+    expect(removeSkill(shared!.dir, env, project)).toBe(true);
+    expect(discoverSkills({ env, cwd: project }).some((skill) => skill.name === "shared")).toBe(false);
   });
 
   it("returns an empty list when nothing is installed", () => {

@@ -1,4 +1,4 @@
-import { applyProxyEnv } from "@ringko-ai/config";
+import { applyProxyEnv, defaultProjectWorkspace } from "@ringko-ai/config";
 import { startServer } from "./server.ts";
 import { canonicalWorkspace, sharedPort } from "@ringko-ai/client/local";
 
@@ -11,7 +11,8 @@ const dev = args.includes("--dev") || process.env.RINGKO_DEV === "1";
 const devServerUrl = process.env.RINGKO_DEV_SERVER ?? "http://localhost:5173";
 
 const authToken = process.env.RINGKO_WEB_TOKEN?.trim();
-const workspace = canonicalWorkspace(option("--workspace") ?? process.cwd());
+const explicitWorkspace = option("--workspace");
+const workspace = canonicalWorkspace(explicitWorkspace ?? defaultProjectWorkspace(process.cwd(), process.env).path);
 const configPath = option("--config");
 const shared = args.includes("--shared");
 

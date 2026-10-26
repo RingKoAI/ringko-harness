@@ -2,6 +2,7 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
 import { FileTracker } from "./file-tracker.ts";
 import { resolveWriteTarget, type Workspace } from "./workspace.ts";
+import type { Sandbox } from "./sandbox.ts";
 
 export interface EditInput {
   path: string;
@@ -50,7 +51,7 @@ function countOccurrences(haystack: string, needle: string): number {
 }
 
 /** Replace an exact string in a file. External targets require approval. */
-export function createEditTool(workspace: Workspace, tracker: FileTracker = new FileTracker()): ToolDefinition<EditInput, EditOutput> {
+export function createEditTool(workspace: Workspace, tracker: FileTracker = new FileTracker(), sandbox?: Sandbox): ToolDefinition<EditInput, EditOutput> {
   return defineTool<EditInput, EditOutput>({
     name: "edit",
     serialGroup: `files:${process.platform === "win32" ? workspace.root.toLowerCase() : workspace.root}`,
@@ -79,6 +80,7 @@ export function createEditTool(workspace: Workspace, tracker: FileTracker = new 
     async execute({ path, old_string, new_string, replace_all }, context) {
       const target = await resolveWriteTarget(workspace, path);
       if (context?.approvedTarget && context.approvedTarget !== target.absolute) throw new Error("Edit target changed after approval; retry the call.");
+      sandbox?.assertWrite(target.absolute);
       const content = await readFile(target.absolute, "utf8");
       const occurrences = countOccurrences(content, old_string);
       if (occurrences === 0) {

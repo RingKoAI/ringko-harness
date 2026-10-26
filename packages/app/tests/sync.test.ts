@@ -104,7 +104,9 @@ it("streams provider-reported usage and restores the same session totals through
     const response = await fetch(`${setup.app.url}/api/chat`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ sessionId: session.id, prompt: "usage fixture" }) });
     const seen: unknown[] = [];
     await consumeSse(response, (event, data) => { if (event === "usage") seen.push(data); });
-    expect(seen).toContainEqual({ usage: { calls: 1, inputTokens: 100, outputTokens: 20, totalTokens: 120, cacheReadTokens: 60, cacheWriteTokens: null, cacheHitRate: 0.6, cacheReportedCalls: 1, partial: false } });
-    expect((await client.snapshot(session.id)).usage).toMatchObject({ totalTokens: 120, cacheHitRate: 0.6 });
+    expect(seen[0]).toMatchObject({ usage: { calls: 1, inputTokens: 100, outputTokens: 20, totalTokens: 120, cacheReadTokens: 60, cacheWriteTokens: null, cacheHitRate: 0.6, cacheReportedCalls: 1, partial: false } });
+    const usage = (await client.snapshot(session.id)).usage;
+    expect(usage).toMatchObject({ totalTokens: 120, cacheHitRate: 0.6 });
+    expect(usage?.outputTokensPerSecond).toBeGreaterThan(0);
   } finally { setup.close(); }
 });

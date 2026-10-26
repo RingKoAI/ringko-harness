@@ -8,6 +8,7 @@ import { writeDiagnostic } from "./diagnostics.ts";
 import { findModelMetadata, MODEL_CATALOG_LIMITS, parseModelMetadata, type ModelMetadata, type ModelMetadataCatalog } from "./model-metadata.ts";
 import { ringkoRoot } from "./paths.ts";
 import { downloadModelCatalog } from "./model-download.ts";
+import { isLoopbackHost } from "./network-address.ts";
 
 export const MODELS_DEV_URL = "https://models.dev/api.json";
 export const MODEL_CACHE_POLICY = { version: 1, ttl: 60 * 60 * 1000, retry: 5 * 60 * 1000, timeout: 10_000 } as const;
@@ -31,6 +32,7 @@ export function modelCatalogUrl(env: NodeJS.ProcessEnv = process.env): string {
 function catalogUrl(value: string): string {
   const url = new URL(value);
   if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) throw new Error("Model catalog URL must be HTTP(S) without embedded credentials.");
+  if (url.protocol === "http:" && !isLoopbackHost(url.hostname)) throw new Error("Remote model catalog URLs require HTTPS; HTTP is allowed only for loopback mirrors.");
   return url.toString();
 }
 

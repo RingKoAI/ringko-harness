@@ -58,6 +58,12 @@ export interface RingkoConfig {
     websearchProvider?: "exa" | "parallel";
     shell?: boolean;
   };
+  /** Host sandbox policy; defaults to workspace-write. */
+  sandbox?: {
+    mode?: "read-only" | "workspace-write" | "danger-full-access";
+    /** Absolute directories writable in workspace-write mode. */
+    additionalWritableRoots?: string[];
+  };
   /** Legacy alias of `permission` (access mode). */
   mode?: string;
   /** Access permission: "approval" | "assist" | "full" (independent of the workflow). */
@@ -339,3 +345,4 @@ export function parseConfigValue(raw: string): unknown {
     return raw;
   }
 }
+

@@ -180,6 +180,8 @@ importers:
         specifier: ^19.2.18
         version: 19.3.0
 
+  packages/rkh-desktop: {}
+
   packages/runtime:
     dependencies:
       '@ringko-ai/harness':

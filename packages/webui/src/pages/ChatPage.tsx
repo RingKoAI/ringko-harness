@@ -20,7 +20,7 @@ import { AccessPicker } from '@/components/access-picker'
 import { QueuePanel } from '@/components/queue-panel'
 import type { RightSidebarTab } from '@/components/right-sidebar'
 import { ModePicker } from '@/components/mode-picker'
-import { ContextRingLabeled } from '@/components/context-ring'
+import { ComposerStatus } from '@/components/composer-status'
 import { Markdown } from '@/components/markdown'
 import { ModelPicker } from '@/components/model-picker'
 import { ThinkingPicker } from '@/components/thinking-picker'
@@ -506,6 +506,7 @@ export function ChatPage() {
             }}
             rows={landing ? 2 : 1}
             aria-label={t('composer.placeholder')}
+            aria-description={t('composer.hint')}
             placeholder={t('composer.placeholder')}
             className="min-h-11 resize-none border-0 bg-transparent px-4 pt-3 shadow-none focus-visible:ring-0"
           />
@@ -566,10 +567,6 @@ export function ChatPage() {
             </div>
             <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
               {landing ? <ModelPicker /> : null}
-              {(() => {
-                const usage = context ?? app.info?.context
-                return usage ? <ContextRingLabeled used={usage.used} limit={usage.limit} /> : null
-              })()}
               {app.busy ? (
                 <>
                 <Button variant="outline" size="icon" className="rounded-full" onClick={app.stop} title={t('composer.stop')}>
@@ -591,7 +588,7 @@ export function ChatPage() {
             </div>
           </div>
         </div>
-        {!landing ? <p className="mt-2 text-center text-[11px] text-muted-foreground">{t('composer.hint')}</p> : null}
+        <ComposerStatus usage={app.usage} context={context ?? app.info?.context} />
         </div>
       </div>
       <ToolLogSheet open={toolLogOpen} onOpenChange={setToolLogOpen} sessionId={app.sessionId} busy={app.busy} />

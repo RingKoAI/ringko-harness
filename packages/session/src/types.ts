@@ -1,4 +1,4 @@
-// Session storage types (event-sourced, dsh-style).
+// Session storage types (append-only, event-sourced).
 //
 // A session is one append-only log. The header line carries identity/metadata;
 // every later line is one event addressed by a monotonic, contiguous `seq`.

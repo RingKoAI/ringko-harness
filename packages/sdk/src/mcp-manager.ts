@@ -1,9 +1,11 @@
 import { loadMcpServers, writeDiagnostic, type McpServerConfig } from "@ringko-ai/config";
 import { closeMcpConnections, openMcpServer, type McpConnection } from "@ringko-ai/mcp";
+import type { Sandbox } from "@ringko-ai/tools";
 
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 1_000;
 const MAX_SERVERS = 64;
+const DISCOVERY_WAIT_MS = 1_500;
 
 interface ConnectionState {
   initial?: Promise<void>;
@@ -32,6 +34,7 @@ function publicFailure(error: unknown): string {
 export class McpManager {
   private state = newState();
   private closed = false;
+  private sandbox: Sandbox | undefined;
 
   constructor(private readonly workspace: string, private readonly retryDelayMs = RETRY_DELAY_MS) {}
 
@@ -41,7 +44,8 @@ export class McpManager {
     if (active) return active;
     const attempt = (async () => {
       try {
-        const connection = await openMcpServer(name, config);
+        const configuredCwd = typeof config.cwd === "string" ? config.cwd : undefined;
+        const connection = await openMcpServer(name, config, this.sandbox ? { wrap: (executable, args, cwd) => this.sandbox!.wrap(executable, args, configuredCwd ?? cwd ?? this.workspace) } : {});
         if (this.closed || state !== this.state) { await connection.client.close(); return; }
         state.connections.set(name, connection);
         state.failures.delete(name);
@@ -74,8 +78,29 @@ export class McpManager {
     };
   }
 
-  async start(): Promise<{ connections: McpConnection[]; errors: { name: string; message: string }[] }> {
+  /** Read current connections without starting, reconnecting, or probing servers. */
+  current(): { connections: McpConnection[]; errors: { name: string; message: string }[] } {
+    return this.snapshot(this.state);
+  }
+
+  /** Await an already-started initial connection pass without starting a new one. */
+  async ready(): Promise<{ connections: McpConnection[]; errors: { name: string; message: string }[] }> {
+    const initial = this.state.initial;
+    if (initial) {
+      // Discovery must not stall the UI behind a slow MCP server.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        initial,
+        new Promise<void>(resolve => { timer = setTimeout(resolve, DISCOVERY_WAIT_MS); timer.unref?.(); }),
+      ]);
+      if (timer) clearTimeout(timer);
+    }
+    return this.snapshot(this.state);
+  }
+
+  async start(sandbox?: Sandbox): Promise<{ connections: McpConnection[]; errors: { name: string; message: string }[] }> {
     if (this.closed) throw new Error("MCP manager is closed.");
+    if (sandbox) this.sandbox = sandbox;
     const state = this.state;
     state.initial ??= (async () => {
       try {
@@ -108,3 +133,6 @@ export class McpManager {
     return this.reset();
   }
 }
+
+
+

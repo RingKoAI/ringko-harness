@@ -12,8 +12,10 @@ import { createWebFetchTool, type WebFetchInput, type WebFetchOptions, type WebF
 import { createWebSearchTool, type WebSearchInput, type WebSearchOptions, type WebSearchOutput } from "./websearch.ts";
 import { createWriteTool, type WriteInput, type WriteOutput } from "./write.ts";
 import { createWorkspace, type ResolvedTarget, type Workspace } from "./workspace.ts";
+import { Sandbox, SandboxDeniedError, SandboxUnavailableError, type SandboxMode, type SandboxRunner } from "./sandbox.ts";
 
-export { createWorkspace, FileTracker };
+export { createWorkspace, FileTracker, Sandbox, SandboxDeniedError, SandboxUnavailableError };
+export type { SandboxMode, SandboxRunner };
 export { AskManager, ASK_LIMITS, validateAskOutput } from "./ask.ts";
 export type { AskEvent } from "./ask.ts";
 export type { FileVersion, ResolvedTarget, Workspace };
@@ -89,6 +91,8 @@ export type {
 export interface WorkspaceToolsOptions {
   /** Root directory that reads and writes are measured against. */
   workspace: string;
+  /** Optional hard write boundary; omitted keeps approval-gated behavior. */
+  sandbox?: Sandbox;
 }
 
 /**
@@ -100,8 +104,8 @@ export function registerWorkspaceTools(registry: ToolRegistry, options: Workspac
   const workspace = createWorkspace(options.workspace);
   const tracker = new FileTracker();
   registry.register(createReadTool(workspace, tracker));
-  registry.register(createWriteTool(workspace, tracker));
-  registry.register(createEditTool(workspace, tracker));
+  registry.register(createWriteTool(workspace, tracker, options.sandbox));
+  registry.register(createEditTool(workspace, tracker, options.sandbox));
   registry.register(createGlobTool(workspace));
   registry.register(createGrepTool(workspace));
   registry.register(createTreeTool(workspace));

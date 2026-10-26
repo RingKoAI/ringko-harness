@@ -61,6 +61,28 @@ ringko --workspace /path/to/project --server http://127.0.0.1:8787
 
 共享后端的架构与已知限制，记录在仓库之外的维护者笔记中。
 
+### 沙盒
+
+默认 `sandbox.mode = "workspace-write"`。可选 `read-only`、`workspace-write`
+和必须显式启用的 `danger-full-access`。只有中间模式允许写入工作区；命令必须
+经过平台 runner，runner 不可用时直接失败关闭，不会退回普通 shell。
+
+```json
+{
+  "sandbox": {
+    "mode": "workspace-write",
+    "additionalWritableRoots": []
+  }
+}
+```
+
+Linux 使用 bubblewrap，macOS 使用 Seatbelt，Windows 使用 restricted token、
+低完整性标签和工作区/临时目录 capability-SID 写入 ACL。本地 stdio MCP 服务
+也通过同一 runner 启动。远程 MCP 工具没有明确只读声明时，在 `read-only` 下
+不注册；`workspace-write` 仍按审批控制，因为远端副作用无法由本机进程隔离。
+Windows 的隔离是部分边界：读取不受限，且子进程创建管道 stdio 时可能返回
+`EPERM`。Windows runner 尚未支持 PTY 终端，受限模式下的交互式终端会失败关闭。
+
 ### 委派任务
 
 CLI、TUI 与 Web 聊天都支持 `task`，`mode` 可取 `"read"`、`"write"` 或 `"full"`。

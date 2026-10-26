@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
@@ -8,6 +8,8 @@ it("starts an authenticated interactive PTY and streams command output over WebS
   const root = mkdtempSync(join(tmpdir(), "rkh-terminal-api-"));
   const previousHome = process.env.RINGKO_HOME;
   process.env.RINGKO_HOME = root;
+  mkdirSync(join(root, ".ringko"), { recursive: true });
+  writeFileSync(join(root, ".ringko", "settings.local.json"), JSON.stringify({ sandbox: { mode: "danger-full-access" } }));
   const app = startServer({ workspace: root, port: 0, authToken: "terminal-test-token" });
   let socket: WebSocket | undefined;
   try {
@@ -99,3 +101,6 @@ it("starts an authenticated interactive PTY and streams command output over WebS
     rmSync(root, { recursive: true, force: true });
   }
 }, process.platform === "win32" ? 30_000 : 15_000);
+
+
+

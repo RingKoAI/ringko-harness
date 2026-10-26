@@ -1,6 +1,6 @@
 import type { SessionEvent } from "./types.ts";
 export interface SessionTodo { content: string; status: "pending" | "in_progress" | "completed"; activeForm?: string }
-/** Restore only recorded, structurally valid bounded todo snapshots. */
+/** Restore plan snapshots. The persisted `session/todo` name is frozen for compatibility. */
 export function sessionTodos(events: readonly SessionEvent[]): SessionTodo[] {
   for (const event of [...events].reverse()) {
     if (event.type !== "session/todo" || !event.data || typeof event.data !== "object") continue;

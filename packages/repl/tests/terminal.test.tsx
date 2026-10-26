@@ -16,6 +16,8 @@ import type { ChatMessage, ModelClient } from "@ringko-ai/sdk";
 import type { EditorState } from "../src/editor.ts";
 import { cleanTerminalText } from "../src/editor.ts";
 import { PermissionManager } from "../../sdk/src/permissions.ts";
+import { ModelCatalogCache } from "@ringko-ai/config";
+import { recordAssistantMessage, recordSessionTitle, recordUserMessage, SessionStore } from "@ringko-ai/session";
 
 function terminal() {
   const input = new PassThrough();
@@ -30,6 +32,39 @@ function terminal() {
 const settle = () => new Promise(resolve => setTimeout(resolve, 50));
 
 describe("terminal component interactions", () => {
+  it("uses cached model capacity when an embedded host resumes and submits a plan", async () => {
+    const io = terminal();
+    const root = mkdtempSync(join(tmpdir(), "rkh-embedded-context-"));
+    const previousHome = process.env.RINGKO_HOME, previousUrl = process.env.RINGKO_MODELS_URL;
+    process.env.RINGKO_HOME = root;
+    const source = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ fixture: { models: { capacity: { limit: { context: 8192, input: 6000, output: 16_384 } } } } }) });
+    process.env.RINGKO_MODELS_URL = `http://127.0.0.1:${source.port}/catalog.json`;
+    const cache = new ModelCatalogCache({ onError: () => {} });
+    let app: ReturnType<typeof render> | undefined;
+    let compactions = 0, replies = 0;
+    try {
+      expect(await cache.refresh(true)).toBe(true);
+      const store = new SessionStore({ cwd: root });
+      const session = store.create();
+      recordSessionTitle(session, "Existing session");
+      for (let index = 0; index < 6; index++) { recordUserMessage(session, "Earlier input ".repeat(150)); recordAssistantMessage(session, index + 1, "Earlier output ".repeat(150), []); }
+      const id = session.id; session.close();
+      const model: ModelClient = async request => {
+        if (request.messages.some(message => message.content.startsWith("You compact an agent conversation."))) { compactions++; return { content: "Short summary", toolCalls: [] }; }
+        replies++; return { content: "capacity verified", toolCalls: [] };
+      };
+      app = render(<Repl workspace={root} model={model} modelLabel="Fixture" resumeSessionId={id} config={{ model: "Fixture/alias", providers: [{ name: "Fixture", type: "echo", models: [{ id: "alias", name: "Alias", catalogId: "fixture/capacity" }] }], compaction: { keepRecent: 2, margin: 0 } }} />, { stdin: io.input as unknown as NodeJS.ReadStream, stdout: io.output as unknown as NodeJS.WriteStream, stderr: io.output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
+      await settle(); io.input.write("Continue"); await settle(); io.input.write("\r");
+      for (let attempt = 0; attempt < 40 && !replies; attempt++) await settle();
+      expect(compactions).toBe(1);
+      expect(replies).toBe(1);
+    } finally {
+      app?.unmount(); io.input.destroy(); io.output.destroy(); cache.dispose(); source.stop(true);
+      if (previousHome === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previousHome;
+      if (previousUrl === undefined) delete process.env.RINGKO_MODELS_URL; else process.env.RINGKO_MODELS_URL = previousUrl;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("shows and confirms removal of a saved rule from the permissions picker", async () => {
     const io = terminal();
     const root = mkdtempSync(join(tmpdir(), "rkh-permission-picker-"));

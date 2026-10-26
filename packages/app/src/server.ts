@@ -32,12 +32,18 @@ import {
 } from "@ringko-ai/sdk";
 import {
   AskManager,
+  Sandbox,
   createShellTool,
   type AskHandler,
 } from "@ringko-ai/tools";
 import {
+  claimBackendRegistration,
   createSkill,
   configuredModelIds,
+  DEFAULT_BACKEND_PORT,
+  defaultProjectWorkspace,
+  localBackendOrigin,
+  removeBackendRegistration,
   discoverSkills,
   getOAuthAccount,
   getToolAuth,
@@ -74,8 +80,8 @@ import {
 } from "@ringko-ai/config";
 import {
   authorizeMcpServer,
+  mcpToolDefinitions,
   openMcpServer,
-  type McpConnection,
 } from "@ringko-ai/mcp";
 import { listWorkflows, resolveWorkflow } from "@ringko-ai/workflow";
 import { EventLog, createTimeSource } from "@ringko-ai/runtime";
@@ -141,7 +147,7 @@ export interface RingkoServer {
   stop(): void;
 }
 
-const DEFAULT_PORT = 8787;
+const DEFAULT_PORT = DEFAULT_BACKEND_PORT;
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_WEBUI_DIR = resolve(import.meta.dir, "../../webui/dist");
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
@@ -228,7 +234,11 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   if (options.shared && !loopback) throw new Error("Shared backends only support loopback hosts. Unset RINGKO_HOST or use 127.0.0.1.");
   const configuredPort = Number(process.env.RINGKO_PORT);
   const port = options.port ?? (Number.isInteger(configuredPort) && configuredPort > 0 ? configuredPort : DEFAULT_PORT);
-  let workspace = resolve(options.workspace ?? process.cwd());
+  // A project-scoped backend must not inherit its launch directory. Explicit
+  // --workspace remains an escape hatch for CLI/TUI compatibility.
+  let workspace = options.workspace !== undefined
+    ? resolve(options.workspace)
+    : defaultProjectWorkspace(process.cwd(), process.env).path;
   const bundledWebuiDir = resolve(import.meta.dir, "../webui");
   const webuiDir = resolve(options.webuiDir ?? process.env.RINGKO_WEBUI_DIR ?? (existsSync(join(DEFAULT_WEBUI_DIR, "index.html")) ? DEFAULT_WEBUI_DIR : existsSync(join(bundledWebuiDir, "index.html")) ? bundledWebuiDir : join(dirname(process.execPath), "webui")));
   let store = new SessionStore({ cwd: workspace });
@@ -241,6 +251,37 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   const modelCatalog = new ModelCatalogCache({ onRefresh: () => sync.publish("config") });
   const loadModel = (config: RingkoConfig) => resolveLoadedModel(config, modelCatalog);
   const runStates = new RunStateManager();
+  // One live backend owns each (workspace, config) pair. Other clients discover
+  // this registration and attach; a second backend must not write the same sessions.
+  const ownerConfigPath = options.configPath ? resolve(options.configPath) : undefined;
+  const shouldRegisterOwner = port > 0 && loopback;
+  let actualPort = port;
+  let claimedWorkspace: string | undefined;
+  function backendOrigin(candidatePort: number): string | undefined {
+    const hostPart = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+    return localBackendOrigin(`http://${hostPart}:${candidatePort}`);
+  }
+  function claimOwnership(targetWorkspace: string, candidatePort: number): void {
+    if (!shouldRegisterOwner) return;
+    const url = backendOrigin(candidatePort);
+    if (!url) return;
+    const claim = claimBackendRegistration({
+      workspace: targetWorkspace,
+      configPath: ownerConfigPath ?? null,
+      url,
+      port: candidatePort,
+      pid: process.pid,
+      instance: sync.instance,
+      startedAt: Date.now(),
+    });
+    if (claim.status === "conflict") throw new Error(`Backend already running at ${claim.registration.url}`);
+    claimedWorkspace = targetWorkspace;
+  }
+  function releaseOwnership(): void {
+    if (!claimedWorkspace) return;
+    removeBackendRegistration(claimedWorkspace, ownerConfigPath, sync.instance);
+    claimedWorkspace = undefined;
+  }
   // Single-threaded reservation: persistence validation and ownership happen without an await boundary.
   function beginRun(session: SessionHandle, record: () => void): AbortController {
     try { record(); session.flush(); }
@@ -263,24 +304,19 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       return { projects: [] };
     }
   })();
-  // Start in the active project's workspace when one is registered and exists.
-  const activeProject = projects.current ? projects.projects.find((entry) => entry.id === projects.current) : undefined;
-  if (activeProject && !options.shared && !options.workspace) {
-    try {
-      if (statSync(activeProject.path).isDirectory()) workspace = resolve(activeProject.path);
-    } catch {
-      // Registered project is gone; keep the launch directory.
-    }
-  }
-  store = new SessionStore({ cwd: workspace });
-
   function activateProject(id: string | undefined): void {
     if (options.shared) throw new Error("This shared backend is pinned to its workspace. Start a client in the other workspace instead.");
     if (activeRuns.size) throw new Error("Cannot switch workspace while sessions are running.");
     projects = id ? { projects: projects.projects, current: id } : { projects: projects.projects };
     saveProjects(projects);
     const active = id ? projects.projects.find((entry) => entry.id === id) : undefined;
-    workspace = active ? resolve(active.path) : baseWorkspace;
+    const nextWorkspace = active ? resolve(active.path) : baseWorkspace;
+    if (nextWorkspace !== workspace && shouldRegisterOwner) {
+      // Claim the new owner before publishing it; a live owner rejects the switch.
+      claimOwnership(nextWorkspace, actualPort);
+      removeBackendRegistration(workspace, ownerConfigPath, sync.instance);
+    }
+    workspace = nextWorkspace;
     store = new SessionStore({ cwd: workspace });
     resetMcp();
     sync.publish("workspace");
@@ -295,10 +331,6 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     return runtime;
   }
 
-  async function mcpConnections(cwd: string): Promise<{ connections: McpConnection[]; errors: { name: string; message: string }[] }> {
-    return await runtimeFor(cwd).connections();
-  }
-
   function resetMcp(): void {
     for (const runtime of runtimes.values()) void runtime.resetMcp().catch(() => {});
   }
@@ -306,7 +338,9 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   // Runtime event log + a time source; the model watches them via `subscribe`.
   const eventLog = new EventLog();
   const stopTimeSource = createTimeSource(eventLog, { intervalMs: 60_000 });
-  void runtimeFor(workspace).start().catch(error => writeDiagnostic("mcp.start", String(error)));
+  const startupConfig = readConfig();
+  const startupSandbox = typeof startupConfig === "string" ? undefined : new Sandbox({ workspace, mode: startupConfig.sandbox?.mode ?? "workspace-write", additionalWritableRoots: startupConfig.sandbox?.additionalWritableRoots });
+  void runtimeFor(workspace).start(startupSandbox).catch(error => writeDiagnostic("mcp.start", String(error)));
 
   function readConfig(): RingkoConfig | string {
     try {
@@ -328,6 +362,12 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         ? config.mode
         : "approval";
     const workflow = resolveWorkflow(config.workflow);
+    // Discovery must report the same effective tool set the model will receive,
+    // including MCP tools registered for the current workspace.
+    const baseTools = tools.tools.list();
+    const mcpTools = (await runtimeFor(workspace).readyConnections()).connections.flatMap(connection => mcpToolDefinitions(connection, { mode: (typeof config === "string" ? "workspace-write" : config.sandbox?.mode ?? "workspace-write") }));
+    const toolNames = new Set(baseTools.map(tool => tool.name));
+    for (const definition of mcpTools) if (!toolNames.has(definition.name)) toolNames.add(definition.name);
     const activeId = projects.current;
     const active = activeId ? projects.projects.find((entry) => entry.id === activeId) : undefined;
     return json({
@@ -345,7 +385,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         description: entry.description ?? null,
       })),
       context: {
-        used: estimateToolsTokens(tools.tools.list()),
+        used: estimateToolsTokens([...baseTools, ...mcpTools]),
         limit: (typeof model === "string" ? resolveContextLimits() : model.limits).contextWindow,
       },
       thinking: config.thinking ?? null,
@@ -359,7 +399,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         type: provider.type ?? provider.vendor ?? null,
         models: (provider.models ?? []).map((entry) => entry.id),
       })),
-      tools: tools.tools.list().map((tool) => tool.name),
+      tools: [...toolNames],
     });
   }
 
@@ -502,6 +542,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     if (typeof body?.servers !== "object" || body.servers === null || Array.isArray(body.servers)) {
       return json({ error: "servers must be an object." }, 400);
     }
+    if (activeRuns.size) return json({ error: "Stop active sessions before changing MCP configuration." }, 409);
     const scope = body.scope === "project" ? "project" : "global";
     const servers: Record<string, McpServerConfig> = {};
     for (const [name, config] of Object.entries(body.servers as Record<string, unknown>)) {
@@ -521,7 +562,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
   async function handleMcpConnected(): Promise<Response> {
-    const mcp = await mcpConnections(workspace);
+    // Read-only: discovery awaits the startup pass but never starts or reconnects.
+    const mcp = await runtimeFor(workspace).readyConnections();
     return json({
       servers: mcp.connections.map((connection) => ({
         name: connection.name,
@@ -1127,7 +1169,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       const history = toChatMessages(store.open(id, "read").all());
       const probe = createRingKo({ task: true, model: async () => ({ content: "", toolCalls: [] }) });
       registerTools(probe, config, workspace);
-      used = estimateMessagesTokens(history) + estimateToolsTokens(probe.tools.list());
+      const mcpTools = (await runtimeFor(workspace).readyConnections()).connections.flatMap(connection => mcpToolDefinitions(connection, { mode: (typeof config === "string" ? "workspace-write" : config.sandbox?.mode ?? "workspace-write") }));
+      used = estimateMessagesTokens(history) + estimateToolsTokens([...probe.tools.list(), ...mcpTools]);
     } catch {
       return json({ error: "Unknown session." }, 404);
     }
@@ -1236,7 +1279,10 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       session.appendEvent("run/started", { kind: "shell" });
       recordUserMessage(session, `!${body.command}`); recordAssistantMessage(session, 0, "", [call]); recordToolCall(session, 0, call);
     });
-    const tool = createShellTool({ cwd: workspace });
+    const config = readConfig();
+    if (typeof config === "string") return json({ error: config }, 500);
+    const sandbox = new Sandbox({ workspace, mode: config.sandbox?.mode ?? "workspace-write", additionalWritableRoots: config.sandbox?.additionalWritableRoots });
+    const tool = createShellTool({ cwd: workspace, sandbox });
     void (async () => {
       try {
         const result = await tool.execute(tool.parseInput(call.arguments), { signal: abort.signal });
@@ -1649,6 +1695,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       return json({ error: "Terminal dimensions are outside the supported range." }, 400);
     }
 
+    const config = readConfig();
+    if (typeof config === "string") return json({ error: config }, 500);
     const shell = process.platform === "win32"
       ? process.env.COMSPEC ?? "powershell.exe"
       : process.env.SHELL ?? "/bin/bash";
@@ -1657,7 +1705,9 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       : ["-i"];
     let terminal: InteractiveTerminal;
     try {
-      terminal = startInteractiveTerminal(shell, args, workspace, cols, rows);
+      const sandbox = new Sandbox({ workspace, mode: config.sandbox?.mode ?? "workspace-write", additionalWritableRoots: config.sandbox?.additionalWritableRoots });
+      const wrapped = sandbox.pty(shell, args, workspace);
+      terminal = startInteractiveTerminal(wrapped.executable, wrapped.args, wrapped.cwd, cols, rows);
     } catch (cause) {
       return json({ error: cause instanceof Error ? cause.message : "Could not start a terminal." }, 500);
     }
@@ -1775,7 +1825,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname === "/api/backend" && request.method === "GET") return json({ protocol: PROTOCOL_VERSION, instance: sync.instance, workspace, configPath: options.configPath ? resolve(options.configPath) : null });
       if (url.pathname === "/api/backend/stop" && request.method === "POST") {
         if (activeRuns.size) return json({ error: "Stop active sessions before stopping the backend." }, 409);
-        setTimeout(() => { modelCatalog.dispose(); sync.close(); stopTimeSource(); for (const id of terminalSessions.keys()) removeTerminal(id, true); for (const runtime of runtimes.values()) void runtime.close().catch(error => writeDiagnostic("runtime.close", String(error))); server.stop(true); }, 50);
+        setTimeout(() => { releaseOwnership(); modelCatalog.dispose(); sync.close(); stopTimeSource(); for (const id of terminalSessions.keys()) removeTerminal(id, true); for (const runtime of runtimes.values()) void runtime.close().catch(error => writeDiagnostic("runtime.close", String(error))); server.stop(true); }, 50);
         return json({ ok: true });
       }
       if (url.pathname === "/api/sync" && request.method === "GET") return sync.stream(request.signal);
@@ -1934,9 +1984,26 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   });
 
   const boundPort = server.port ?? port;
+  actualPort = boundPort;
+  try {
+    claimOwnership(workspace, boundPort);
+  } catch (error) {
+    server.stop(true);
+    throw error;
+  }
+  const url = backendOrigin(boundPort) ?? `http://${host}:${boundPort}`;
   return {
-    url: `http://${host}:${boundPort}`,
+    url,
     port: boundPort,
-    stop: () => { modelCatalog.dispose(); sync.close(); stopTimeSource(); for (const run of activeRuns.values()) run.abort(); for (const id of terminalSessions.keys()) removeTerminal(id, true); for (const runtime of runtimes.values()) void runtime.close().catch(() => {}); server.stop(true); },
+    stop: () => {
+      releaseOwnership();
+      modelCatalog.dispose(); sync.close(); stopTimeSource();
+      for (const run of activeRuns.values()) run.abort();
+      for (const id of terminalSessions.keys()) removeTerminal(id, true);
+      for (const runtime of runtimes.values()) void runtime.close().catch(() => {});
+      server.stop(true);
+    },
   };
 }
+
+

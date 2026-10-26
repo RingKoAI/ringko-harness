@@ -3,12 +3,13 @@ import { resumeHint } from "./resume-hint.ts";
 import { cliCommand } from "./cli-identity.ts";
 import { RuntimeManager, registerRuntimeTools } from "@ringko-ai/sdk/runtime";
 import { resolve } from "node:path";
-import { connectBackend } from "./backend.ts";
+import { connectBackend, findLiveBackend } from "./backend.ts";
 import type { BackendClient } from "@ringko-ai/client";
 import {
   applyProxyEnv,
   configuredModelIds,
   createSkill,
+  defaultProjectWorkspace,
   discoverSkills,
   getApiKey,
   getConfigValue,
@@ -27,6 +28,7 @@ import {
   removeOAuthAccount,
   saveConfig,
   selectModel,
+  resolveSelectionContext,
   setApiKey,
   setConfigValue,
   setDefaultOAuthAccount,
@@ -266,6 +268,9 @@ async function runCommand(parsed: ParsedArgs, io: CliIo, loop?: CliLoop): Promis
     return 1;
   }
   const selection = selectModel(prioritized, override);
+  let limits: Awaited<ReturnType<typeof resolveSelectionContext>>;
+  try { limits = await resolveSelectionContext(selection); }
+  catch (error) { session.close(); io.err(error instanceof Error ? error.message : "Cannot resolve model capacity."); return 1; }
   recordSessionModel(session, selectionLabel(selection));
 
   const runtime = new RuntimeManager(workspace);
@@ -273,6 +278,7 @@ async function runCommand(parsed: ParsedArgs, io: CliIo, loop?: CliLoop): Promis
   try {
   const managed = runtime.createAgent(config, {
     model,
+    ...limits,
     task: true,
     taskModels: configuredModelIds(config),
     resolveTaskModel: async id => { const client = await loadProviderModel({ ...config, model: id }); if (typeof client === "string") throw new Error(client); return client; },
@@ -347,7 +353,7 @@ async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   }
   const config = readConfig(parsed, io);
   if (!config) return 2;
-  const workspace = parsed.workspace ?? config.workspace ?? process.cwd();
+  const workspace = parsed.workspace ?? config.workspace ?? defaultProjectWorkspace(process.cwd(), process.env).path;
   let connection: Awaited<ReturnType<typeof connectBackend>>;
   try { connection = await connectBackend({ workspace, configPath: parsed.config, url: parsed.server }); }
   catch (error) { io.err(error instanceof Error ? error.message : "Cannot connect backend."); return 1; }
@@ -388,10 +394,28 @@ async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
 
 async function serveCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   const { startServer } = await import("@ringko-ai/app");
+  const workspace = parsed.workspace ? resolve(parsed.workspace) : defaultProjectWorkspace(process.cwd(), process.env).path;
+  const configPath = parsed.config ? resolve(parsed.config) : undefined;
+  // One backend owns each workspace/config pair; a second `serve` attaches to it.
+  const existing = await findLiveBackend({ workspace, configPath });
+  if (existing) {
+    io.out(`RingKo backend / WebUI: ${existing.url}`);
+    io.out("Already running; reusing the existing backend.");
+    return 0;
+  }
   let server;
   try {
-    server = startServer({ workspace: resolve(parsed.workspace ?? process.cwd()), port: parsed.port, configPath: parsed.config, shared: parsed.shared, authToken: process.env.RINGKO_WEB_TOKEN?.trim() });
-  } catch (error) { io.err(error instanceof Error ? error.message : "Backend startup failed."); return 1; }
+    server = startServer({ workspace, port: parsed.port, configPath, shared: parsed.shared, authToken: process.env.RINGKO_WEB_TOKEN?.trim() });
+  } catch (error) {
+    const running = await findLiveBackend({ workspace, configPath });
+    if (running) {
+      io.out(`RingKo backend / WebUI: ${running.url}`);
+      io.out("Already running; reusing the existing backend.");
+      return 0;
+    }
+    io.err(error instanceof Error ? error.message : "Backend startup failed.");
+    return 1;
+  }
   io.out(`RingKo backend / WebUI: ${server.url}`);
   await new Promise<void>(finish => {
     const shutdown = () => { process.off("SIGINT", shutdown); process.off("SIGTERM", shutdown); server.stop(); finish(); };

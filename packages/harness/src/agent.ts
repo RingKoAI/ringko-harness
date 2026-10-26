@@ -89,6 +89,8 @@ export interface AgentOptions {
   tools: ToolRegistry;
   requestApproval?: ApprovalHandler;
   instructions?: string;
+  /** Host preparation before every model request, including tool continuations. */
+  prepareMessages?: (messages: readonly ChatMessage[], signal?: AbortSignal) => readonly ChatMessage[] | Promise<readonly ChatMessage[]>;
   maxTurns?: number;
   onEvent?: (event: AgentEvent) => void;
   /** Prior conversation to continue from (resume). */
@@ -128,6 +130,7 @@ export class Agent {
   private readonly tools: ToolRegistry;
   private readonly requestApproval?: ApprovalHandler;
   private readonly instructions?: string;
+  private readonly prepareMessages?: AgentOptions["prepareMessages"];
   private readonly maxTurns: number;
   private readonly onEvent?: (event: AgentEvent) => void;
   private readonly initialMessages: readonly ChatMessage[];
@@ -153,6 +156,7 @@ export class Agent {
     this.tools = options.tools;
     this.requestApproval = options.requestApproval;
     this.instructions = options.instructions;
+    this.prepareMessages = options.prepareMessages;
     this.maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
     this.onEvent = options.onEvent;
     this.initialMessages = options.messages ?? [];
@@ -172,7 +176,7 @@ export class Agent {
       throw new TypeError("Agent prompt must not be empty.");
     }
 
-    const messages: ChatMessage[] = [...this.initialMessages];
+    let messages: ChatMessage[] = [...this.initialMessages];
     if (
       this.instructions &&
       this.instructions.trim().length > 0 &&
@@ -184,6 +188,8 @@ export class Agent {
 
     let lastUsage: ModelUsage | undefined;
     for (let turn = 1; turn <= this.maxTurns; turn += 1) {
+      this.signal?.throwIfAborted();
+      if (this.prepareMessages) messages = [...await abortable(Promise.resolve(this.prepareMessages(messages, this.signal)), this.signal)];
       this.signal?.throwIfAborted();
       const response = await abortable(this.model({
         messages,

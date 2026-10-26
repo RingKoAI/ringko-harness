@@ -81,15 +81,18 @@ async function readSse(
 }
 
 /** stdio transport: newline-delimited JSON-RPC over a child process. */
+export type ProcessWrapper = (executable: string, args: readonly string[], cwd: string) => { executable: string; args: string[]; cwd: string };
 export function createStdioTransport(options: {
   command: string;
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
   diagnosticName?: string;
+  wrap?: ProcessWrapper;
 }): Transport {
-  const proc = Bun.spawn([options.command, ...(options.args ?? [])], {
-    cwd: options.cwd,
+  const invocation = options.wrap?.(options.command, options.args ?? [], options.cwd ?? process.cwd()) ?? { executable: options.command, args: options.args ?? [], cwd: options.cwd ?? process.cwd() };
+  const proc = Bun.spawn([invocation.executable, ...invocation.args], {
+    cwd: invocation.cwd,
     env: { ...process.env, ...options.env },
     stdin: "pipe",
     stdout: "pipe",
@@ -276,3 +279,4 @@ export function createHttpTransport(url: string, headers: Record<string, string>
     },
   };
 }
+

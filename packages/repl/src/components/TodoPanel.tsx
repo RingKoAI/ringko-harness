@@ -27,7 +27,7 @@ export function TodoPanel({ todos, maxRows = 5 }: { todos: readonly TodoItem[]; 
   const overflow = todos.length > maxRows - 1;
   const count = Math.max(0, maxRows - 1 - (overflow ? 1 : 0));
   const visible = overflow ? [...todos].sort((a, b) => RANK[a.status] - RANK[b.status]).slice(0, count) : todos;
-  const header = `${todos.length} task${todos.length === 1 ? "" : "s"} (${completed} done${inProgress > 0 ? `, ${inProgress} in progress` : ""}, ${open} open)`;
+  const header = `${todos.length} step${todos.length === 1 ? "" : "s"} (${completed} done${inProgress > 0 ? `, ${inProgress} in progress` : ""}, ${open} open)`;
 
   return (
     <Box flexDirection="column" paddingX={padding} flexShrink={0}>

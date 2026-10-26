@@ -1,5 +1,6 @@
 // Expose a connected MCP server's tools as harness tools (approval-gated).
 import { defineTool, ToolRegistry, type AnyToolDefinition, type RiskKind } from "@ringko-ai/harness";
+import { writeDiagnostic } from "@ringko-ai/config";
 import type { McpConnection } from "./client.ts";
 
 const INVALID = /[^a-zA-Z0-9_-]/g;
@@ -11,13 +12,20 @@ function segment(value: string): string {
 export interface RegisterMcpOptions {
   /** Approval risk kind for every tool (default "network"). */
   risk?: RiskKind;
+  /** Active host policy; remote tools without a positive read-only declaration are withheld. */
+  mode?: "read-only" | "workspace-write" | "danger-full-access";
 }
 
 /** Build harness tool definitions for one connected server. */
 export function mcpToolDefinitions(connection: McpConnection, options: RegisterMcpOptions = {}): AnyToolDefinition[] {
   const prefix = segment(connection.name).slice(0, 40) || "mcp";
   const risk: RiskKind = options.risk ?? "network";
-  return connection.tools.map((tool) => {
+  return connection.tools.filter((tool) => {
+    if (connection.local || (options.mode ?? "workspace-write") !== "read-only") return true;
+    if (tool.annotations?.readOnlyHint === true) return true;
+    writeDiagnostic(`mcp.${connection.name}`, `Remote tool ${tool.name} is withheld under read-only: no positive read-only declaration.`);
+    return false;
+  }).map((tool) => {
     const name = `${prefix}__${segment(tool.name)}`.slice(0, 128);
     return defineTool<Record<string, unknown>, string>({
       name,
@@ -60,3 +68,6 @@ export function registerMcpTools(
   }
   return registered;
 }
+
+
+

@@ -8,7 +8,7 @@
 // and portable installs).
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 export const RINGKO_DIR_NAME = ".ringko";
 export const AGENTS_DIR_NAME = ".agents";
@@ -146,6 +146,33 @@ export function projectSkillsDirs(cwd: string = process.cwd(), env: NodeJS.Proce
     for (const name of SKILLS_DIR_NAMES) {
       dirs.push(join(root, base, name));
     }
+  }
+  return dirs;
+}
+
+/**
+ * Shared `.agents` / `.ringko` skill directories in ancestor workspaces.
+ *
+ * A nested repository often lives under a broader projects directory that
+ * carries shared skills. Only ancestors inside the user home are considered,
+ * stopping before the home directory itself; the home-level directories are
+ * handled by {@link skillsDirs}. Nearest ancestors come first.
+ */
+export function ancestorSkillsDirs(cwd: string = process.cwd(), env: NodeJS.ProcessEnv = process.env): string[] {
+  const home = resolve(homeOf(env, "RINGKO_HOME"));
+  const from = resolve(cwd);
+  const insideHome = relative(home, from);
+  if (insideHome === "" || insideHome === ".." || insideHome.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(insideHome)) return [];
+  const dirs: string[] = [];
+  let dir = from;
+  for (;;) {
+    if (dir === home) break;
+    for (const base of [AGENTS_DIR_NAME, RINGKO_DIR_NAME]) {
+      for (const name of SKILLS_DIR_NAMES) dirs.push(join(dir, base, name));
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
   }
   return dirs;
 }

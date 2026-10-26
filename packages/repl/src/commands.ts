@@ -51,7 +51,7 @@ export interface SlashCommand {
 
 export function buildCommands(): SlashCommand[] {
   return [
-    { name: "todos", description: "browse all todo items", run: ctx => ctx.showTodos?.() },
+    { name: "todos", description: "browse all plan steps", run: ctx => ctx.showTodos?.() },
     { name: "agents", description: "switch between main and subagent task views", run: ctx => ctx.pickAgent?.() },
     { name: "loop", description: "repeat a prompt until a completion promise or max iterations", run: (ctx, arg) => ctx.startLoop?.(arg) },
     { name: "cancel-loop", aliases: ["stop-loop"], description: "stop the active loop", run: ctx => ctx.cancelLoop?.() },
