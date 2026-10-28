@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
 
-it("starts an authenticated interactive PTY and streams command output over WebSocket", async () => {
+for (const mode of ["danger-full-access", "workspace-write", "read-only"] as const) it(`starts an authenticated ${mode} PTY and streams command output over WebSocket`, async () => {
   const root = mkdtempSync(join(tmpdir(), "rkh-terminal-api-"));
   const previousHome = process.env.RINGKO_HOME;
   process.env.RINGKO_HOME = root;
   mkdirSync(join(root, ".ringko"), { recursive: true });
-  writeFileSync(join(root, ".ringko", "settings.local.json"), JSON.stringify({ sandbox: { mode: "danger-full-access" } }));
+  writeFileSync(join(root, ".ringko", "settings.local.json"), JSON.stringify({ sandbox: { mode } }));
   const app = startServer({ workspace: root, port: 0, authToken: "terminal-test-token" });
   let socket: WebSocket | undefined;
   try {

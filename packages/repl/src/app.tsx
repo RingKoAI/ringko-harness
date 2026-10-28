@@ -1079,7 +1079,7 @@ export function Repl(props: ReplProps) {
       setRunning(true);
       setItems(previous => [...previous, { id, kind: "tool", toolName: "shell", arguments: { command: parsed.value }, text: "", running: true }]);
       try {
-        const result = await runLocalShell(parsed.value, workspace, controller.signal);
+        const result = await runLocalShell(parsed.value, workspace, controller.signal, config.sandbox);
         setItems(previous => previous.map(item => item.id === id ? { ...item, running: false, failed: result.exitCode !== 0 || result.timedOut === true, text: JSON.stringify(result) } : item));
       } catch (error) {
         const text = controller.signal.aborted ? "Interrupted" : error instanceof Error ? error.message : "Shell command failed.";

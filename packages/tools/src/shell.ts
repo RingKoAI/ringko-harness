@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { defineTool, type ToolDefinition, type JobSnapshot } from "@ringko-ai/harness";
-import type { Sandbox } from "./sandbox.ts";
+import { Sandbox, type SandboxedProcess } from "./sandbox.ts";
 
 export const SHELL_LIMITS = Object.freeze({ defaultTimeoutMs: 300_000, commandCharacters: 16_384, outputCharacters: 65_536, outputEvents: 200 });
 export interface ShellInput { command: string; timeout?: number; description?: string; background?: boolean }
@@ -32,6 +32,7 @@ async function terminate(proc: ChildProcess): Promise<void> {
 }
 export function createShellTool(options: ShellOptions): ToolDefinition<ShellInput, ShellOutput | JobSnapshot> {
   if (typeof options?.cwd !== "string" || !options.cwd.trim()) throw new TypeError("shell requires a cwd.");
+  const sandbox = options.sandbox ?? new Sandbox({ workspace: options.cwd });
   const configuredTimeout = options.defaultTimeoutMs ?? SHELL_LIMITS.defaultTimeoutMs;
   const defaultTimeout = Number.isFinite(configuredTimeout) && configuredTimeout > 0 ? configuredTimeout : SHELL_LIMITS.defaultTimeoutMs;
   return defineTool({
@@ -42,14 +43,13 @@ export function createShellTool(options: ShellOptions): ToolDefinition<ShellInpu
     assessRisk: ({ command, description }) => ({ kind: "shell", reason: description ?? `Run shell command: ${command}`, target: command }),
     async execute(input, context) {
       if (input.background && !context?.jobs) throw new Error("This host does not support background shell jobs.");
-      const work = (signal?: AbortSignal, emit?: (type: string, data: unknown) => void): Promise<ShellOutput> => new Promise((resolve, reject) => {
+      const work = async (signal?: AbortSignal, emit?: (type: string, data: unknown) => void): Promise<ShellOutput> => {
         signal?.throwIfAborted();
-        const invocation = options.sandbox
-          ? options.sandbox.shell(input.command, options.cwd)
-          : process.platform === "win32"
-            ? { executable: "cmd.exe", args: ["/d", "/s", "/c", input.command], cwd: options.cwd }
-            : { executable: "/bin/sh", args: ["-c", input.command], cwd: options.cwd };
-        const proc = spawn(invocation.executable, invocation.args, { cwd: invocation.cwd, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+        await sandbox.prepare();
+        return await new Promise<ShellOutput>((resolve, reject) => {
+        signal?.throwIfAborted();
+        const invocation: SandboxedProcess = sandbox.shell(input.command, options.cwd);
+        const proc = spawn(invocation.executable, invocation.args, { cwd: invocation.cwd, env: invocation.env, windowsVerbatimArguments: invocation.windowsVerbatimArguments, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
         let stdout = "", stderr = "", truncated = false, timedOut = false, chunks = 0, stopping = false, eventsTruncated = false;
         let failure: unknown;
         const stop = () => { if (!stopping) { stopping = true; void terminate(proc); } };
@@ -82,7 +82,8 @@ export function createShellTool(options: ShellOptions): ToolDefinition<ShellInpu
           else if (signal?.aborted) reject(signal.reason);
           else resolve({ command: input.command, exitCode: code ?? -1, stdout, stderr, ...(timedOut ? { timedOut } : {}), ...(truncated ? { truncated } : {}), ...(eventsTruncated ? { eventsTruncated } : {}) });
         });
-      });
+        });
+      };
       if (!context?.jobs) return await work(context?.signal);
       const job = context.jobs.start({ kind: "shell", description: input.description ?? input.command.slice(0, 120), background: input.background, signal: context.signal }, work);
       return await context.jobs.foreground(job.jobId, context.signal) as ShellOutput | JobSnapshot;

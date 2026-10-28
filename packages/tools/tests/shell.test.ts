@@ -1,4 +1,7 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   ApprovalHandlerUnavailableError,
   ToolApprovalRejectedError,
@@ -8,7 +11,9 @@ import {
 } from "@ringko-ai/harness";
 import { createShellTool } from "../src/shell.ts";
 
-const cwd = process.cwd();
+let cwd: string;
+beforeEach(() => { cwd = mkdtempSync(join(tmpdir(), "rkh-shell-tool-")); });
+afterEach(() => { rmSync(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
 const echo = "echo ringko";
 // Windows/Bun process startup and tree termination can exceed the default budget.
 const PROCESS_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 5_000;
@@ -23,7 +28,7 @@ describe("shell tool", () => {
     expect(page.job.status).toBe("completed");
     expect(page.events.some(event => event.type === "stdout")).toBe(true);
     expect(page.job.result).toMatchObject({ exitCode: 0 });
-  });
+  }, PROCESS_TEST_TIMEOUT_MS);
 
   it("kills a cancelled background process tree and retains bounded output", async () => {
     const jobs = new JobManager();
@@ -39,7 +44,7 @@ describe("shell tool", () => {
     const output = await executeTool(createShellTool({ cwd }), { command: "exit 7" }, async () => true, "approval", { jobs });
     expect(output).toMatchObject({ exitCode: 7 });
     expect(jobs.list()[0].status).toBe("failed");
-  });
+  }, PROCESS_TEST_TIMEOUT_MS);
 
   it("enforces timeout for a foreground process", async () => {
     const command = process.platform === "win32" ? 'ping -n 30 127.0.0.1 > nul' : 'sleep 30';
@@ -69,7 +74,7 @@ describe("shell tool", () => {
     if (!("exitCode" in output)) throw new Error("Expected foreground shell result.");
     expect(output.exitCode).toBe(0);
     expect(output.stdout.trim().length).toBeGreaterThan(0);
-  });
+  }, PROCESS_TEST_TIMEOUT_MS);
 
   it("rejects invalid input before asking for approval", async () => {
     let asked = false;

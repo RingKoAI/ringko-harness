@@ -20,11 +20,10 @@ function available(): boolean {
 
 function run(sandbox: Sandbox, command: string): number {
   const invocation = sandbox.shell(command, root);
-  return spawnSync(invocation.executable, invocation.args, { cwd: invocation.cwd, encoding: "utf8" }).status ?? -1;
+  return spawnSync(invocation.executable, invocation.args, { cwd: invocation.cwd, env: invocation.env, encoding: "utf8" }).status ?? -1;
 }
 
-it("enforces the native POSIX workspace and external write boundaries", () => {
-  if (!available()) return;
+it.skipIf(!available())("enforces the native POSIX workspace and external write boundaries", () => {
   const outside = mkdtempSync(join(tmpdir(), "ringko-posix-outside-"));
   try {
     const workspace = new Sandbox({ workspace: root, mode: "workspace-write" });

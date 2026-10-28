@@ -91,7 +91,7 @@ export type {
 export interface WorkspaceToolsOptions {
   /** Root directory that reads and writes are measured against. */
   workspace: string;
-  /** Optional hard write boundary; omitted keeps approval-gated behavior. */
+  /** Optional explicit write boundary; omitted defaults to workspace-write. */
   sandbox?: Sandbox;
 }
 
@@ -103,9 +103,10 @@ export interface WorkspaceToolsOptions {
 export function registerWorkspaceTools(registry: ToolRegistry, options: WorkspaceToolsOptions): Workspace {
   const workspace = createWorkspace(options.workspace);
   const tracker = new FileTracker();
+  const sandbox = options.sandbox ?? new Sandbox({ workspace: options.workspace });
   registry.register(createReadTool(workspace, tracker));
-  registry.register(createWriteTool(workspace, tracker, options.sandbox));
-  registry.register(createEditTool(workspace, tracker, options.sandbox));
+  registry.register(createWriteTool(workspace, tracker, sandbox));
+  registry.register(createEditTool(workspace, tracker, sandbox));
   registry.register(createGlobTool(workspace));
   registry.register(createGrepTool(workspace));
   registry.register(createTreeTool(workspace));

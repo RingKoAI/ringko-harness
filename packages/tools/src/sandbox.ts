@@ -2,15 +2,27 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
-import { ensureWindowsSandbox, prepareWindowsAcl } from "./windows-runner.ts";
+import { ensureWindowsSandbox, prepareWindowsAcl, prepareWindowsSandbox } from "./windows-runner.ts";
 import { SandboxDeniedError, SandboxUnavailableError } from "./sandbox-errors.ts";
+import { sandboxEnvironment } from "./sandbox-environment.ts";
 
 export { SandboxDeniedError, SandboxUnavailableError };
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type SandboxRunner = "bwrap" | "seatbelt" | "windows-acl" | "none";
+export interface SandboxedProcess {
+  executable: string;
+  args: string[];
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+  /** Native terminal launchers speak the same control/event protocol as the bridge. */
+  protocol?: "jsonl";
+  windowsVerbatimArguments?: boolean;
+}
 
 const MODES: readonly SandboxMode[] = ["read-only", "workspace-write", "danger-full-access"];
 const MAX_NEW_PATH_DEPTH = 256;
+const MAX_WRITABLE_ROOTS = 64;
+const DEFAULT_TERMINAL_SIZE = { cols: 80, rows: 24 };
 
 /** Resolve aliases through the nearest existing ancestor of a new target. */
 function canonicalTarget(path: string): string {
@@ -67,11 +79,13 @@ function within(root: string, candidate: string): boolean {
 function detectRunner(): SandboxRunner {
   if (process.platform === "win32") return "windows-acl";
   if (process.platform === "linux") {
-    const probe = spawnSync("bwrap", ["--version"], { stdio: "ignore" });
+    const executable = Bun.which("bwrap");
+    if (!executable) return "none";
+    const probe = spawnSync(executable, ["--version"], { stdio: "ignore", env: sandboxEnvironment(tmpdir()) });
     return probe.status === 0 ? "bwrap" : "none";
   }
   if (process.platform === "darwin") {
-    const probe = spawnSync("/usr/bin/sandbox-exec", ["-h"], { stdio: "ignore" });
+    const probe = spawnSync("/usr/bin/sandbox-exec", ["-h"], { stdio: "ignore", env: sandboxEnvironment(tmpdir()) });
     return probe.error === undefined ? "seatbelt" : "none";
   }
   return "none";
@@ -93,17 +107,37 @@ export class Sandbox {
   readonly additionalWritableRoots: readonly string[];
   readonly runner: SandboxRunner;
   readonly enforcement: "full" | "partial" | "none";
+  private readonly runnerExecutable: string;
   private tempDirectory?: string;
 
   constructor(options: { workspace: string; mode?: SandboxMode; additionalWritableRoots?: readonly string[]; runner?: SandboxRunner }) {
     const mode = options.mode ?? "workspace-write";
     if (!MODES.includes(mode)) throw new TypeError(`Invalid sandbox mode: ${String(mode)}`);
     this.mode = mode;
-    this.workspaceRoot = canonicalDirectory(options.workspace);
+    const resolveRoot = (value: string) => {
+      const absolute = resolve(value);
+      if (process.platform === "win32" && mode !== "danger-full-access" && !/^(?:[A-Za-z]:[\\/]|\\\\\?\\[A-Za-z]:[\\/])/.test(absolute)) {
+        throw new SandboxUnavailableError("Windows sandbox roots require a local drive path; UNC and device roots are unsupported.");
+      }
+      return canonicalDirectory(absolute);
+    };
+    this.workspaceRoot = resolveRoot(options.workspace);
+    const rootKey = (path: string) => process.platform === "win32" ? path.toLowerCase() : path;
+    const seenRoots = new Set([rootKey(this.workspaceRoot)]);
     this.additionalWritableRoots = (options.additionalWritableRoots ?? []).map(root =>
-      canonicalDirectory(isAbsolute(root) ? root : resolve(this.workspaceRoot, root)),
-    );
+      resolveRoot(isAbsolute(root) ? root : resolve(this.workspaceRoot, root)),
+    ).filter(root => {
+      const key = rootKey(root);
+      if (seenRoots.has(key)) return false;
+      seenRoots.add(key);
+      return true;
+    });
+    if (this.additionalWritableRoots.length >= MAX_WRITABLE_ROOTS) throw new TypeError("Too many writable sandbox roots.");
+    for (const root of this.additionalWritableRoots) {
+      if (!statSync(root).isDirectory()) throw new TypeError(`Sandbox root is not a directory: ${root}`);
+    }
     this.runner = options.runner ?? detectRunner();
+    this.runnerExecutable = this.runner === "bwrap" ? Bun.which("bwrap") ?? "/usr/bin/bwrap" : "/usr/bin/sandbox-exec";
     this.enforcement = mode === "danger-full-access" ? "none" : this.runner === "none" ? "none" : this.runner === "windows-acl" ? "partial" : "full";
   }
 
@@ -123,23 +157,27 @@ export class Sandbox {
   }
 
   private temp(): string {
-    this.tempDirectory ??= mkdtempSync(join(tmpdir(), "ringko-sandbox-"));
+    this.tempDirectory ??= realpathSync(mkdtempSync(join(tmpdir(), "ringko-sandbox-")));
     return this.tempDirectory;
   }
 
+  /** Prewarm process confinement asynchronously; wrap remains a synchronous compatibility API. */
+  async prepare(environment?: Readonly<Record<string, string>>): Promise<void> {
+    if (this.mode === "danger-full-access") return;
+    sandboxEnvironment(this.runner === "windows-acl" ? this.temp() : tmpdir(), environment);
+    if (this.runner === "windows-acl") await prepareWindowsSandbox(this.mode, this.workspaceRoot, this.temp(), this.mode === "workspace-write" ? this.additionalWritableRoots : []);
+  }
+
   /** Wrap an arbitrary host process and its descendants under the active policy. */
-  wrap(executable: string, args: readonly string[], cwd = this.workspaceRoot): { executable: string; args: string[]; cwd: string } {
-    if (this.mode === "danger-full-access") return { executable, args: [...args], cwd };
+  wrap(executable: string, args: readonly string[], cwd = this.workspaceRoot, environment?: Readonly<Record<string, string>>): SandboxedProcess {
+    if (this.mode === "danger-full-access") return { executable, args: [...args], cwd, ...(environment ? { env: { ...process.env, ...environment } } : {}) };
     if (this.runner === "none") {
       throw new SandboxUnavailableError(
         `Sandbox mode ${this.mode} requires a process runner. Set sandbox.mode to danger-full-access or install bubblewrap (Linux), sandbox-exec (macOS), or the Windows ACL runner.`,
       );
     }
     if (this.runner === "windows-acl") {
-      if (this.additionalWritableRoots.length > 0) throw new SandboxUnavailableError("Additional writable roots are not supported by the Windows runner.");
-      const helper = ensureWindowsSandbox();
-      prepareWindowsAcl(this.mode as "read-only" | "workspace-write", this.workspaceRoot, this.temp());
-      return { executable: helper, args: [this.mode, this.workspaceRoot, this.temp(), cwd, "--", executable, ...args], cwd };
+      return this.windowsProcess(executable, args, cwd, undefined, environment);
     }
     if (this.runner === "bwrap") {
       const wrapped = ["--die-with-parent", "--ro-bind", "/", "/", "--dev", "/dev", "--unshare-pid", "--unshare-ipc", "--proc", "/proc", "--tmpfs", "/tmp", "--chdir", cwd];
@@ -150,7 +188,7 @@ export class Sandbox {
         wrapped.push("--ro-bind", this.workspaceRoot, this.workspaceRoot);
       }
       wrapped.push("--", executable, ...args);
-      return { executable: "bwrap", args: wrapped, cwd };
+      return { executable: this.runnerExecutable, args: wrapped, cwd, env: sandboxEnvironment("/tmp", environment) };
     }
     const temp = this.temp();
     const profile = [
@@ -158,8 +196,7 @@ export class Sandbox {
       "(allow default)",
       "(deny file-write*)",
       `(allow file-write* (subpath ${JSON.stringify(temp)}))`,
-      '(allow file-write* (subpath "/tmp"))',
-      '(allow file-write* (subpath "/private/tmp"))',
+      '(allow file-write* (literal "/dev/null"))',
       ...(this.mode === "workspace-write"
         ? [
             `(allow file-write* (subpath ${JSON.stringify(this.workspaceRoot)}))`,
@@ -167,19 +204,40 @@ export class Sandbox {
           ]
         : []),
     ].join(" ");
-    return { executable: "/usr/bin/sandbox-exec", args: ["-p", profile, executable, ...args], cwd };
+    return { executable: "/usr/bin/sandbox-exec", args: ["-p", profile, executable, ...args], cwd, env: sandboxEnvironment(temp, environment) };
+  }
+
+  private windowsProcess(executable: string, args: readonly string[], cwd: string, size?: { cols: number; rows: number }, environment?: Readonly<Record<string, string>>): SandboxedProcess {
+    const env = sandboxEnvironment(this.temp(), environment);
+    const helper = ensureWindowsSandbox();
+    const roots = this.mode === "workspace-write" ? this.additionalWritableRoots : [];
+    prepareWindowsAcl(this.mode as "read-only" | "workspace-write", this.workspaceRoot, this.temp(), roots);
+    return {
+      executable: helper,
+      args: [this.mode, this.workspaceRoot, this.temp(), cwd,
+        ...roots.flatMap(root => ["--writable-root", root]),
+        ...(size ? ["--pty", String(size.cols), String(size.rows)] : []),
+        ...Object.keys(environment ?? {}).flatMap(name => ["--allow-env", name]),
+        "--", executable, ...args],
+      cwd,
+      env,
+      ...(size ? { protocol: "jsonl" as const } : {}),
+    };
   }
 
   /** Wrap a shell command, or fail closed when process confinement is unavailable. */
-  shell(command: string, cwd = this.workspaceRoot): { executable: string; args: string[]; cwd: string } {
+  shell(command: string, cwd = this.workspaceRoot): SandboxedProcess {
     const shell = shellCommand(command);
+    if (process.platform === "win32" && this.mode === "danger-full-access") {
+      return { executable: shell.executable, args: ["/d", "/s", "/c", `"${command}"`], cwd, windowsVerbatimArguments: true };
+    }
     return this.wrap(shell.executable, shell.args, cwd);
   }
 
   /** Wrap an interactive shell for a PTY without changing its stdio shape. */
-  pty(executable: string, args: readonly string[], cwd = this.workspaceRoot): { executable: string; args: string[]; cwd: string } {
-    if (process.platform === "win32" && this.mode !== "danger-full-access") {
-      throw new SandboxUnavailableError("Interactive terminals are not supported by the Windows sandbox runner; use the shell tool or explicitly select danger-full-access.");
+  pty(executable: string, args: readonly string[], cwd = this.workspaceRoot, size = DEFAULT_TERMINAL_SIZE): SandboxedProcess {
+    if (this.runner === "windows-acl" && this.mode !== "danger-full-access") {
+      return this.windowsProcess(executable, args, cwd, size);
     }
     return this.wrap(executable, args, cwd);
   }

@@ -47,7 +47,6 @@ writeFileSync(resolve(output, "package.json"), `${JSON.stringify({
 copyFileSync(resolve(repositoryRoot, "LICENSE"), resolve(output, "LICENSE"));
 copyFileSync(resolve(repositoryRoot, "NOTICE"), resolve(output, "NOTICE"));
 copyFileSync(resolve(repositoryRoot, "packages/app/src/terminal-bridge.mjs"), resolve(output, "bin/terminal-bridge.mjs"));
-cpSync(resolve(repositoryRoot, "packages/tools/native"), resolve(output, "native"), { recursive: true });
 cpSync(webui, resolve(output, "webui"), { recursive: true });
 copyFileSync(resolve(packageRoot, "NPM.md"), resolve(output, "README.md"));
 console.log(`Prepared ${npmName}@${manifest.version} in ${output}`);

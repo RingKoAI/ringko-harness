@@ -46,6 +46,10 @@ jobs:
       - name: Build binary
         run: pnpm build:bin
 
+      - name: Verify standalone Windows sandbox
+        if: runner.os == 'Windows'
+        run: pnpm test:sandbox:bin
+
       - name: Build npm package
         run: bun packages/tui/scripts/pack-npm.mjs
 

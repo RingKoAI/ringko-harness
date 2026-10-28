@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { lstat, open, opendir, realpath } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
+import { Sandbox } from '@ringko-ai/tools';
 
 export const REVIEW_LIMITS = { entries: 200, bytes: 262144, path: 4096, gitTimeout: 5000 } as const;
 const execute = promisify(execFile);
@@ -45,7 +46,11 @@ export class WorkspaceReview {
   async diff(path: string, signal?: AbortSignal) {
     // Deleted files are inspected through the root diff. Selected files must exist and pass containment.
     const { root } = await this.target(path);
-    const result = await execute('git', ['-C', root, '-c', 'core.fsmonitor=false', 'diff', '--no-ext-diff', '--no-textconv', '--no-color', 'HEAD', '--', path || '.'], { timeout: REVIEW_LIMITS.gitTimeout, maxBuffer: REVIEW_LIMITS.bytes, windowsHide: true, signal });
+    const sandbox = new Sandbox({ workspace: root, mode: 'read-only' });
+    await sandbox.prepare();
+    signal?.throwIfAborted();
+    const invocation = sandbox.wrap('git', ['--no-pager', '-C', root, '-c', 'core.fsmonitor=false', 'diff', '--no-ext-diff', '--no-textconv', '--no-color', 'HEAD', '--', path || '.'], root);
+    const result = await execute(invocation.executable, invocation.args, { cwd: invocation.cwd, env: invocation.env, timeout: REVIEW_LIMITS.gitTimeout, maxBuffer: REVIEW_LIMITS.bytes, windowsHide: true, signal });
     return { path, content: result.stdout };
   }
 }

@@ -15,6 +15,7 @@
     "build:all-bin": "pnpm --filter @ringko-ai/webui build && pnpm --filter @ringko-ai/tui run build:all",
     "build:npm": "pnpm --filter @ringko-ai/webui build && bun packages/tui/scripts/pack-npm.mjs",
     "test:npm": "bun packages/tui/scripts/check-npm.mjs",
+    "test:sandbox:bin": "bun packages/tui/scripts/check-sandbox-bin.mjs",
     "dev": "concurrently -k -n api,webui -c blue,magenta \"bun packages/app/src/main.ts --dev --shared\" \"pnpm --filter @ringko-ai/webui dev\"",
     "dev:tui": "bun packages/tui/src/cli.ts tui",
     "dev:webui": "pnpm --filter @ringko-ai/webui dev",

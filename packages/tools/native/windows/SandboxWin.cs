@@ -7,6 +7,8 @@ using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
+using System.Web.Script.Serialization;
 
 internal static class Program
 {
@@ -16,12 +18,68 @@ internal static class Program
     private const uint TOKEN_ADJUST_DEFAULT = 0x0080;
     private const uint SE_GROUP_LOGON_ID = 0xC0000000;
     private const uint DISABLE_MAX_PRIVILEGE = 0x1;
-    private const uint LUA_TOKEN = 0x4;
     private const uint WRITE_RESTRICTED = 0x8;
     private const uint CREATE_SUSPENDED = 0x4;
     private const uint CREATE_UNICODE_ENVIRONMENT = 0x400;
     private const uint STARTF_USESTDHANDLES = 0x100;
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+    private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+    private const int MAX_CONTROL_CHARACTERS = 262144;
+    private static readonly object OutputLock = new object();
+
+    private sealed class ConsoleState
+    {
+        public readonly object Sync = new object();
+        public IntPtr Handle;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct COORD { public short X; public short Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct STARTUPINFOEX
+    {
+        public STARTUPINFO StartupInfo;
+        public IntPtr AttributeList;
+    }
+
+    [DllImport("advapi32.dll", EntryPoint = "CreateProcessAsUserW", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool CreateRestrictedProcess(
+        IntPtr token, string applicationName, StringBuilder commandLine,
+        IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles,
+        uint creationFlags, IntPtr environment, string currentDirectory,
+        ref STARTUPINFOEX startupInfo, out PROCESS_INFORMATION processInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, uint flags, ref IntPtr size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attribute, IntPtr value, IntPtr size, IntPtr previous, IntPtr returnedSize);
+    [DllImport("kernel32.dll")]
+    private static extern void DeleteProcThreadAttributeList(IntPtr list);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CreatePipe(out IntPtr read, out IntPtr write, IntPtr attributes, uint size);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool ReadFile(IntPtr handle, byte[] buffer, int size, out int read, IntPtr overlapped);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool WriteFile(IntPtr handle, byte[] buffer, int size, out int written, IntPtr overlapped);
+    [DllImport("kernel32.dll")]
+    private static extern int CreatePseudoConsole(COORD size, IntPtr input, IntPtr output, uint flags, out IntPtr console);
+    [DllImport("kernel32.dll")]
+    private static extern int ResizePseudoConsole(IntPtr console, COORD size);
+    [DllImport("kernel32.dll")]
+    private static extern void ClosePseudoConsole(IntPtr console);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateFileW(string path, uint access, uint sharing, IntPtr attributes, uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetStdHandle(int which, IntPtr handle);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool CreateProcessW(string application, StringBuilder line, IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles, uint flags, IntPtr environment, string cwd, ref STARTUPINFO startup, out PROCESS_INFORMATION process);
     private const int STD_INPUT_HANDLE = -10;
     private const int STD_OUTPUT_HANDLE = -11;
     private const int STD_ERROR_HANDLE = -12;
@@ -69,19 +127,6 @@ internal static class Program
         IntPtr existingToken, uint flags, uint disableCount, IntPtr disableSids,
         uint deleteCount, IntPtr deletePrivileges, uint restrictCount, IntPtr restrictSids,
         out IntPtr newToken);
-
-    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern bool CreateProcessAsUserW(
-        IntPtr token, string applicationName, StringBuilder commandLine,
-        IntPtr processAttributes, IntPtr threadAttributes, bool inheritHandles,
-        uint creationFlags, IntPtr environment, string currentDirectory,
-        ref STARTUPINFO startupInfo, out PROCESS_INFORMATION processInformation);
-
-    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern bool CreateProcessWithTokenW(
-        IntPtr token, uint logonFlags, string applicationName, StringBuilder commandLine,
-        uint creationFlags, IntPtr environment, string currentDirectory,
-        ref STARTUPINFO startupInfo, out PROCESS_INFORMATION processInformation);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr GetCurrentProcess();
@@ -146,6 +191,22 @@ internal static class Program
         }
         builder.Append('\\', backslashes * 2).Append('"');
         return builder.ToString();
+    }
+
+    private static string CommandLine(string command, string[] args)
+    {
+        // cmd's /s /c payload has shell quoting rules rather than CRT argv
+        // escaping. Preserve the command body verbatim inside its outer quotes.
+        if (System.IO.Path.GetFileName(command).Equals("cmd.exe", StringComparison.OrdinalIgnoreCase)
+            && args.Length == 4 && args[0].Equals("/d", StringComparison.OrdinalIgnoreCase)
+            && args[1].Equals("/s", StringComparison.OrdinalIgnoreCase)
+            && (args[2].Equals("/c", StringComparison.OrdinalIgnoreCase) || args[2].Equals("/k", StringComparison.OrdinalIgnoreCase)))
+        {
+            return Quote(command) + " /d /s " + args[2] + " \"" + args[3] + "\"";
+        }
+        var line = new StringBuilder(Quote(command));
+        foreach (string argument in args) line.Append(' ').Append(Quote(argument));
+        return line.ToString();
     }
 
     private static string WorkspaceSid(string path, bool temp)
@@ -267,6 +328,20 @@ internal static class Program
         return token;
     }
 
+    private static void SetLowIntegrity(IntPtr token)
+    {
+        IntPtr sid = Sid("S-1-16-4096");
+        IntPtr info = Marshal.AllocHGlobal(16);
+        try
+        {
+            Marshal.WriteIntPtr(info, 0, sid);
+            Marshal.WriteInt32(info, 8, 0x20);
+            Marshal.WriteInt32(info, 12, 0);
+            if (!SetTokenInformation(token, 25, info, 16)) throw new InvalidOperationException(Describe("SetTokenInformation(TokenIntegrityLevel)"));
+        }
+        finally { Marshal.FreeHGlobal(info); LocalFree(sid); }
+    }
+
     private static IntPtr CreateJob()
     {
         IntPtr job = CreateJobObject(IntPtr.Zero, null);
@@ -278,6 +353,7 @@ internal static class Program
             Marshal.WriteInt32(info, 16, (int)JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE);
             if (!SetInformationJobObject(job, 9, info, 144)) throw new InvalidOperationException(Describe("SetInformationJobObject"));
         }
+        catch { CloseHandle(job); throw; }
         finally { Marshal.FreeHGlobal(info); }
         return job;
     }
@@ -294,16 +370,17 @@ internal static class Program
 
     private static bool Sensitive(string key)
     {
-        return Regex.IsMatch(key, "(?i)(token|key|secret|password|passwd|credential)s?$");
+        return Regex.IsMatch(key, "(?i)(token|key|secret|password|passwd|credential|authorization|auth|cookie)s?$")
+            || Regex.IsMatch(key, "(?i)^(SSH_AUTH_SOCK|SSH_AGENT_PID|GPG_AGENT_INFO|GIT_ASKPASS|SSH_ASKPASS|PSMODULEPATH)$");
     }
 
-    private static IntPtr BuildEnvironment(string temp)
+    private static IntPtr BuildEnvironment(string temp, HashSet<string> authorized)
     {
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables())
         {
             string key = Convert.ToString(entry.Key);
-            if (string.IsNullOrEmpty(key) || Sensitive(key) || key == "=") continue;
+            if (string.IsNullOrEmpty(key) || (Sensitive(key) && !authorized.Contains(key)) || key == "=") continue;
             values[key] = Convert.ToString(entry.Value) ?? string.Empty;
         }
         values["TEMP"] = temp;
@@ -317,6 +394,198 @@ internal static class Program
         IntPtr memory = Marshal.AllocHGlobal(bytes.Length);
         Marshal.Copy(bytes, 0, memory, bytes.Length);
         return memory;
+    }
+
+    private static IntPtr AttributeList(IntPtr attribute, IntPtr value, int length)
+    {
+        IntPtr size = IntPtr.Zero;
+        InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+        if (size == IntPtr.Zero) throw new InvalidOperationException(Describe("InitializeProcThreadAttributeList(size)"));
+        IntPtr list = Marshal.AllocHGlobal(size);
+        bool initialized = false;
+        try
+        {
+            if (!InitializeProcThreadAttributeList(list, 1, 0, ref size)) throw new InvalidOperationException(Describe("InitializeProcThreadAttributeList"));
+            initialized = true;
+            if (!UpdateProcThreadAttribute(list, 0, attribute, value, new IntPtr(length), IntPtr.Zero, IntPtr.Zero))
+                throw new InvalidOperationException(Describe("UpdateProcThreadAttribute"));
+            return list;
+        }
+        catch
+        {
+            if (initialized) DeleteProcThreadAttributeList(list);
+            Marshal.FreeHGlobal(list);
+            throw;
+        }
+    }
+
+    private static void Emit(object message)
+    {
+        lock (OutputLock)
+        {
+            Console.Out.WriteLine(new JavaScriptSerializer { MaxJsonLength = MAX_CONTROL_CHARACTERS }.Serialize(message));
+            Console.Out.Flush();
+        }
+    }
+
+    private static Thread PumpOutput(IntPtr output)
+    {
+        var thread = new Thread(() =>
+        {
+            var bytes = new byte[8192];
+            var characters = new char[8192];
+            Decoder decoder = Encoding.UTF8.GetDecoder();
+            int read;
+            try
+            {
+                while (ReadFile(output, bytes, bytes.Length, out read, IntPtr.Zero) && read > 0)
+                {
+                    int count = decoder.GetChars(bytes, 0, read, characters, 0, false);
+                    if (count > 0) Emit(new { type = "output", data = new string(characters, 0, count) });
+                }
+            }
+            catch (System.IO.IOException) { /* The bridge closes its pipe on cancellation. */ }
+        });
+        thread.IsBackground = true;
+        thread.Start();
+        return thread;
+    }
+
+    private static string ReadControlLine()
+    {
+        var line = new StringBuilder();
+        for (;;)
+        {
+            int character = Console.In.Read();
+            if (character < 0) return line.Length == 0 ? null : line.ToString();
+            if (character == '\n') return line.ToString();
+            if (line.Length >= MAX_CONTROL_CHARACTERS) throw new InvalidOperationException("Terminal control frame exceeds its limit.");
+            line.Append((char)character);
+        }
+    }
+
+    private static ConsoleState StartControls(IntPtr input, IntPtr console, IntPtr job)
+    {
+        var state = new ConsoleState { Handle = console };
+        var thread = new Thread(() =>
+        {
+            var parser = new JavaScriptSerializer { MaxJsonLength = MAX_CONTROL_CHARACTERS, RecursionLimit = 8 };
+            try
+            {
+                string line;
+                while ((line = ReadControlLine()) != null)
+                {
+                    var message = parser.Deserialize<Dictionary<string, object>>(line);
+                    object type;
+                    if (message == null || !message.TryGetValue("type", out type)) throw new InvalidOperationException("Invalid terminal control frame.");
+                    if (Equals(type, "dispose")) break;
+                    if (Equals(type, "input"))
+                    {
+                        object data;
+                        if (!message.TryGetValue("data", out data) || !(data is string)) throw new InvalidOperationException("Invalid terminal input.");
+                        byte[] bytes = Encoding.UTF8.GetBytes((string)data);
+                        int offset = 0;
+                        while (offset < bytes.Length)
+                        {
+                            byte[] remaining = new byte[bytes.Length - offset];
+                            Buffer.BlockCopy(bytes, offset, remaining, 0, remaining.Length);
+                            int written;
+                            if (!WriteFile(input, remaining, remaining.Length, out written, IntPtr.Zero) || written <= 0)
+                                throw new InvalidOperationException(Describe("WriteFile(ConPTY input)"));
+                            offset += written;
+                        }
+                    }
+                    else if (Equals(type, "resize"))
+                    {
+                        object columns, rows;
+                        if (!message.TryGetValue("cols", out columns) || !(columns is int) || !message.TryGetValue("rows", out rows) || !(rows is int))
+                            throw new InvalidOperationException("Invalid terminal dimensions.");
+                        COORD size = Dimensions((int)columns, (int)rows);
+                        lock (state.Sync)
+                        {
+                            if (state.Handle == IntPtr.Zero) break;
+                            int result = ResizePseudoConsole(state.Handle, size);
+                            if (result != 0) throw new InvalidOperationException("ResizePseudoConsole failed: 0x" + result.ToString("X8"));
+                        }
+                    }
+                    else throw new InvalidOperationException("Unsupported terminal control frame.");
+                }
+            }
+            catch (Exception error)
+            {
+                try { Emit(new { type = "error", message = error.Message }); }
+                catch (System.IO.IOException) { }
+            }
+            finally { TerminateJobObject(job, 1); }
+        });
+        thread.IsBackground = true;
+        thread.Start();
+        return state;
+    }
+
+    private static void ReleaseConsole(ConsoleState state, IntPtr handle)
+    {
+        if (state != null)
+        {
+            lock (state.Sync) { handle = state.Handle; state.Handle = IntPtr.Zero; }
+        }
+        // Closing can block while draining output, so it stays outside the
+        // resize critical section and the output channel has its own thread.
+        if (handle != IntPtr.Zero) ClosePseudoConsole(handle);
+    }
+
+    private static COORD Dimensions(int columns, int rows)
+    {
+        if (columns < 20 || columns > 300 || rows < 5 || rows > 120) throw new ArgumentException("Terminal dimensions are outside the supported range.");
+        return new COORD { X = (short)columns, Y = (short)rows };
+    }
+
+    // Alternate-token creation can retain the launcher's redirected stdio even
+    // with a pseudoconsole attribute. Reopen the assigned console inside the
+    // already-confined child before launching the target with the same token.
+    private static int TerminalChild(string[] args)
+    {
+        IntPtr input = IntPtr.Zero, output = IntPtr.Zero;
+        var inherited = new HashSet<IntPtr>();
+        try
+        {
+            foreach (int which in new[] { STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE })
+            {
+                IntPtr handle = GetStdHandle(which);
+                if (handle != IntPtr.Zero && handle != new IntPtr(-1)) inherited.Add(handle);
+            }
+            foreach (IntPtr handle in inherited) if (!SetHandleInformation(handle, 1, 0)) return 125;
+            input = CreateFileW("CONIN$", 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+            output = CreateFileW("CONOUT$", 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+            if (input == new IntPtr(-1) || output == new IntPtr(-1)) return 125;
+            if (!SetHandleInformation(input, 1, 1) || !SetHandleInformation(output, 1, 1)) return 125;
+            if (!SetStdHandle(STD_INPUT_HANDLE, input) || !SetStdHandle(STD_OUTPUT_HANDLE, output) || !SetStdHandle(STD_ERROR_HANDLE, output)) return 125;
+            foreach (IntPtr handle in inherited) CloseHandle(handle);
+            inherited.Clear();
+            var startup = new STARTUPINFO
+            {
+                cb = Marshal.SizeOf(typeof(STARTUPINFO)), dwFlags = (int)STARTF_USESTDHANDLES,
+                hStdInput = input, hStdOutput = output, hStdError = output,
+            };
+            var arguments = new string[args.Length - 2];
+            Array.Copy(args, 2, arguments, 0, arguments.Length);
+            var line = new StringBuilder(CommandLine(args[1], arguments));
+            PROCESS_INFORMATION process;
+            if (!CreateProcessW(null, line, IntPtr.Zero, IntPtr.Zero, true, 0, IntPtr.Zero, null, ref startup, out process)) return 125;
+            try
+            {
+                if (WaitForSingleObject(process.hProcess, uint.MaxValue) == uint.MaxValue) return 125;
+                uint exitCode;
+                return GetExitCodeProcess(process.hProcess, out exitCode) ? unchecked((int)exitCode) : 125;
+            }
+            finally { CloseHandle(process.hThread); CloseHandle(process.hProcess); }
+        }
+        finally
+        {
+            if (input != IntPtr.Zero && input != new IntPtr(-1)) CloseHandle(input);
+            if (output != IntPtr.Zero && output != new IntPtr(-1)) CloseHandle(output);
+            foreach (IntPtr handle in inherited) CloseHandle(handle);
+        }
     }
     private static int Run(string[] args)
     {
@@ -332,74 +601,147 @@ internal static class Program
         var commandArgs = new string[args.Length - separator - 2];
         Array.Copy(args, separator + 2, commandArgs, 0, commandArgs.Length);
 
-        IntPtr current = IntPtr.Zero, logon = IntPtr.Zero, everyone = IntPtr.Zero, workspaceSidPtr = IntPtr.Zero, environment = IntPtr.Zero,
-            tempSidPtr = IntPtr.Zero, restrict = IntPtr.Zero, token = IntPtr.Zero, job = IntPtr.Zero,
-            stdout = IntPtr.Zero, stderr = IntPtr.Zero, stdin = IntPtr.Zero;
+        bool terminal = false;
+        COORD dimensions = new COORD { X = 80, Y = 24 };
+        var writableRoots = new List<string> { workspace };
+        var authorizedEnvironment = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var capabilitySids = new List<IntPtr>();
+        var inheritedHandles = new List<IntPtr>();
+        IntPtr current = IntPtr.Zero, logon = IntPtr.Zero, everyone = IntPtr.Zero, environment = IntPtr.Zero,
+            restrict = IntPtr.Zero, token = IntPtr.Zero, job = IntPtr.Zero, attributes = IntPtr.Zero,
+            handleList = IntPtr.Zero, console = IntPtr.Zero, inputRead = IntPtr.Zero,
+            inputWrite = IntPtr.Zero, outputRead = IntPtr.Zero, outputWrite = IntPtr.Zero;
+        Thread outputPump = null;
+        ConsoleState consoleState = null;
         string stage = "open-token";
         try
         {
+            if (IntPtr.Size != 8) throw new PlatformNotSupportedException("The native sandbox requires a 64-bit Windows process.");
+            for (int index = 4; index < separator; index++)
+            {
+                if (args[index] == "--writable-root" && index + 1 < separator)
+                {
+                    if (writableRoots.Count >= 64) throw new ArgumentException("Too many writable sandbox roots.");
+                    writableRoots.Add(args[++index]);
+                }
+                else if (args[index] == "--pty" && index + 2 < separator)
+                {
+                    terminal = true;
+                    dimensions = Dimensions(int.Parse(args[++index]), int.Parse(args[++index]));
+                    Console.InputEncoding = new UTF8Encoding(false);
+                    Console.OutputEncoding = new UTF8Encoding(false);
+                }
+                else if (args[index] == "--allow-env" && index + 1 < separator)
+                {
+                    string name = args[++index];
+                    if (authorizedEnvironment.Count >= 256 || name.Length > 128 || !Regex.IsMatch(name, "^[A-Za-z_][A-Za-z0-9_]*$"))
+                        throw new ArgumentException("Invalid explicitly authorized environment name.");
+                    authorizedEnvironment.Add(name);
+                }
+                else throw new ArgumentException("Invalid sandbox runner option.");
+            }
             if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT, out current))
                 throw new InvalidOperationException(Describe("OpenProcessToken"));
             logon = LogonSid(current);
             everyone = Sid("S-1-1-0");
-            string workspaceSid = WorkspaceSid(workspace, false);
-            string tempSid = WorkspaceSid(temp, true);
-            workspaceSidPtr = Sid(workspaceSid);
-            tempSidPtr = Sid(tempSid);
-
-            // DACL grants are prepared by the caller before the process starts.
-
-            var sids = mode == "workspace-write"
-                ? new[] { logon, everyone, workspaceSidPtr, tempSidPtr }
-                : new[] { logon, everyone, tempSidPtr };
-            int restrictCount = sids.Length;
+            // Capability grants are prepared by the trusted caller. A read-only
+            // token never carries persistent-root capabilities, even if an ACE remains.
+            var sids = new List<IntPtr> { logon, everyone };
+            if (mode == "workspace-write")
+            {
+                foreach (string root in writableRoots)
+                {
+                    IntPtr sid = Sid(WorkspaceSid(root, false));
+                    capabilitySids.Add(sid);
+                    sids.Add(sid);
+                }
+            }
+            IntPtr temporarySid = Sid(WorkspaceSid(temp, true));
+            capabilitySids.Add(temporarySid);
+            sids.Add(temporarySid);
+            int restrictCount = sids.Count;
             restrict = Marshal.AllocHGlobal(16 * restrictCount);
             for (int i = 0; i < restrictCount; i++)
             {
                 Marshal.WriteIntPtr(restrict, i * 16, sids[i]);
                 Marshal.WriteInt32(restrict, i * 16 + 8, 0);
+                Marshal.WriteInt32(restrict, i * 16 + 12, 0);
             }
             stage = "restricted-token";
             token = RestrictedToken(current, restrict, restrictCount);
+            SetLowIntegrity(token);
             stage = "default-dacl";
-            GrantDefaultDacl(token, everyone);
+            GrantDefaultDacl(token, temporarySid);
 
             stage = "job";
             job = CreateJob();
-            stdin = Inheritable(STD_INPUT_HANDLE);
-            stdout = Inheritable(STD_OUTPUT_HANDLE);
-            stderr = Inheritable(STD_ERROR_HANDLE);
-            var startup = new STARTUPINFO
+            var startup = new STARTUPINFOEX
             {
-                cb = Marshal.SizeOf(typeof(STARTUPINFO)),
-                dwFlags = (int)STARTF_USESTDHANDLES,
-                hStdInput = stdin,
-                hStdOutput = stdout,
-                hStdError = stderr,
+                StartupInfo = new STARTUPINFO { cb = Marshal.SizeOf(typeof(STARTUPINFOEX)) },
             };
+            if (terminal)
+            {
+                stage = "conpty";
+                if (!CreatePipe(out inputRead, out inputWrite, IntPtr.Zero, 0) || !CreatePipe(out outputRead, out outputWrite, IntPtr.Zero, 0))
+                    throw new InvalidOperationException(Describe("CreatePipe(ConPTY)"));
+                int result = CreatePseudoConsole(dimensions, inputRead, outputWrite, 0, out console);
+                if (result != 0) throw new InvalidOperationException("CreatePseudoConsole failed: 0x" + result.ToString("X8"));
+                attributes = AttributeList(new IntPtr(0x00020016), console, IntPtr.Size);
+                outputPump = PumpOutput(outputRead);
+            }
+            else
+            {
+                foreach (int which in new[] { STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE }) inheritedHandles.Add(Inheritable(which));
+                startup.StartupInfo.dwFlags = (int)STARTF_USESTDHANDLES;
+                startup.StartupInfo.hStdInput = inheritedHandles[0];
+                startup.StartupInfo.hStdOutput = inheritedHandles[1];
+                startup.StartupInfo.hStdError = inheritedHandles[2];
+                var handles = inheritedHandles.FindAll(handle => handle != IntPtr.Zero && handle != new IntPtr(-1));
+                if (handles.Count == 0) throw new InvalidOperationException("Sandbox process has no valid standard handles.");
+                handleList = Marshal.AllocHGlobal(handles.Count * IntPtr.Size);
+                for (int index = 0; index < handles.Count; index++) Marshal.WriteIntPtr(handleList, index * IntPtr.Size, handles[index]);
+                attributes = AttributeList(new IntPtr(0x00020002), handleList, handles.Count * IntPtr.Size);
+            }
+            startup.AttributeList = attributes;
             var line = new StringBuilder();
-            line.Append(Quote(command));
-            foreach (string value in commandArgs) line.Append(' ').Append(Quote(value));
+            if (terminal)
+            {
+                line.Append(Quote(Environment.GetCommandLineArgs()[0])).Append(" --terminal-child ").Append(Quote(command));
+                foreach (string value in commandArgs) line.Append(' ').Append(Quote(value));
+            }
+            else line.Append(CommandLine(command, commandArgs));
             PROCESS_INFORMATION process;
             stage = "environment";
-            environment = BuildEnvironment(temp);
+            environment = BuildEnvironment(temp, authorizedEnvironment);
             stage = "create-process";
-            bool created = CreateProcessAsUserW(token, null, line, IntPtr.Zero, IntPtr.Zero, true,
-                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT, environment, cwd, ref startup, out process);
-            if (!created)
-            {
-                uint error = ErrorCode;
-                created = CreateProcessWithTokenW(token, 0, null, line, CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
-                    environment, cwd, ref startup, out process);
-                if (!created) throw new InvalidOperationException(Describe("CreateProcessAsUserW/CreateProcessWithTokenW") + " (asuser=0x" + error.ToString("X8") + ")");
-            }
+            if (!CreateRestrictedProcess(token, null, line, IntPtr.Zero, IntPtr.Zero, !terminal,
+                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT, environment, cwd, ref startup, out process))
+                throw new InvalidOperationException(Describe("CreateProcessAsUserW"));
             try
             {
-                if (!AssignProcessToJobObject(job, process.hProcess)) throw new InvalidOperationException(Describe("AssignProcessToJobObject"));
+                if (!AssignProcessToJobObject(job, process.hProcess))
+                {
+                    string error = Describe("AssignProcessToJobObject");
+                    TerminateProcess(process.hProcess, 125);
+                    throw new InvalidOperationException(error);
+                }
                 if (ResumeThread(process.hThread) == uint.MaxValue) throw new InvalidOperationException(Describe("ResumeThread"));
-                WaitForSingleObject(process.hProcess, uint.MaxValue);
+                if (terminal)
+                {
+                    CloseHandle(inputRead); inputRead = IntPtr.Zero;
+                    CloseHandle(outputWrite); outputWrite = IntPtr.Zero;
+                    consoleState = StartControls(inputWrite, console, job);
+                    Emit(new { type = "ready" });
+                }
+                if (WaitForSingleObject(process.hProcess, uint.MaxValue) == uint.MaxValue) throw new InvalidOperationException(Describe("WaitForSingleObject"));
                 uint exitCode;
                 if (!GetExitCodeProcess(process.hProcess, out exitCode)) throw new InvalidOperationException(Describe("GetExitCodeProcess"));
+                if (terminal)
+                {
+                    ReleaseConsole(consoleState, console); console = IntPtr.Zero;
+                    outputPump.Join(3000);
+                    Emit(new { type = "exit", exitCode = unchecked((int)exitCode) });
+                }
                 return unchecked((int)exitCode);
             }
             finally
@@ -410,27 +752,37 @@ internal static class Program
         }
         catch (Exception error)
         {
-            Console.Error.WriteLine("sandbox[" + stage + "]: " + error.Message);
+            string message = "sandbox[" + stage + "]: " + error.Message;
+            if (terminal) Emit(new { type = "error", message = message });
+            else Console.Error.WriteLine(message);
             return 125;
         }
         finally
         {
             if (job != IntPtr.Zero) CloseHandle(job);
+            if (console != IntPtr.Zero) ReleaseConsole(consoleState, console);
+            if (inputRead != IntPtr.Zero) CloseHandle(inputRead);
+            if (inputWrite != IntPtr.Zero) CloseHandle(inputWrite);
+            if (outputWrite != IntPtr.Zero) CloseHandle(outputWrite);
+            if (outputRead != IntPtr.Zero) CloseHandle(outputRead);
+            if (attributes != IntPtr.Zero) { DeleteProcThreadAttributeList(attributes); Marshal.FreeHGlobal(attributes); }
+            if (handleList != IntPtr.Zero) Marshal.FreeHGlobal(handleList);
             if (token != IntPtr.Zero) CloseHandle(token);
             if (restrict != IntPtr.Zero) Marshal.FreeHGlobal(restrict);
             if (current != IntPtr.Zero) CloseHandle(current);
             if (logon != IntPtr.Zero) Marshal.FreeHGlobal(logon);
             if (everyone != IntPtr.Zero) LocalFree(everyone);
-            if (workspaceSidPtr != IntPtr.Zero) LocalFree(workspaceSidPtr);
-            if (tempSidPtr != IntPtr.Zero) LocalFree(tempSidPtr);
-            if (stdin != IntPtr.Zero) CloseHandle(stdin);
-            if (stdout != IntPtr.Zero) CloseHandle(stdout);
-            if (stderr != IntPtr.Zero) CloseHandle(stderr);
+            foreach (IntPtr sid in capabilitySids) LocalFree(sid);
+            foreach (IntPtr handle in inheritedHandles) if (handle != IntPtr.Zero) CloseHandle(handle);
             if (environment != IntPtr.Zero) Marshal.FreeHGlobal(environment);
         }
     }
 
-    private static int Main(string[] args) { return Run(args); }
+    private static int Main(string[] args)
+    {
+        if (args.Length > 1 && args[0] == "--terminal-child") return TerminalChild(args);
+        return Run(args);
+    }
 }
 
 
