@@ -61,8 +61,10 @@ export interface RingkoConfig {
   /** Host sandbox policy; defaults to workspace-write. */
   sandbox?: {
     mode?: "read-only" | "workspace-write" | "danger-full-access";
-    /** Absolute directories writable in workspace-write mode. */
+    /** Directories writable in workspace-write; relative entries resolve from the workspace. */
     additionalWritableRoots?: string[];
+    /** Remote MCP authority belongs to host settings and is bound to an exact endpoint. */
+    mcp?: Record<string, { url: string; readOnlyTools?: string[]; allowedTools?: string[] }>;
   };
   /** Legacy alias of `permission` (access mode). */
   mode?: string;

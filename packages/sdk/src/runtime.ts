@@ -31,7 +31,7 @@ function applyToolPolicy(agent: RingKo, workflow: Workflow): void {
 }
 
 /** Shared tool assembly for executing agents and capability previews. */
-export function registerRuntimeTools(agent: RingKo, config: RingkoConfig, workspace: string, host: RuntimeHost = {}, session?: AgentConfig["session"]): void {
+export function registerRuntimeTools(agent: RingKo, config: RingkoConfig, workspace: string, host: RuntimeHost = {}, session?: AgentConfig["session"]): Sandbox {
   const sandbox = new Sandbox({ workspace, mode: config.sandbox?.mode, additionalWritableRoots: config.sandbox?.additionalWritableRoots });
   registerWorkspaceTools(agent.tools, { workspace, sandbox });
   const todos = createTodoStore(items => {
@@ -48,6 +48,7 @@ export function registerRuntimeTools(agent: RingKo, config: RingkoConfig, worksp
   if (config.capabilities?.shell) registerShellTools(agent.tools, { cwd: workspace, sandbox });
   registerRuntimeSkills(agent.tools, workspace);
   applyToolPolicy(agent, resolveWorkflow(config.workflow));
+  return sandbox;
 }
 
 export interface RuntimeAgent { agent: RingKo; close(): void }
@@ -77,13 +78,13 @@ export class RuntimeManager {
     this.stopTime = log ? () => {} : createTimeSource(this.log);
   }
 
-  connections(sandbox: Sandbox = this.sandbox): ReturnType<McpManager["start"]> {
+  connections(sandbox: Sandbox = this.sandbox, permissions?: Readonly<Record<string, unknown>>): ReturnType<McpManager["start"]> {
     if (this.closed) return Promise.reject(new Error("Runtime is closed."));
-    return this.mcp.start(sandbox);
+    return this.mcp.start(sandbox, permissions);
   }
 
   /** Begin MCP connections during host startup, before the first model run. */
-  start(sandbox: Sandbox = this.sandbox): ReturnType<McpManager["start"]> { return this.connections(sandbox); }
+  start(sandbox: Sandbox = this.sandbox, permissions?: Readonly<Record<string, unknown>>): ReturnType<McpManager["start"]> { return this.mcp.start(sandbox, permissions); }
 
   async resetMcp(): Promise<void> {
     await this.mcp.reset();
@@ -137,7 +138,7 @@ export class RuntimeManager {
         options.onEvent?.(event);
       },
     });
-    registerRuntimeTools(agent, config, this.workspace, host, options.session);
+    const toolSandbox = registerRuntimeTools(agent, config, this.workspace, host, options.session);
     agent.tools.setPermissionCheck(async request => {
       const rule = this.permissions.decide(permissionSession, request.toolName, request.target);
       const decision = rule === "deny" || rule === "ask" ? rule : (await abortable(this.events.waterfall("tool/permission", { toolName: request.toolName, target: request.target, decision: rule }), request.signal)).decision;
@@ -151,10 +152,10 @@ export class RuntimeManager {
       signal.throwIfAborted();
       running = true;
       try {
-        const opened = await abortable(this.connections(), signal);
+        const opened = await abortable(this.connections(toolSandbox, config.sandbox?.mcp), signal);
         signal.throwIfAborted();
         for (const name of mcpToolNames) agent.tools.unregister(name);
-        mcpToolNames = registerMcpTools(agent.tools, opened.connections, { mode: config.sandbox?.mode ?? "workspace-write" });
+        mcpToolNames = registerMcpTools(agent.tools, opened.connections, { mode: config.sandbox?.mode ?? "workspace-write", permissions: config.sandbox?.mcp });
         for (const error of opened.errors) {
           if (reportedErrors.get(error.name) !== error.message) {
             host.report?.(`MCP ${error.name}: connection failed: ${error.message}`);

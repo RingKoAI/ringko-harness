@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ToolRegistry, defineTool, type ModelClient } from "@ringko-ai/harness";
-import { registerWorkspaceTools } from "../../tools/src/index.ts";
+import { Sandbox, registerWorkspaceTools } from "../../tools/src/index.ts";
 import { TaskManager, TASK_LIMITS, type TaskEvent } from "../src/task.ts";
 import { createRingKo } from "../src/index.ts";
 
@@ -34,13 +34,14 @@ describe("delegated task capability boundary", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("forwards external writes through the parent approval and parser before touching disk", async () => {
+  it("forwards explicitly full-access external writes through parent approval and parsing", async () => {
     const root = mkdtempSync(join(tmpdir(), "rkh-task-"));
     try {
       writeFileSync(join(root, "existing.txt"), "original");
       for (const allowed of [false, true]) {
         const tools = new ToolRegistry();
-        registerWorkspaceTools(tools, { workspace: join(root, "workspace") });
+        const workspace = join(root, "workspace");
+        registerWorkspaceTools(tools, { workspace, sandbox: new Sandbox({ workspace, mode: "danger-full-access" }) });
         let calls = 0;
         const manager = new TaskManager({ tools, model: async request => {
           expect(request.tools.map(tool => tool.name).sort()).toEqual(["edit", "glob", "grep", "read", "tree", "write"]);

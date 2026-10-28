@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../src/server.ts";
+import { saveConfig } from "@ringko-ai/config";
 
 it("starts configured MCP servers on Web startup before any model run", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "rkh-mcp-start-"));
@@ -15,6 +16,7 @@ it("starts configured MCP servers on Web startup before any model run", async ()
     return Response.json({ jsonrpc: "2.0", id: message.id, result: message.method === "initialize" ? { serverInfo: {} } : { tools: [] } });
   } });
   writeFileSync(join(workspace, ".mcp.json"), JSON.stringify({ mcpServers: { fixture: { url: `http://127.0.0.1:${mcp.port}` } } }));
+  saveConfig({ sandbox: { mcp: { fixture: { url: `http://127.0.0.1:${mcp.port}` } } } });
   const app = startServer({ workspace, port: 0 });
   try {
     for (let index = 0; index < 40 && initialized === 0; index++) await Bun.sleep(10);

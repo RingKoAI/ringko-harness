@@ -2,6 +2,7 @@
 import { writeDiagnostic } from "@ringko-ai/config";
 const MAX_RPC_RESPONSE_BYTES = 1024 * 1024;
 const HTTP_TIMEOUT_MS = 30_000;
+const STDIO_SHUTDOWN_GRACE_MS = 1_000;
 
 async function boundedResponse(response: Response): Promise<string> {
   const reader = response.body?.getReader();
@@ -35,6 +36,7 @@ export interface JsonRpcMessage {
 export interface Transport {
   send(message: JsonRpcMessage): Promise<void>;
   onMessage(handler: (message: JsonRpcMessage) => void): void;
+  onClose?(handler: (error: Error) => void): void;
   close(): Promise<void>;
 }
 
@@ -81,7 +83,7 @@ async function readSse(
 }
 
 /** stdio transport: newline-delimited JSON-RPC over a child process. */
-export type ProcessWrapper = (executable: string, args: readonly string[], cwd: string) => { executable: string; args: string[]; cwd: string };
+export type ProcessWrapper = (executable: string, args: readonly string[], cwd: string, environment?: Record<string, string>) => { executable: string; args: string[]; cwd: string; env?: NodeJS.ProcessEnv };
 export function createStdioTransport(options: {
   command: string;
   args?: string[];
@@ -90,13 +92,14 @@ export function createStdioTransport(options: {
   diagnosticName?: string;
   wrap?: ProcessWrapper;
 }): Transport {
-  const invocation = options.wrap?.(options.command, options.args ?? [], options.cwd ?? process.cwd()) ?? { executable: options.command, args: options.args ?? [], cwd: options.cwd ?? process.cwd() };
+  const invocation = options.wrap?.(options.command, options.args ?? [], options.cwd ?? process.cwd(), options.env) ?? { executable: options.command, args: options.args ?? [], cwd: options.cwd ?? process.cwd(), env: { ...process.env, ...options.env } };
   const proc = Bun.spawn([invocation.executable, ...invocation.args], {
     cwd: invocation.cwd,
-    env: { ...process.env, ...options.env },
+    env: invocation.env ?? { ...process.env, ...options.env },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
+    detached: process.platform !== "win32",
   });
   const stderrReader = proc.stderr.getReader();
   const stderrTask = (async () => {
@@ -115,6 +118,13 @@ export function createStdioTransport(options: {
     } finally { reader.releaseLock(); }
   })();
   let handler: ((message: JsonRpcMessage) => void) | undefined;
+  let closeHandler: ((error: Error) => void) | undefined;
+  let exitError: Error | undefined;
+  void proc.exited.then(async code => {
+    await stdoutTask;
+    exitError = new Error(`MCP stdio process exited (${code}).`);
+    closeHandler?.(exitError);
+  });
   const stdoutReader = proc.stdout.getReader();
   const stdoutTask = (async () => {
     const reader = stdoutReader;
@@ -145,18 +155,30 @@ export function createStdioTransport(options: {
 
   return {
     async send(message) {
+      if (exitError) throw exitError;
       proc.stdin.write(`${JSON.stringify(message)}\n`);
       await proc.stdin.flush();
     },
     onMessage(next) {
       handler = next;
     },
+    onClose(next) {
+      closeHandler = next;
+      if (exitError) next(exitError);
+    },
     async close() {
-      try {
-        proc.kill();
-      } catch {
-        // already gone
-      }
+      const stop = (signal: "SIGTERM" | "SIGKILL") => {
+        if (process.platform !== "win32") {
+          try { process.kill(-proc.pid, signal); return; }
+          catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") writeDiagnostic("mcp.stop", "Could not signal the MCP process group."); }
+        }
+        try { proc.kill(signal); } catch { /* already gone */ }
+      };
+      stop("SIGTERM");
+      const force = setTimeout(() => stop("SIGKILL"), STDIO_SHUTDOWN_GRACE_MS);
+      force.unref?.();
+      try { await proc.exited; }
+      finally { clearTimeout(force); if (process.platform !== "win32") stop("SIGKILL"); }
       await stderrReader.cancel().catch(() => {});
       await stdoutReader.cancel().catch(() => {});
       await Promise.all([stderrTask, stdoutTask]);
@@ -169,6 +191,7 @@ export function createSseTransport(url: string, headers: Record<string, string> 
   let handler: ((message: JsonRpcMessage) => void) | undefined;
   const controller = new AbortController();
   let postUrl = url;
+  let connectionError: Error | undefined;
   let markReady: () => void = () => {};
   const ready = new Promise<void>((resolve) => {
     markReady = resolve;
@@ -179,13 +202,18 @@ export function createSseTransport(url: string, headers: Record<string, string> 
       const response = await fetch(url, {
         headers: { accept: "text/event-stream", ...headers },
         signal: controller.signal,
+        redirect: "error",
       });
       if (!response.body) return;
       await readSse(
         response.body,
         (event, data) => {
           if (event === "endpoint") {
-            postUrl = new URL(data.trim(), url).toString();
+            const endpoint = new URL(data.trim(), url);
+            if (endpoint.origin !== new URL(url).origin || endpoint.username || endpoint.password || endpoint.hash) {
+              throw new Error("MCP SSE endpoint must remain on the authorized origin.");
+            }
+            postUrl = endpoint.toString();
             markReady();
             return;
           }
@@ -199,8 +227,8 @@ export function createSseTransport(url: string, headers: Record<string, string> 
         },
         controller.signal,
       );
-    } catch {
-      // stream closed or aborted
+    } catch (error) {
+      connectionError = error instanceof Error ? error : new Error("MCP SSE connection failed.");
     } finally {
       markReady();
     }
@@ -209,9 +237,11 @@ export function createSseTransport(url: string, headers: Record<string, string> 
   return {
     async send(message) {
       await ready;
+      if (connectionError) throw connectionError;
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(HTTP_TIMEOUT_MS)]);
       const response = await fetch(postUrl, {
         method: "POST",
+        redirect: "error",
         signal,
         headers: { "content-type": "application/json", accept: "application/json", ...headers },
         body: JSON.stringify(message),
@@ -246,6 +276,7 @@ export function createHttpTransport(url: string, headers: Record<string, string>
       const signal = AbortSignal.timeout(HTTP_TIMEOUT_MS);
       const response = await fetch(url, {
         method: "POST",
+        redirect: "error",
         signal,
         headers: {
           "content-type": "application/json",

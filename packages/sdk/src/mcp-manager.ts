@@ -1,6 +1,6 @@
 import { loadMcpServers, writeDiagnostic, type McpServerConfig } from "@ringko-ai/config";
-import { closeMcpConnections, openMcpServer, type McpConnection } from "@ringko-ai/mcp";
-import type { Sandbox } from "@ringko-ai/tools";
+import { closeMcpConnections, mcpEndpoint, mcpPermissions, openMcpServer, type McpConnection } from "@ringko-ai/mcp";
+import { Sandbox } from "@ringko-ai/tools";
 
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 1_000;
@@ -34,9 +34,12 @@ function publicFailure(error: unknown): string {
 export class McpManager {
   private state = newState();
   private closed = false;
-  private sandbox: Sandbox | undefined;
+  private sandbox: Sandbox;
+  private authorizations: Readonly<Record<string, unknown>> = {};
 
-  constructor(private readonly workspace: string, private readonly retryDelayMs = RETRY_DELAY_MS) {}
+  constructor(private readonly workspace: string, private readonly retryDelayMs = RETRY_DELAY_MS) {
+    this.sandbox = new Sandbox({ workspace });
+  }
 
   private connect(state: ConnectionState, name: string, config: McpServerConfig): Promise<void> {
     if (this.closed || state !== this.state || state.connections.has(name) || (state.failures.get(name) ?? 0) >= MAX_ATTEMPTS) return Promise.resolve();
@@ -44,8 +47,14 @@ export class McpManager {
     if (active) return active;
     const attempt = (async () => {
       try {
-        const configuredCwd = typeof config.cwd === "string" ? config.cwd : undefined;
-        const connection = await openMcpServer(name, config, this.sandbox ? { wrap: (executable, args, cwd) => this.sandbox!.wrap(executable, args, configuredCwd ?? cwd ?? this.workspace) } : {});
+        const configuredCwd = typeof config.cwd === "string" ? config.cwd : this.workspace;
+        const sandbox = this.sandbox;
+        if (typeof config.command === "string" && config.command.trim()) await sandbox.prepare(config.env);
+        if (this.closed || state !== this.state) return;
+        const connection = await openMcpServer(name, config, {
+          sandboxMode: sandbox.mode,
+          wrap: (executable, args, _cwd, environment) => sandbox.wrap(executable, args, configuredCwd, environment),
+        });
         if (this.closed || state !== this.state) { await connection.client.close(); return; }
         state.connections.set(name, connection);
         state.failures.delete(name);
@@ -98,15 +107,33 @@ export class McpManager {
     return this.snapshot(this.state);
   }
 
-  async start(sandbox?: Sandbox): Promise<{ connections: McpConnection[]; errors: { name: string; message: string }[] }> {
+  async start(sandbox?: Sandbox, authorizations?: Readonly<Record<string, unknown>>): Promise<{ connections: McpConnection[]; errors: { name: string; message: string }[] }> {
     if (this.closed) throw new Error("MCP manager is closed.");
-    if (sandbox) this.sandbox = sandbox;
+    if (!this.state.initial) {
+      if (sandbox) this.sandbox = sandbox;
+      if (authorizations) this.authorizations = authorizations;
+    }
     const state = this.state;
     state.initial ??= (async () => {
       try {
         const servers = loadMcpServers({ cwd: this.workspace });
         if (servers.length > MAX_SERVERS) throw new Error("MCP configuration exceeds 64 servers.");
-        await Promise.all(servers.map(server => this.connect(state, server.name, server.config)));
+        await Promise.all(servers.map(server => {
+          const local = typeof server.config.command === "string" && server.config.command.trim().length > 0;
+          if (!local && this.sandbox.mode !== "danger-full-access") {
+            try {
+              const permission = mcpPermissions(this.authorizations[server.name]);
+              if (!permission.url || permission.url !== mcpEndpoint(server.config.url)) {
+                state.errors.set(server.name, "Remote MCP requires a matching sandbox.mcp endpoint authorization in host settings.");
+                return Promise.resolve();
+              }
+            } catch (error) {
+              state.errors.set(server.name, error instanceof Error ? error.message : "Invalid MCP authorization.");
+              return Promise.resolve();
+            }
+          }
+          return this.connect(state, server.name, server.config);
+        }));
       } catch (error) {
         if (state !== this.state || this.closed) return;
         const message = error instanceof Error ? error.message : String(error);

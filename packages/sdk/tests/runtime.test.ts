@@ -79,14 +79,15 @@ it("shares pending MCP connections across agents and refreshes after reset", asy
     return Response.json({ jsonrpc: "2.0", id: message.id, result: message.method === "initialize" ? { serverInfo: {} } : { tools: [{ name: "ping", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } }] } });
   } });
   writeFileSync(join(directory, ".mcp.json"), JSON.stringify({ mcpServers: { fixture: { url: `http://127.0.0.1:${server.port}` }, unavailable: {} } }));
+  const policy = { sandbox: { mcp: { fixture: { url: `http://127.0.0.1:${server.port}`, readOnlyTools: ["ping"] } } } };
   const runtime = new RuntimeManager(directory);
   const model = async (request: import("../src/index.ts").ModelRequest) => {
     expect(request.tools.some(tool => tool.name === "fixture__ping")).toBe(true);
     return { content: "done", toolCalls: [] };
   };
-  const first = runtime.createAgent({}, { model });
+  const first = runtime.createAgent(policy, { model });
   const reports: string[] = [];
-  const second = runtime.createAgent({}, { model }, { report: message => reports.push(message) });
+  const second = runtime.createAgent(policy, { model }, { report: message => reports.push(message) });
   try {
     await Promise.all([first.agent.run("one"), second.agent.run("two")]);
     expect(initialized).toBe(1);

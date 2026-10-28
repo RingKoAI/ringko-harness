@@ -81,6 +81,8 @@ import {
 } from "@ringko-ai/config";
 import {
   authorizeMcpServer,
+  mcpEndpoint,
+  mcpPermissions,
   mcpToolDefinitions,
   openMcpServer,
 } from "@ringko-ai/mcp";
@@ -119,6 +121,7 @@ import { RuntimeManager, registerRuntimeTools, type RuntimeAgent } from "@ringko
 import { PROTOCOL_VERSION } from "@ringko-ai/protocol";
 import { SyncManager } from "./services/sync.ts";
 import { RunStateManager } from "./services/runs.ts";
+import { parseUsageStatisticsQuery, UsageStatisticsService } from "./services/usage-statistics.ts";
 
 export interface ServerOptions {
   port?: number;
@@ -244,6 +247,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   const bundledWebuiDir = resolve(import.meta.dir, "../webui");
   const webuiDir = resolve(options.webuiDir ?? process.env.RINGKO_WEBUI_DIR ?? (existsSync(join(DEFAULT_WEBUI_DIR, "index.html")) ? DEFAULT_WEBUI_DIR : existsSync(join(bundledWebuiDir, "index.html")) ? bundledWebuiDir : join(dirname(process.execPath), "webui")));
   let store = new SessionStore({ cwd: workspace });
+  const usageStatisticsService = new UsageStatisticsService();
   const approvals = new Map<string, (approved: boolean, scope?: "session" | "saved") => void>();
   const questions = new Map<string, AskManager>();
   const activeAgents = new Map<string, RingKo>();
@@ -343,7 +347,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   const stopTimeSource = createTimeSource(eventLog, { intervalMs: 60_000 });
   const startupConfig = readConfig();
   const startupSandbox = typeof startupConfig === "string" ? undefined : new Sandbox({ workspace, mode: startupConfig.sandbox?.mode ?? "workspace-write", additionalWritableRoots: startupConfig.sandbox?.additionalWritableRoots });
-  void runtimeFor(workspace).start(startupSandbox).catch(error => writeDiagnostic("mcp.start", String(error)));
+  void runtimeFor(workspace).start(startupSandbox, typeof startupConfig === "string" ? undefined : startupConfig.sandbox?.mcp)
+    .then(() => sync.publish("config"), error => writeDiagnostic("mcp.start", String(error)));
 
   function readConfig(): RingkoConfig | string {
     try {
@@ -368,7 +373,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     // Discovery must report the same effective tool set the model will receive,
     // including MCP tools registered for the current workspace.
     const baseTools = tools.tools.list();
-    const mcpTools = (await runtimeFor(workspace).readyConnections()).connections.flatMap(connection => mcpToolDefinitions(connection, { mode: (typeof config === "string" ? "workspace-write" : config.sandbox?.mode ?? "workspace-write") }));
+    const mcpTools = (await runtimeFor(workspace).readyConnections()).connections.flatMap(connection => mcpToolDefinitions(connection, { mode: (typeof config === "string" ? "workspace-write" : config.sandbox?.mode ?? "workspace-write"), permissions: typeof config === "string" ? undefined : config.sandbox?.mcp }));
     const toolNames = new Set(baseTools.map(tool => tool.name));
     for (const definition of mcpTools) if (!toolNames.has(definition.name)) toolNames.add(definition.name);
     const activeId = projects.current;
@@ -584,7 +589,19 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       return json({ error: "name and config are required." }, 400);
     }
     try {
-      const connection = await openMcpServer(name, body.config as McpServerConfig);
+      const hostConfig = readConfig();
+      if (typeof hostConfig === "string") return json({ error: hostConfig }, 500);
+      const sandbox = new Sandbox({ workspace, mode: hostConfig.sandbox?.mode, additionalWritableRoots: hostConfig.sandbox?.additionalWritableRoots });
+      const candidate = body.config as McpServerConfig;
+      const local = typeof candidate.command === "string" && candidate.command.trim().length > 0;
+      if (!local && sandbox.mode !== "danger-full-access") {
+        const permission = mcpPermissions(hostConfig.sandbox?.mcp?.[name]);
+        if (!permission.url || permission.url !== mcpEndpoint(candidate.url)) return json({ error: "Remote MCP requires a matching sandbox.mcp endpoint authorization in host settings." }, 403);
+      }
+      if (local) await sandbox.prepare(candidate.env);
+      const connection = await openMcpServer(name, candidate, { sandboxMode: sandbox.mode,
+        wrap: (executable, args, cwd, environment) => sandbox.wrap(executable, args, typeof candidate.cwd === "string" ? cwd : workspace, environment),
+      });
       const tools = connection.tools.map((tool) => ({ name: tool.name, description: tool.description ?? null }));
       const serverInfo = connection.serverInfo;
       await connection.client.close().catch(() => {});
@@ -1172,7 +1189,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       const history = toChatMessages(store.open(id, "read").all());
       const probe = createRingKo({ task: true, model: async () => ({ content: "", toolCalls: [] }) });
       registerTools(probe, config, workspace);
-      const mcpTools = (await runtimeFor(workspace).readyConnections()).connections.flatMap(connection => mcpToolDefinitions(connection, { mode: (typeof config === "string" ? "workspace-write" : config.sandbox?.mode ?? "workspace-write") }));
+      const mcpTools = (await runtimeFor(workspace).readyConnections()).connections.flatMap(connection => mcpToolDefinitions(connection, { mode: (typeof config === "string" ? "workspace-write" : config.sandbox?.mode ?? "workspace-write"), permissions: typeof config === "string" ? undefined : config.sandbox?.mcp }));
       used = estimateMessagesTokens(history) + estimateToolsTokens([...probe.tools.list(), ...mcpTools]);
     } catch {
       return json({ error: "Unknown session." }, 404);
@@ -1549,7 +1566,15 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     }
     try {
       const bytes = await readFile(file);
-      return new Response(bytes, { headers: { "content-type": MIME[extname(file)] ?? "application/octet-stream" } });
+      // Content-hashed bundles can be cached forever; HTML must revalidate so a
+      // rebuilt WebUI is picked up instead of pinning the previous asset names.
+      const hashedAsset = relative(webuiDir, file).split(sep)[0] === "assets";
+      return new Response(bytes, {
+        headers: {
+          "content-type": MIME[extname(file)] ?? "application/octet-stream",
+          "cache-control": hashedAsset ? "public, max-age=31536000, immutable" : "no-cache",
+        },
+      });
     } catch {
       return new Response("RingKo WebUI is not built yet. Run `pnpm --filter @ringko-ai/webui build`.", {
         status: 404,
@@ -1589,13 +1614,15 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     cwd: string,
     cols: number,
     rows: number,
+    nativeProtocol = false,
+    environment?: NodeJS.ProcessEnv,
   ): Promise<InteractiveTerminal> {
     const nodePath = Bun.which("node");
-    if (!nodePath) throw new Error("Interactive terminals require Node.js in PATH.");
+    if (!nativeProtocol && !nodePath) throw new Error("Interactive terminals require Node.js in PATH.");
     const bridgePath = join(import.meta.dir, "terminal-bridge.mjs");
-    const child = Bun.spawn([nodePath, bridgePath], {
+    const child = Bun.spawn(nativeProtocol ? [shell, ...args] : [nodePath!, bridgePath], {
       cwd,
-      env: { ...process.env },
+      env: environment ?? { ...process.env },
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
@@ -1690,7 +1717,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       }
     })();
 
-    sendControl({ type: "start", shell, args, cwd, cols, rows });
+    if (!nativeProtocol) sendControl({ type: "start", shell, args, cwd, cols, rows });
     try { await ready; return terminal; }
     catch (error) { child.kill(); await child.exited; throw error; }
   }
@@ -1733,8 +1760,9 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     pendingTerminals += 1;
     try {
       const sandbox = new Sandbox({ workspace, mode: config.sandbox?.mode ?? "workspace-write", additionalWritableRoots: config.sandbox?.additionalWritableRoots });
-      const wrapped = sandbox.pty(shellExecutable, args, workspace);
-      terminal = await startInteractiveTerminal(wrapped.executable, wrapped.args, wrapped.cwd, cols, rows);
+      await sandbox.prepare();
+      const wrapped = sandbox.pty(shellExecutable, args, workspace, { cols, rows });
+      terminal = await startInteractiveTerminal(wrapped.executable, wrapped.args, wrapped.cwd, cols, rows, wrapped.protocol === "jsonl", wrapped.env);
     } catch (cause) {
       return json({ error: cause instanceof Error ? cause.message : "Could not start a terminal." }, 500);
     } finally { pendingTerminals -= 1; }
@@ -1884,6 +1912,13 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         } catch { return json({ error: "Cannot inspect this workspace path. It must be a regular file/directory inside the workspace; diff requires a Git repository and a bounded patch." }, 400); }
       }
       if (url.pathname === "/api/reload" && request.method === "POST") return await handleInfo();
+      if (url.pathname === "/api/usage" && request.method === "GET") {
+        let query;
+        try { query = parseUsageStatisticsQuery(url.searchParams); }
+        catch { return json({ error: "Invalid usage statistics filters." }, 400); }
+        try { return json(await usageStatisticsService.read(store.root, workspace, query)); }
+        catch { return json({ error: "Could not read workspace usage statistics." }, 500); }
+      }
       if (url.pathname === "/api/auth" && request.method === "GET") return handleAuth();
       if (url.pathname === "/api/auth/default" && request.method === "POST") return await handleSetDefaultAuth(request);
       if (url.pathname === "/api/auth/remove" && request.method === "POST") return await handleRemoveAuthAccount(request);
@@ -1952,6 +1987,17 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         if (action === "events" && request.method === "GET") {
           const agent = activeAgents.get(id); if (!agent) return json({ error: "No active jobs." }, 404);
           try { return json(await agent.jobs.subscribe({ jobId: url.searchParams.get("jobId") ?? "", after: Number(url.searchParams.get("after") ?? -1), waitMs: Number(url.searchParams.get("waitMs") ?? 0) }, request.signal)); } catch { return json({ error: "Invalid event subscription." }, 400); }
+        }
+        if (action === "task-cancel" && request.method === "POST") {
+          const body = await readJson<{ taskId?: unknown }>(request);
+          const taskId = typeof body?.taskId === "string" && body.taskId.length > 0 && body.taskId.length <= 128 && !body.taskId.includes("\0") ? body.taskId : "";
+          if (!taskId) return json({ error: "Invalid task id." }, 400);
+          const agent = activeAgents.get(id);
+          if (!agent) return json({ error: "No active run for this session." }, 404);
+          // Cancel by task id so the UI does not depend on a cached job summary.
+          if (!agent.jobs.list().some(job => job.jobId === taskId)) return json({ error: "Unknown task in this run." }, 404);
+          agent.jobs.cancel(taskId);
+          return json({ ok: true });
         }
         if (action === "task-detail" && request.method === "GET") {
           try {

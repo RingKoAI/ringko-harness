@@ -86,7 +86,12 @@ try {
   assert.equal(info.context.limit, catalogModel.limit.context, "Bundled offline model metadata was not restored");
   assert.ok(info.tools.includes("plan") && info.tools.includes("update_plan"), "Plan tools are missing from the packaged backend");
   assert.ok(!info.tools.includes("todoread") && !info.tools.includes("todowrite"), "Legacy todo names must not be offered to models");
-  console.log(`Verified relocated ${manifest.name}@${manifest.version}: CLI, echo, WebUI and offline model capacity.`);
+  const usageResponse = await fetch(`${url}/api/usage?limit=1`, { signal });
+  assert.equal(usageResponse.status, 200, "Packaged usage statistics API is missing");
+  const usage = await usageResponse.json();
+  assert.equal(usage.workspace, info.workspace);
+  assert.ok(Array.isArray(usage.requests) && Number.isSafeInteger(usage.total));
+  console.log(`Verified relocated ${manifest.name}@${manifest.version}: CLI, echo, WebUI, usage statistics and offline model capacity.`);
 } finally {
   if (server) {
     server.kill();

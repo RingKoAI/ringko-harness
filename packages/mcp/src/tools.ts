@@ -2,6 +2,7 @@
 import { defineTool, ToolRegistry, type AnyToolDefinition, type RiskKind } from "@ringko-ai/harness";
 import { writeDiagnostic } from "@ringko-ai/config";
 import type { McpConnection } from "./client.ts";
+import { mcpPermissions, mcpToolAuthorized } from "./policy.ts";
 
 const INVALID = /[^a-zA-Z0-9_-]/g;
 
@@ -12,18 +13,20 @@ function segment(value: string): string {
 export interface RegisterMcpOptions {
   /** Approval risk kind for every tool (default "network"). */
   risk?: RiskKind;
-  /** Active host policy; remote tools without a positive read-only declaration are withheld. */
+  /** Active host policy; authority comes from confined processes or operator configuration. */
   mode?: "read-only" | "workspace-write" | "danger-full-access";
+  permissions?: Readonly<Record<string, unknown>>;
 }
 
 /** Build harness tool definitions for one connected server. */
 export function mcpToolDefinitions(connection: McpConnection, options: RegisterMcpOptions = {}): AnyToolDefinition[] {
   const prefix = segment(connection.name).slice(0, 40) || "mcp";
   const risk: RiskKind = options.risk ?? "network";
+  const mode = options.mode ?? "workspace-write";
+  const authorized = (name: string) => mcpToolAuthorized(connection, name, mode, connection.local ? undefined : mcpPermissions(options.permissions?.[connection.name]));
   return connection.tools.filter((tool) => {
-    if (connection.local || (options.mode ?? "workspace-write") !== "read-only") return true;
-    if (tool.annotations?.readOnlyHint === true) return true;
-    writeDiagnostic(`mcp.${connection.name}`, `Remote tool ${tool.name} is withheld under read-only: no positive read-only declaration.`);
+    if (authorized(tool.name)) return true;
+    writeDiagnostic(`mcp.${connection.name}`, `Tool ${tool.name} is withheld under ${mode}: no matching host authorization or process boundary.`);
     return false;
   }).map((tool) => {
     const name = `${prefix}__${segment(tool.name)}`.slice(0, 128);
@@ -46,6 +49,7 @@ export function mcpToolDefinitions(connection: McpConnection, options: RegisterM
         };
       },
       async execute(input) {
+        if (!authorized(tool.name)) throw new Error(`Sandbox policy denies MCP tool ${connection.name}/${tool.name}.`);
         return await connection.client.callTool(tool.name, input);
       },
     });

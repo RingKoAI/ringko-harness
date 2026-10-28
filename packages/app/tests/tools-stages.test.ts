@@ -53,7 +53,7 @@ it("registers, discovers and executes an MCP tool with recorded events", async (
   let app: ReturnType<typeof startServer> | undefined;
   try {
     writeFileSync(join(root, ".mcp.json"), JSON.stringify({ mcpServers: { fixture: { url: `http://127.0.0.1:${mcp.port}` } } }));
-    saveConfig({ model: "Mock/parent", mode: "full", providers: [{ name: "Mock", type: "openai-compatible", baseURL: `http://127.0.0.1:${chat.port}/v1`, apiKey: "fixture", models: [{ id: "parent", name: "Parent" }] }] });
+    saveConfig({ model: "Mock/parent", mode: "full", sandbox: { mcp: { fixture: { url: `http://127.0.0.1:${mcp.port}`, readOnlyTools: ["echo"] } } }, providers: [{ name: "Mock", type: "openai-compatible", baseURL: `http://127.0.0.1:${chat.port}/v1`, apiKey: "fixture", models: [{ id: "parent", name: "Parent" }] }] });
     app = startServer({ workspace: root, port: 0, authToken: TOKEN });
 
     // Registration: the saved server is listed.

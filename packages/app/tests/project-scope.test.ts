@@ -2,7 +2,7 @@ import { expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveProjects } from "@ringko-ai/config";
+import { saveConfig, saveProjects } from "@ringko-ai/config";
 import { startServer } from "../src/server.ts";
 
 it("starts on the registered project and discovers that project's skills and MCP tools", async () => {
@@ -22,6 +22,7 @@ it("starts on the registered project and discovers that project's skills and MCP
     return Response.json({ jsonrpc: "2.0", id: message.id, result: {} });
   } });
   writeFileSync(join(project, ".mcp.json"), JSON.stringify({ mcpServers: { fixture: { url: `http://127.0.0.1:${mcp.port}` } } }));
+  saveConfig({ sandbox: { mcp: { fixture: { url: `http://127.0.0.1:${mcp.port}`, readOnlyTools: ["echo"] } } } });
   saveProjects({ projects: [{ id: "project", name: "Project", path: project }], current: "project" }, process.env);
   const app = startServer({ port: 0, shared: true });
   try {

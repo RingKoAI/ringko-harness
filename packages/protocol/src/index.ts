@@ -1,4 +1,5 @@
 // Wire contracts are platform-neutral: never import server/SDK modules into browser hosts.
+export * from "./usage-statistics.ts";
 export interface ServerMessage {
   role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string; name?: string; failed?: boolean;
   toolCalls?: Array<{ id: string; name: string; arguments: unknown }>;

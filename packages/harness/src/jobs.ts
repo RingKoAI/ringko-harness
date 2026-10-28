@@ -61,9 +61,12 @@ export class JobManager {
           job.snapshot.status = "failed";
           job.snapshot.error = "Shell exited unsuccessfully; inspect its result.";
         }
-      } catch {
+      } catch (error) {
         job.snapshot.status = job.controller.signal.aborted ? "cancelled" : "failed";
-        job.snapshot.error = job.snapshot.status === "cancelled" ? "Job cancelled." : "Job execution failed; inspect recorded events.";
+        // Surface the real refusal or spawn failure; a generic message hides
+        // actionable causes such as timeout, missing runner, or denied access.
+        const detail = error instanceof Error ? error.message : String(error);
+        job.snapshot.error = job.snapshot.status === "cancelled" ? "Job cancelled." : `Job failed: ${detail}`.slice(0, 800);
       } finally {
         options.signal?.removeEventListener("abort", cancel);
         try { emit(job.snapshot.status, job.snapshot); }

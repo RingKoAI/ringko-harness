@@ -1,6 +1,7 @@
 // MCP client: initialize, list tools, call tools over a chosen transport.
 import { getToolAuth, type McpServerConfig } from "@ringko-ai/config";
 import { ensureToolAuth } from "./oauth.ts";
+import { mcpEndpoint, type McpSandboxMode } from "./policy.ts";
 import {
   createHttpTransport,
   createSseTransport,
@@ -53,9 +54,15 @@ export class McpClient {
   private nextId = 1;
   private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
   private serverInfo: Record<string, unknown> = {};
+  private closed = false;
 
   constructor(readonly name: string, private readonly transport: Transport) {
     transport.onMessage((message) => this.handle(message));
+    transport.onClose?.(error => {
+      for (const entry of this.pending.values()) entry.reject(error);
+      this.pending.clear();
+      this.closed = true;
+    });
   }
 
   private handle(message: JsonRpcMessage): void {
@@ -69,6 +76,7 @@ export class McpClient {
   }
 
   request(method: string, params?: unknown): Promise<unknown> {
+    if (this.closed) return Promise.reject(new Error("MCP client is closed."));
     const id = String(this.nextId++);
     const message: JsonRpcMessage = { jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) };
     return new Promise((resolve, reject) => {
@@ -161,6 +169,9 @@ export class McpClient {
   }
 
   async close(): Promise<void> {
+    this.closed = true;
+    for (const entry of this.pending.values()) entry.reject(new Error("MCP client is closed."));
+    this.pending.clear();
     await this.transport.close();
   }
 }
@@ -200,20 +211,24 @@ export function createTransport(name: string, config: McpServerConfig, options: 
 export interface McpConnection {
   name: string;
   local: boolean;
+  sandboxMode?: McpSandboxMode;
+  endpoint?: string;
   serverInfo: Record<string, unknown>;
   tools: McpTool[];
   client: McpClient;
 }
 
 /** Connect to one configured server, keep it open, and list its tools. */
-export async function openMcpServer(name: string, config: McpServerConfig, options: { wrap?: ProcessWrapper } = {}): Promise<McpConnection> {
+export async function openMcpServer(name: string, config: McpServerConfig, options: { wrap?: ProcessWrapper; sandboxMode?: McpSandboxMode } = {}): Promise<McpConnection> {
   // Refresh a stored OAuth token before connecting (remote servers).
   await ensureToolAuth(name).catch(() => undefined);
   const client = new McpClient(name, createTransport(name, config, options));
   try {
     await client.initialize();
     const tools = await client.listTools();
-    return { name, local: typeof config.command === "string" && config.command.trim().length > 0, serverInfo: client.info, tools, client };
+    return { name, local: typeof config.command === "string" && config.command.trim().length > 0,
+      ...(options.wrap && options.sandboxMode ? { sandboxMode: options.sandboxMode } : {}),
+      ...(config.url ? { endpoint: mcpEndpoint(config.url) } : {}), serverInfo: client.info, tools, client };
   } catch (error) {
     await client.close().catch(() => {});
     throw error;

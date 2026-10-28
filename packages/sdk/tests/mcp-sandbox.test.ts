@@ -26,29 +26,47 @@ rl.on("line", (line) => {
 });
 `;
 
-it("runs a local stdio MCP server inside the workspace sandbox", async () => {
+const nativeAvailable = process.platform === "win32"
+  || (process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec"))
+  || (process.platform === "linux" && spawnSync("bwrap", ["--unshare-pid", "--ro-bind", "/", "/", "--", "true"], { stdio: "ignore" }).status === 0);
+
+for (const mode of ["workspace-write", "read-only"] as const) it.skipIf(!nativeAvailable)(`confines local stdio MCP writes in ${mode}`, async () => {
   const root = mkdtempSync(join(tmpdir(), "ringko-mcp-sandbox-"));
   const outside = mkdtempSync(join(tmpdir(), "ringko-mcp-outside-"));
+  const previousHome = process.env.RINGKO_HOME, previousAgents = process.env.AGENTS_HOME;
+  process.env.RINGKO_HOME = join(root, "home");
+  process.env.AGENTS_HOME = join(root, "agents");
   const server = join(root, "server.cjs");
   writeFileSync(server, SERVER);
-  writeFileSync(join(root, ".mcp.json"), JSON.stringify({ mcpServers: { local: { command: process.execPath, args: [server], cwd: root } } }));
-  const sandbox = new Sandbox({ workspace: root, mode: "workspace-write" });
-  if (sandbox.runner === "none") return;
-  if (process.platform === "linux" && spawnSync("bwrap", ["--unshare-pid", "--ro-bind", "/", "/", "--", "true"], { stdio: "ignore" }).status !== 0) return;
+  const node = Bun.which("node");
+  if (!node) throw new Error("The native MCP test requires Node.js.");
+  writeFileSync(join(root, ".mcp.json"), JSON.stringify({ mcpServers: { local: { command: node, args: [server] } } }));
+  const sandbox = new Sandbox({ workspace: root, mode });
   const manager = new McpManager(root);
   try {
     const started = await manager.start(sandbox);
+    expect(started.errors).toEqual([]);
     const connection = started.connections.find(item => item.name === "local");
     expect(connection?.local).toBe(true);
+    expect(connection?.sandboxMode).toBe(mode);
     expect(connection?.tools.map(tool => tool.name)).toEqual(["write_file"]);
-    await connection!.client.callTool("write_file", { path: join(root, "inside.txt"), content: "ok" });
-    expect(existsSync(join(root, "inside.txt"))).toBe(true);
-    // The process-level outside-write boundary is covered by the platform sandbox tests.
-
+    let insideDenied = false;
+    try { await connection!.client.callTool("write_file", { path: "inside.txt", content: "ok" }); }
+    catch { insideDenied = true; }
+    expect(insideDenied).toBe(mode === "read-only");
+    expect(existsSync(join(root, "inside.txt"))).toBe(mode === "workspace-write");
+    let outsideDenied = false;
+    try { await connection!.client.callTool("write_file", { path: join(outside, "outside.txt"), content: "bad" }); }
+    catch { outsideDenied = true; }
+    expect(outsideDenied).toBe(true);
+    expect(existsSync(join(outside, "outside.txt"))).toBe(false);
   } finally {
     await manager.close();
     await Bun.sleep(300);
+    if (previousHome === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previousHome;
+    if (previousAgents === undefined) delete process.env.AGENTS_HOME; else process.env.AGENTS_HOME = previousAgents;
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    rmSync(outside, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }, 30_000);
 

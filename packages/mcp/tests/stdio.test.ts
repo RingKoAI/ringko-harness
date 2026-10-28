@@ -46,7 +46,7 @@ describe("mcp stdio", () => {
     const connection = await openMcpServer("echo", { command: "bun", args: [fixture] });
     try {
       const registry = new ToolRegistry();
-      const names = registerMcpTools(registry, [connection]);
+      const names = registerMcpTools(registry, [connection], { mode: "danger-full-access" });
       expect(names).toEqual(["echo__echo"]);
       expect(registry.get("echo__echo")?.concurrency).toBe("parallel");
       const output = await registry.call("echo__echo", { text: "yo" }, async () => true);
