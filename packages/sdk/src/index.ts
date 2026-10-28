@@ -182,6 +182,25 @@ export interface RingKo {
   compact(instructions?: string): Promise<CompactionResult>;
 }
 
+const COMPACTION_TRANSCRIPT_CHARACTERS = 200_000;
+const COMPACTION_ARGUMENT_CHARACTERS = 2_000;
+
+/**
+ * Flatten messages for the summarizer. Tool names and arguments live beside
+ * `content`, so dropping them would hide the file paths and code an edit tool
+ * received before the summary is written.
+ */
+function summaryTranscript(messages: readonly ChatMessage[]): string {
+  const lines = messages.map(message => {
+    const calls = (message.toolCalls ?? []).map(call => {
+      const args = JSON.stringify(call.arguments ?? {}).slice(0, COMPACTION_ARGUMENT_CHARACTERS);
+      return `[tool ${call.name} ${args}]`;
+    }).join("\n");
+    return `${message.role}: ${message.content}${calls ? `\n${calls}` : ""}`;
+  }).join("\n");
+  return lines.slice(0, COMPACTION_TRANSCRIPT_CHARACTERS);
+}
+
 export function createRingKo(config: RingKoConfig): RingKo {
   if (!config || typeof config.model !== "function") {
     throw new TypeError("RingKo requires a model client.");
@@ -247,7 +266,26 @@ export function createRingKo(config: RingKoConfig): RingKo {
   };
   const summarizer: ModelClient = trackModel(config.smallModel ?? config.model, config.smallModel ? undefined : config.modelId, "compaction");
   const instructionContext = new InstructionContext(config.instructions, config.resolveInstructions);
-  const prepareMessages = instructionContext.enabled ? instructionContext.prepare.bind(instructionContext) : undefined;
+  const rawPrepare = instructionContext.prepare.bind(instructionContext);
+  let requestCompaction = false;
+  const prepareMessages = instructionContext.enabled || compaction.enabled
+    ? async (messages: readonly ChatMessage[], signal?: AbortSignal): Promise<ChatMessage[]> => {
+        let prepared = await rawPrepare(messages, signal);
+        // The first request of a run already passed the pre-run budget check;
+        // arm mid-run compaction for the requests that follow tool output.
+        if (!compaction.enabled || !session) return prepared;
+        if (!requestCompaction) { requestCompaction = true; return prepared; }
+        const estimated = estimateMessagesTokens(prepared) + estimateToolsTokens(tools.list());
+        if (estimated < budget() * compaction.ratio) return prepared;
+        try {
+          const result = await compactHistory(undefined, signal);
+          if (result.compacted) prepared = await rawPrepare(toChatMessages(session.all()), signal);
+        } catch (error) {
+          if (signal?.aborted) throw error;
+        }
+        return prepared;
+      }
+    : undefined;
   const contextLimits = resolveContextLimits(config);
   const historyTokens = (): number => estimateMessagesTokens(history) + estimateToolsTokens(tools.list());
   const budget = (): number =>
@@ -255,20 +293,20 @@ export function createRingKo(config: RingKoConfig): RingKo {
   const overThreshold = (extra = 0): boolean =>
     compaction.enabled && (lastInputTokens ?? historyTokens()) + extra >= budget() * compaction.ratio;
 
-  async function compactHistory(instructions?: string): Promise<CompactionResult> {
+  async function compactHistory(instructions?: string, signal?: AbortSignal): Promise<CompactionResult> {
     const keep = Math.max(0, compaction.keepRecent);
     let transcript: string;
     let shadowedSeqs: number[] | undefined;
     if (session) {
       const selected = selectCompactionTail(toChatSurface(session.all()), keep);
       if (!selected) return { compacted: false };
-      transcript = selected.shadowed.map(({ message }) => `${message.role}: ${message.content}`).join("\n").slice(0, 200_000);
+      transcript = summaryTranscript(selected.shadowed.map(({ message }) => message));
       shadowedSeqs = selected.shadowed.map(node => node.seq);
     } else {
       const rest = history.filter((message) => message.role !== "system");
       if (rest.length <= keep + 1) return { compacted: false };
       const middle = rest.slice(0, rest.length - keep);
-      transcript = middle.map((message) => `${message.role}: ${message.content}`).join("\n").slice(0, 200_000);
+      transcript = summaryTranscript(middle);
     }
     const summaryTurn = await summarizer({
       messages: [
@@ -283,8 +321,11 @@ export function createRingKo(config: RingKoConfig): RingKo {
         },
       ],
       tools: [],
+      ...(signal ? { signal } : {}),
     });
     const summary = summaryTurn.content.trim();
+    // An aborted run must not append a compaction for work it will not resume.
+    signal?.throwIfAborted();
     if (summary.length === 0) return { compacted: false };
     if (session && shadowedSeqs) {
       recordSessionCompaction(session, summary, shadowedSeqs);
@@ -334,9 +375,12 @@ export function createRingKo(config: RingKoConfig): RingKo {
       if (running || compacting) throw new Error("This agent already has an active run or compaction.");
       running = true;
       try {
+      requestCompaction = false;
       options?.signal?.throwIfAborted();
       if (prepareMessages) {
-        history = await prepareMessages(history, options?.signal);
+        // Refresh instructions without arming mid-run compaction: the pre-run
+        // budget check below owns the first request's compaction decision.
+        history = await rawPrepare(history, options?.signal);
         if (lastInputInstructions !== instructionContext.text) lastInputTokens = undefined;
       }
       tasks?.resetRun();
@@ -345,9 +389,11 @@ export function createRingKo(config: RingKoConfig): RingKo {
       // [.., compaction, user] so replay resumes the compacted history.
       if (overThreshold(estimateTokens(prompt))) {
         try {
-          await compactHistory();
-        } catch {
-          // Compaction is best effort; continue with the full history.
+          await compactHistory(undefined, options?.signal);
+        } catch (error) {
+          // Compaction is best effort, but an aborted run must stop here
+          // instead of recording a prompt it will never send.
+          if (options?.signal?.aborted) throw error;
         }
       }
       if (session) {
