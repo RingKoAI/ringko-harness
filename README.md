@@ -42,14 +42,16 @@ ringko serve    # local backend + browser interface, prints its URL (port 8787)
 install. From a source checkout, every `ringko <command>` in this document maps to
 `bun packages/tui/src/cli.ts <command>`, and `pnpm dev:tui` starts the TUI.
 
-In the Web UI, open a session and select **Tool call log** beside the composer
-controls to inspect recorded call arguments, results, status, and timestamps.
+In the Web UI, open **Settings → Usage statistics** for workspace/session
+summaries, date/provider/model filters, trends and paginated call history.
+See [Usage statistics](docs/usage-statistics.md) for data semantics and limits.
+Open a session's **Trajectory** view to inspect its recorded events.
 The compact status row below the composer shows generation speed, session cache
 hit rate, and context usage. Speed uses the most recent recorded primary call's
 actual output tokens divided by its total duration, including initial wait;
 compaction, metadata and delegated calls do not replace that speed. Missing
 historical timing/cache data stays unknown.
-Older sessions without separate `tool/call` events remain readable. The log is
+Older sessions without separate `tool/call` events remain readable. Tool logs are
 available through `GET /api/sessions/:id/tool-log` in pages of up to 100 calls.
 
 ### Shared terminal/browser sessions
@@ -93,9 +95,9 @@ notes kept outside this repository.
 
 Host execution defaults to `sandbox.mode = "workspace-write"`. The three modes
 are `read-only`, `workspace-write`, and the explicit `danger-full-access`.
-Workspace writes are allowed only in the middle mode; commands run through the
-platform runner. A missing runner fails closed rather than falling back to an
-unsandboxed process.
+`read-only` denies persistent writes; `workspace-write` permits workspace and
+explicit extra-root writes. `danger-full-access` explicitly removes those
+limits. Missing runners fail closed rather than falling back to host execution.
 
 ```json
 {
@@ -106,15 +108,15 @@ unsandboxed process.
 }
 ```
 
-Linux uses bubblewrap, macOS uses Seatbelt, and Windows uses a restricted-token
-runner with a low-integrity workspace/temp label and capability-SID write ACLs.
-Local stdio MCP servers are launched through the same runner. The Windows
-runner does not yet support PTY terminals, so confined terminals fail closed
-there. Remote MCP tools
-without a positive read-only declaration are withheld in `read-only` mode;
-`workspace-write` keeps them approval-gated because their remote side effects
-cannot be host-confined. Windows enforcement is partial: reads are not confined,
-and child processes that create piped stdio may fail with `EPERM`.
+Linux uses bubblewrap, macOS uses Seatbelt, and Windows uses restricted tokens,
+capability-SID write ACLs, Low integrity, and kill-on-close jobs. Windows PTYs use
+a native ConPTY host with the same token boundary. Native helper source is
+embedded in npm bundles and standalone binaries; no source sidecar is needed.
+Local MCP, explicit REPL commands, file writes and workspace Git review follow
+the sandbox policy. Remote MCP requires endpoint-bound grants in host settings;
+server read-only hints cannot grant authority. See [Sandbox boundaries and
+configuration](SANDBOX.md) for setup, prerequisites, verified behavior, and the
+remaining write-confinement limitations.
 
 ### Delegated tasks
 

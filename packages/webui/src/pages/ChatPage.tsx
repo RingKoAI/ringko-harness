@@ -1,4 +1,4 @@
-import { Activity, ArrowUp, Brain, Check, Copy, Folder, GitBranch, ListTree, MessageSquare, Paperclip, Square, Terminal, ThumbsDown, ThumbsUp, User, Wrench, X } from 'lucide-react'
+import { Activity, ArrowDown, ArrowUp, Brain, Check, Copy, Folder, GitBranch, ListTree, MessageSquare, Paperclip, Square, Terminal, ThumbsDown, ThumbsUp, User, Wrench, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type SetStateAction } from 'react'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -28,8 +28,8 @@ import { TodoPanel } from '@/components/todo-panel'
 import { TaskPanel } from '@/components/task-panel'
 import { JobPanel } from '@/components/job-panel'
 import { QuestionPanel } from '@/components/question-panel'
-import { ToolLogSheet } from '@/components/tool-log-sheet'
 import { TrajectoryView } from '@/components/trajectory-view'
+import { TaskView } from '@/components/task-view'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -38,7 +38,12 @@ import { Textarea } from '@/components/ui/textarea'
 import { useI18n, type MessageKey } from '@/i18n'
 import { useApp } from '@/store'
 import { cn } from '@/lib/utils'
-import { matchToolResults, toolCallTarget } from '@/lib/tool-activity'
+import { writeClipboard } from '@/lib/clipboard'
+import { matchToolResults, toolActivityKind, toolCallTarget, type ToolActivityKind } from '@/lib/tool-activity'
+import { editDiff } from '@/lib/edit-diff'
+import { isNearBottom, scrollMetrics } from '@/lib/chat-scroll'
+import { ToolDiff } from '@/components/tool-diff'
+import { BrandMark } from '@/components/brand-mark'
 
 const COMMANDS: { name: string; label: MessageKey }[] = [
   { name: 'reload', label: 'command.reload' },
@@ -47,6 +52,62 @@ const COMMANDS: { name: string; label: MessageKey }[] = [
 ]
 
 type Translate = ReturnType<typeof useI18n>['t']
+
+const COPY_FEEDBACK_MS = 1000
+
+/** Selection-based fallback for hosts that expose no async clipboard writer. */
+function selectionCopy(text: string): boolean {
+  const area = document.createElement('textarea')
+  area.value = text
+  area.setAttribute('readonly', '')
+  area.style.position = 'fixed'
+  area.style.opacity = '0'
+  document.body.appendChild(area)
+  try {
+    area.select()
+    return document.execCommand?.('copy') === true
+  } finally {
+    document.body.removeChild(area)
+  }
+}
+
+/**
+ * Copy affordance for one message. Success chrome appears only after the write
+ * resolves, repeated clicks are ignored while it is pending or showing success,
+ * a rejected write keeps the neutral icon, and the success chrome reverts on a timer.
+ */
+function CopyButton({ text, t }: { text: string; t: Translate }) {
+  const [pending, setPending] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [])
+  async function copy(): Promise<void> {
+    if (pending || copied) return
+    setPending(true)
+    try {
+      await writeClipboard(text, { clipboard: navigator.clipboard, fallback: selectionCopy })
+    } catch {
+      setPending(false)
+      return
+    }
+    setPending(false)
+    setCopied(true)
+    timer.current = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS)
+  }
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="size-6"
+      title={copied ? t('message.copied') : t('message.copy')}
+      aria-label={copied ? t('message.copied') : t('message.copy')}
+      onClick={() => void copy()}
+      disabled={pending || copied}
+    >
+      {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+    </Button>
+  )
+}
 
 /** One-line summary for a tool result; glob/grep collapse to their match count. */
 function toolSummary(t: Translate, name: string | undefined, content: string): string {
@@ -73,6 +134,9 @@ function ToolCallList({ calls, results, busy, showDetails, t }: { calls: readonl
         const status = result?.failed ? t('message.failed') : result ? t('message.completed') : busy ? t('message.working') : t('message.unknown')
         const target = toolCallTarget(call.arguments)
         const summary = result ? toolSummary(t, call.name, result.content) : ''
+        // Edits carry their exact before/after text, so the change renders as a
+        // unified diff instead of JSON arguments or a one-line result summary.
+        const diff = call.name === 'edit' ? editDiff(call.arguments) : undefined
         const heading = <>
           <Wrench className="size-3 shrink-0" aria-hidden="true" />
           <span className="shrink-0 font-mono">{call.name}</span>
@@ -83,6 +147,7 @@ function ToolCallList({ calls, results, busy, showDetails, t }: { calls: readonl
           <details key={call.id} className="rounded-md border bg-muted/20 text-xs">
             <summary className="flex min-w-0 cursor-pointer items-center gap-2 px-3 py-1.5">{heading}</summary>
             <div className="space-y-2 border-t px-3 py-2">
+              {diff ? <ToolDiff path={target ?? ''} diff={diff} /> : null}
               <div className="text-muted-foreground">{t('message.arguments')}</div>
               <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all font-mono">{JSON.stringify(call.arguments ?? {}, null, 2)}</pre>
               <div className="text-muted-foreground">{t('message.output')}</div>
@@ -90,13 +155,57 @@ function ToolCallList({ calls, results, busy, showDetails, t }: { calls: readonl
             </div>
           </details>
         ) : (
-          <div key={call.id} className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border bg-muted/20 px-3 py-1.5 text-xs">
-            {heading}
-            {result && <span className={cn('w-full truncate pl-5', result.failed ? 'text-destructive' : 'text-muted-foreground')}>{summary}</span>}
+          <div key={call.id} className="min-w-0 rounded-md border bg-muted/20 px-3 py-1.5 text-xs">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              {heading}
+              {result && <span className={cn('w-full truncate pl-5', result.failed ? 'text-destructive' : 'text-muted-foreground')}>{summary}</span>}
+            </div>
+            {diff ? <ToolDiff path={target ?? ''} diff={diff} /> : null}
           </div>
         )
       })}
     </div>
+  )
+}
+
+type ActivityKind = ToolActivityKind
+
+/**
+ * One step's tool calls collapse into a single summary row. The group opens
+ * while a call is still running, when a call failed, or when detailed tool
+ * output is enabled, and otherwise stays closed to keep the transcript dense.
+ */
+function ToolActivityGroup({ calls, results, busy, showDetails, t }: { calls: readonly ToolCall[]; results?: ReadonlyMap<string, ServerMessage>; busy: boolean; showDetails: boolean; t: Translate }) {
+  const pending = calls.filter(call => !results?.has(call.id))
+  const running = busy && pending.length > 0 ? pending[pending.length - 1]!.name : null
+  const failed = calls.filter(call => results?.get(call.id)?.failed).length
+  const counts = new Map<ActivityKind, number>()
+  let additions = 0
+  let deletions = 0
+  for (const call of calls) {
+    const kind = toolActivityKind(call.name)
+    counts.set(kind, (counts.get(kind) ?? 0) + 1)
+    if (call.name === 'edit') {
+      const change = editDiff(call.arguments)
+      if (change) { additions += change.additions; deletions += change.deletions }
+    }
+  }
+  const [override, setOverride] = useState<{ signature: string; open: boolean } | null>(null)
+  const signature = `${calls.length}:${failed}:${running ?? ''}:${showDetails ? 1 : 0}`
+  const autoOpen = Boolean(running) || failed > 0 || showDetails
+  const open = override?.signature === signature ? override.open : autoOpen
+  return (
+    <details open={open} onToggle={event => setOverride({ signature, open: event.currentTarget.open })} className="my-1 rounded-md border bg-muted/20 text-xs">
+      <summary className="flex min-w-0 cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1.5">
+        <Wrench className="size-3 shrink-0" aria-hidden="true" />
+        <span className="font-medium">{t('activity.title', { count: calls.length })}</span>
+        {[...counts].map(([kind, count]) => <span key={kind} className="text-muted-foreground">{t(`activity.${kind}`)} {count}</span>)}
+        {additions + deletions > 0 ? <span className="shrink-0 tabular-nums"><span className="text-emerald-600 dark:text-emerald-400">+{additions}</span><span className="mx-1 text-muted-foreground">/</span><span className="text-destructive">−{deletions}</span></span> : null}
+        {failed > 0 ? <span className="text-destructive">{t('activity.failed', { count: failed })}</span> : null}
+        <span className="ml-auto shrink-0 text-muted-foreground">{running ? t('activity.running', { name: running }) : open ? t('activity.hide') : t('activity.show')}</span>
+      </summary>
+      <div className="border-t px-3 py-2"><ToolCallList calls={calls} results={results} busy={busy} showDetails={showDetails} t={t} /></div>
+    </details>
   )
 }
 
@@ -137,7 +246,6 @@ function MessageRow({
   busy: boolean
 }) {
   const { t } = useI18n()
-  const [copied, setCopied] = useState(false)
   const isUser = message.role === 'user'
   const isTool = message.role === 'tool'
   return (
@@ -181,24 +289,11 @@ function MessageRow({
             <Markdown content={message.content} />
           )
         ) : null}
-        {message.toolCalls && message.toolCalls.length > 0 ? <ToolCallList calls={message.toolCalls} results={toolResults} busy={busy} showDetails={showTools} t={t} /> : null}
+        {message.toolCalls && message.toolCalls.length > 0 ? <ToolActivityGroup calls={message.toolCalls} results={toolResults} busy={busy} showDetails={showTools} t={t} /> : null}
         {!isTool ? (
-          <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-            {!isUser && message.content ? (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-6"
-                title={copied ? t('message.copied') : t('message.copy')}
-                onClick={() => {
-                  void navigator.clipboard.writeText(message.content)
-                  setCopied(true)
-                  toast.success(t('message.copied'))
-                  setTimeout(() => setCopied(false), 1500)
-                }}
-              >
-                {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-              </Button>
+          <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+            {message.content ? (
+              <CopyButton text={message.content} t={t} />
             ) : null}
             <Button variant="ghost" size="icon" className="size-6" title={t('message.branch')} onClick={() => onBranch(index)}>
               <GitBranch className="size-3" />
@@ -245,10 +340,56 @@ export function ChatPage() {
   const attachments = attachmentDrafts[attachmentKey] ?? []
   const setAttachments = (value: SetStateAction<UploadedFile[]>) => setAttachmentDrafts(previous => ({ ...previous, [attachmentKey]: typeof value === 'function' ? value(previous[attachmentKey] ?? []) : value }))
   const [context, setContext] = useState<{ used: number; limit: number } | null>(null)
-  const [toolLogOpen, setToolLogOpen] = useState(false)
   const [view, setView] = useState<'chat' | 'trajectory'>('chat')
+  const [taskView, setTaskView] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<Record<number, 'up' | 'down'>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const scrollRootRef = useRef<HTMLDivElement>(null)
+  const scrollViewportRef = useRef<HTMLElement | null>(null)
+  const followingRef = useRef(true)
+  const lastSessionRef = useRef(app.sessionId)
+  const [jumpVisible, setJumpVisible] = useState(false)
+  const [unreadTail, setUnreadTail] = useState(false)
+
+  // Bind the transcript viewport and track whether the reader left the tail.
+  useEffect(() => {
+    if (view !== 'chat' || taskView) return
+    const viewport = scrollRootRef.current?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')
+    if (!viewport) return
+    scrollViewportRef.current = viewport
+    const update = (): void => {
+      const following = isNearBottom(scrollMetrics(viewport))
+      followingRef.current = following
+      setJumpVisible(!following)
+      if (following) setUnreadTail(false)
+    }
+    viewport.addEventListener('scroll', update, { passive: true })
+    update()
+    return () => {
+      viewport.removeEventListener('scroll', update)
+      scrollViewportRef.current = null
+    }
+  }, [view, taskView])
+
+  // A session change starts at the latest message with following re-enabled.
+  useEffect(() => {
+    if (lastSessionRef.current === app.sessionId) return
+    lastSessionRef.current = app.sessionId
+    followingRef.current = true
+    setJumpVisible(false)
+    setUnreadTail(false)
+    const viewport = scrollViewportRef.current
+    if (viewport) viewport.scrollTop = viewport.scrollHeight
+  }, [app.sessionId])
+
+  // Keep the tail in view only while the reader is following it; otherwise mark
+  // the new content as unread and let their position stand.
+  useEffect(() => {
+    const viewport = scrollViewportRef.current
+    if (!viewport) return
+    if (followingRef.current) viewport.scrollTop = viewport.scrollHeight
+    else setUnreadTail(true)
+  }, [app.sessionId, app.messages.length, app.partial?.content, app.partial?.reasoning, app.busy, app.approval, app.question, app.todos, app.tasks, app.jobs])
 
   // Load the session named by the URL (deep link / refresh).
   useEffect(() => {
@@ -310,16 +451,36 @@ export function ChatPage() {
     }
   }
 
+  function pinToLatest(): void {
+    followingRef.current = true
+    setJumpVisible(false)
+    setUnreadTail(false)
+    requestAnimationFrame(() => {
+      const viewport = scrollViewportRef.current
+      if (viewport) viewport.scrollTop = viewport.scrollHeight
+    })
+  }
+
+  function jumpToLatest(): void {
+    followingRef.current = true
+    setJumpVisible(false)
+    setUnreadTail(false)
+    const viewport = scrollViewportRef.current
+    if (viewport) viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'smooth' })
+  }
+
   const submit = (): void => {
     const prompt = draft.trim()
     if (prompt.length === 0) return
-    if (app.busy && (prompt === '/reload' || prompt === '/compact')) { toast.error(t('queue.commandBusy')); return }
+    const queued = app.busy
+    if (queued && (prompt === '/reload' || prompt === '/compact')) { toast.error(t('queue.commandBusy')); return }
     if (prompt === '/loop' || prompt.startsWith('/loop ')) {
       const args = prompt.slice('/loop'.length).trim()
       if (args.length === 0) { toast.error(t('loop.usage')); return }
       const paths = attachments.map((file) => file.path)
       setDraft('')
       setAttachments([])
+      pinToLatest()
       app.send(prompt, paths, { args })
       return
     }
@@ -350,7 +511,10 @@ export function ChatPage() {
     const paths = attachments.map((file) => file.path)
     setDraft('')
     setAttachments([])
+    pinToLatest()
     app.send(prompt, paths)
+    // Busy submissions wait in the same ordered queue as the composer's list.
+    if (queued) toast.success(t('queue.added'))
   }
 
   function toggleUi(patch: { expandThinking?: boolean; expandTools?: boolean }): void {
@@ -398,12 +562,31 @@ export function ChatPage() {
 
   return (
     <div className="chat-layout">
-      <div className="flex shrink-0 gap-1 border-b px-3 py-2">
-        <Button size="sm" variant={view === 'chat' ? 'secondary' : 'ghost'} aria-pressed={view === 'chat'} onClick={() => setView('chat')}><MessageSquare />{t('trajectory.chat')}</Button>
-        <Button size="sm" variant={view === 'trajectory' ? 'secondary' : 'ghost'} aria-pressed={view === 'trajectory'} onClick={() => setView('trajectory')}><Activity />{t('trajectory.title')}</Button>
-        <Button size="sm" variant="ghost" onClick={() => openRightSidebar('files')}><ListTree />{t('workspace.title')}</Button>
+      <div className="flex shrink-0 gap-1 overflow-x-auto border-b px-3 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <Button size="sm" variant={view === 'chat' ? 'secondary' : 'ghost'} aria-pressed={view === 'chat'} className="shrink-0" onClick={() => setView('chat')}><MessageSquare />{t('trajectory.chat')}</Button>
+        <Button size="sm" variant={view === 'trajectory' ? 'secondary' : 'ghost'} aria-pressed={view === 'trajectory'} className="shrink-0" onClick={() => setView('trajectory')}><Activity />{t('trajectory.title')}</Button>
+        <Button size="sm" variant="ghost" className="shrink-0" onClick={() => openRightSidebar('files')}><ListTree />{t('workspace.title')}</Button>
+        {app.tasks.length > 0 ? (
+          <select
+            aria-label={t('task.view')}
+            className="ml-auto h-8 shrink-0 rounded-md border bg-background px-2 text-xs"
+            value={taskView ?? ''}
+            onChange={(event) => setTaskView(event.target.value || null)}
+          >
+            <option value="">{t('task.main')}</option>
+            {app.tasks.map(task => (
+              <option key={task.taskId} value={task.taskId}>
+                {`${task.description} · ${t(`task.${task.status}`)}`.slice(0, 80)}
+              </option>
+            ))}
+          </select>
+        ) : null}
       </div>
-      {view === 'trajectory' ? <TrajectoryView key={app.sessionId ?? 'new'} sessionId={app.sessionId} /> : !empty ? <ScrollArea data-chat-scroll className="min-h-0 flex-1">
+      {taskView && app.sessionId ? (
+        <TaskView key={`${app.sessionId}/${taskView}`} sessionId={app.sessionId} taskId={taskView} onBack={() => setTaskView(null)} />
+      ) : view === 'trajectory' ? <TrajectoryView key={app.sessionId ?? 'new'} sessionId={app.sessionId} /> : !empty ? (
+        <div ref={scrollRootRef} className="relative flex min-h-0 flex-1 flex-col">
+          <ScrollArea data-chat-scroll className="min-h-0 flex-1">
         <div className="px-3 sm:px-4">
           <div className="chat-column flex min-w-0 flex-col gap-6 px-4 py-6 [overflow-wrap:anywhere]" data-chat-transcript>
             {app.messages.map((message, index) => message.role === 'system' || toolActivity.attached.has(index) ? null : (
@@ -434,15 +617,30 @@ export function ChatPage() {
             ) : null}
           </div>
         </div>
-      </ScrollArea> : null}
+          </ScrollArea>
+          {jumpVisible ? (
+            <Button
+              size="icon"
+              variant="outline"
+              className="absolute right-3 bottom-3 z-10 rounded-full shadow-md"
+              title={t('chat.jumpToLatest')}
+              aria-label={unreadTail ? t('chat.unreadTail') : t('chat.jumpToLatest')}
+              onClick={jumpToLatest}
+            >
+              <ArrowDown className="size-4" />
+              {unreadTail ? <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary" aria-hidden="true" /> : null}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
 
-      <div data-chat-composer-seat className={cn(landing
+      {taskView ? null : <div data-chat-composer-seat className={cn(landing
         ? 'flex min-h-0 flex-1 flex-col justify-center overflow-y-auto px-3 py-8 sm:px-4'
         : 'shrink-0 px-3 pt-2 pb-3 sm:px-4 sm:pb-4')}>
         <div className="chat-column">
         {landing ? <div className="mb-6 flex w-full flex-col gap-6">
           <div className="flex items-center justify-center gap-3">
-            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-lg font-semibold text-primary-foreground" aria-hidden="true">R</span>
+            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-primary-foreground" aria-hidden="true"><BrandMark className="size-6" /></span>
             <LandingGreeting />
             <Badge variant="secondary" className="text-[10px]">RingKo</Badge>
           </div>
@@ -495,103 +693,90 @@ export function ChatPage() {
               ))}
             </div>
           ) : null}
-          <Textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault()
-                submit()
-              }
-            }}
-            rows={landing ? 2 : 1}
-            aria-label={t('composer.placeholder')}
-            aria-description={t('composer.hint')}
-            placeholder={t('composer.placeholder')}
-            className="min-h-11 resize-none border-0 bg-transparent px-4 pt-3 shadow-none focus-visible:ring-0"
-          />
-          <div className="flex flex-wrap items-center justify-between gap-2 px-2 pt-1 pb-2">
-            <div className="flex min-w-0 flex-wrap items-center gap-1">
-              {!landing ? <ModelPicker /> : null}
-              <ThinkingPicker />
-              {!landing ? <ModePicker /> : null}
-              <AccessPicker />
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                title={t('ui.showThinking')}
-                onClick={() => toggleUi({ expandThinking: !showThinking })}
-              >
-                <Brain className={showThinking ? 'size-3.5 text-primary' : 'size-3.5'} />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                title={t('ui.showTools')}
-                onClick={() => toggleUi({ expandTools: !showTools })}
-              >
-                <Wrench className={showTools ? 'size-3.5 text-primary' : 'size-3.5'} />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                title={t('toolLog.title')}
-                aria-label={t('toolLog.title')}
-                disabled={!app.sessionId}
-                onClick={() => setToolLogOpen(true)}
-              >
-                <ListTree className="size-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8"
-                title={t('upload.attach')}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <Paperclip className="size-3.5" />
-              </Button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                hidden
-                onChange={(event) => {
-                  void onFiles(event.target.files)
-                  event.target.value = ''
-                }}
-              />
-            </div>
-            <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
-              {landing ? <ModelPicker /> : null}
+          <div className="flex min-w-0 items-end gap-2 px-2 py-2">
+            <Textarea
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  submit()
+                }
+              }}
+              rows={landing ? 2 : 1}
+              aria-label={t('composer.placeholder')}
+              aria-description={t('composer.hint')}
+              placeholder={t('composer.placeholder')}
+              className="max-h-40 min-h-11 min-w-0 flex-1 resize-none border-0 bg-transparent px-2 pt-2.5 shadow-none focus-visible:ring-0"
+            />
+            <div className="flex shrink-0 items-center gap-1.5 pb-0.5">
               {app.busy ? (
-                <>
-                <Button variant="outline" size="icon" className="rounded-full" onClick={app.stop} title={t('composer.stop')}>
+                <Button variant="outline" size="icon" className="rounded-full" onClick={app.stop} title={t('composer.stop')} aria-label={t('composer.stop')}>
                   <Square />
                 </Button>
-                <Button size="icon" className="rounded-full" onClick={submit} disabled={!draft.trim()} title={t('queue.add')} aria-label={t('queue.add')}><ArrowUp /></Button>
-                </>
-              ) : (
-                <Button
-                  size="icon"
-                  className="rounded-full"
-                  onClick={submit}
-                  disabled={draft.trim().length === 0}
-                  title={t('composer.send')}
-                >
-                  <ArrowUp />
-                </Button>
-              )}
+              ) : null}
+              <Button
+                size="icon"
+                className="relative rounded-full"
+                onClick={submit}
+                disabled={draft.trim().length === 0}
+                title={app.busy ? t('queue.add') : t('composer.send')}
+                aria-label={app.busy ? t('queue.add') : t('composer.send')}
+              >
+                <ArrowUp />
+                {app.busy && app.queue.length > 0 ? (
+                  <span className="absolute -top-1 -right-1 grid size-4 place-items-center rounded-full bg-primary text-[10px] leading-none font-semibold text-primary-foreground">{app.queue.length}</span>
+                ) : null}
+              </Button>
             </div>
+          </div>
+          <div className="flex min-w-0 items-center gap-1 overflow-x-auto px-2 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <ModelPicker />
+            <ThinkingPicker />
+            {!landing ? <ModePicker /> : null}
+            <AccessPicker />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              title={t('ui.showThinking')}
+              onClick={() => toggleUi({ expandThinking: !showThinking })}
+            >
+              <Brain className={showThinking ? 'size-3.5 text-primary' : 'size-3.5'} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              title={t('ui.showTools')}
+              onClick={() => toggleUi({ expandTools: !showTools })}
+            >
+              <Wrench className={showTools ? 'size-3.5 text-primary' : 'size-3.5'} />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8"
+              title={t('upload.attach')}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Paperclip className="size-3.5" />
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              onChange={(event) => {
+                void onFiles(event.target.files)
+                event.target.value = ''
+              }}
+            />
           </div>
         </div>
         <ComposerStatus usage={app.usage} context={context ?? app.info?.context} />
         </div>
-      </div>
-      <ToolLogSheet open={toolLogOpen} onOpenChange={setToolLogOpen} sessionId={app.sessionId} busy={app.busy} />
+      </div>}
     </div>
   )
 }

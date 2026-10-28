@@ -38,8 +38,9 @@ ringko serve    # 本地后端 + 浏览器界面，会打印访问地址（默�
 本文档里每个 `ringko <command>` 对应 `bun packages/tui/src/cli.ts <command>`，
 `pnpm dev:tui` 则直接启动 TUI。
 
-在 Web UI 中打开一个会话，在输入区控件旁选择 **工具调用日志**（Tool call log），即可查看
-已记录调用的参数、结果、状态与时间戳。没有独立 `tool/call` 事件的旧会话仍可读取。该日志也可通过
+在 Web UI 的 **设置 → 使用统计** 中查看工作区或当前会话的用量，支持时间、提供商、模型及调用类型
+筛选、用量趋势和分页调用明细。统计口径与限制见 [使用统计说明](docs/usage-statistics.md)。
+会话的 **轨迹** 视图用于查看已记录事件。没有独立 `tool/call` 事件的旧会话仍可读取。工具日志也可通过
 `GET /api/sessions/:id/tool-log` 分页获取，每页最多 100 条。
 
 ### 终端与浏览器共享会话
@@ -64,8 +65,9 @@ ringko --workspace /path/to/project --server http://127.0.0.1:8787
 ### 沙盒
 
 默认 `sandbox.mode = "workspace-write"`。可选 `read-only`、`workspace-write`
-和必须显式启用的 `danger-full-access`。只有中间模式允许写入工作区；命令必须
-经过平台 runner，runner 不可用时直接失败关闭，不会退回普通 shell。
+和必须显式启用的 `danger-full-access`。只读模式禁止持久写入；工作区写入模式
+允许工作区及显式授权目录写入；完整访问模式显式取消这些限制。Runner 不可用
+时失败关闭，不会退回普通 shell。
 
 ```json
 {
@@ -77,11 +79,11 @@ ringko --workspace /path/to/project --server http://127.0.0.1:8787
 ```
 
 Linux 使用 bubblewrap，macOS 使用 Seatbelt，Windows 使用 restricted token、
-低完整性标签和工作区/临时目录 capability-SID 写入 ACL。本地 stdio MCP 服务
-也通过同一 runner 启动。远程 MCP 工具没有明确只读声明时，在 `read-only` 下
-不注册；`workspace-write` 仍按审批控制，因为远端副作用无法由本机进程隔离。
-Windows 的隔离是部分边界：读取不受限，且子进程创建管道 stdio 时可能返回
-`EPERM`。Windows runner 尚未支持 PTY 终端，受限模式下的交互式终端会失败关闭。
+低完整性标签、capability-SID 写入 ACL 和 Job Object。Windows 交互式终端由
+原生 ConPTY host 在相同受限令牌下运行。Helper 源码内嵌于 npm 包和独立二进制，
+不再依赖源码 sidecar。本地 MCP、REPL 显式命令、文件写入和 Git 预览都遵循沙盒。
+远程 MCP 必须在宿主设置中按端点与工具名授权，不信任服务端自报的只读提示。
+配置、前提及剩余边界见 [沙盒说明](SANDBOX.md)。
 
 ### 委派任务
 

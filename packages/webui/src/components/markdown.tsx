@@ -25,7 +25,7 @@ export function Markdown({ content, className }: { content: string; className?: 
               | { props?: { className?: string; children?: unknown } }
               | undefined
             const codeClass = child?.props?.className ?? ''
-            const language = /language-([\w-]+)/.exec(codeClass)?.[1]
+            const language = /language-([\w-]+)/.exec(codeClass)?.[1]?.toLowerCase()
             if (language) {
               const code = String(child?.props?.children ?? '')
               if (language === 'mermaid') return <Mermaid chart={code} />

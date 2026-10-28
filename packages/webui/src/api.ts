@@ -1,6 +1,14 @@
 // Typed client for the RingKo local server (see @ringko-ai/app).
 import { BackendClient, consumeSse, type SessionSnapshot, type TodoItem, type SessionUsage } from '@ringko-ai/client';
 export type { SessionSnapshot, TodoItem, SessionUsage } from '@ringko-ai/client';
+import type { UsageStatistics, UsageStatisticsQuery } from '@ringko-ai/client';
+export type { UsageStatistics, UsageStatisticsQuery, UsageStatisticsBucket, UsageRequest, UsageCallKind } from '@ringko-ai/client';
+
+export function fetchUsageStatistics(query: UsageStatisticsQuery, signal?: AbortSignal): Promise<UsageStatistics> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) if (value !== undefined) params.set(key, String(value));
+  return backendClient.request(`/api/usage?${params}`, undefined, 'GET', signal);
+}
 
 export interface Access {
   id: string;
@@ -257,6 +265,18 @@ export interface TaskUpdate {
 export interface TaskRecord { seq: number; time: number; type: string; data: { event?: { type: string; turn: number; toolName?: string; message?: ServerMessage }; reason?: string; result?: { content: string } } }
 export function fetchTaskDetail(sessionId: string, taskId: string, after = -1): Promise<{ task: TaskSummary; records: TaskRecord[]; cursor: number }> {
   return getJson(`/api/sessions/${encodeURIComponent(sessionId)}/task-detail?taskId=${encodeURIComponent(taskId)}&after=${after}`)
+}
+
+/** Cancel one running subtask of the active run, without needing a cached job snapshot. */
+export async function cancelTask(sessionId: string, taskId: string): Promise<void> {
+  const response = await fetch(`${BASE}/api/sessions/${encodeURIComponent(sessionId)}/task-cancel`, {
+    method: 'POST', headers: authHeaders({ 'content-type': 'application/json' }), body: JSON.stringify({ taskId }),
+  })
+  if (response.status === 401) throw new UnauthorizedError()
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null) as { error?: unknown } | null
+    throw new Error(typeof detail?.error === 'string' ? detail.error : `Task cancellation failed (${response.status}).`)
+  }
 }
 
 export async function stopSession(id: string): Promise<void> {

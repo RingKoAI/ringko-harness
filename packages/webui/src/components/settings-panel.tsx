@@ -11,12 +11,14 @@ import { OAuthPage } from '@/pages/OAuthPage'
 import { ProjectsPage } from '@/pages/ProjectsPage'
 import { ProvidersPage } from '@/pages/ProvidersPage'
 import { SkillsPage } from '@/pages/SkillsPage'
+import { UsagePage } from '@/pages/UsagePage'
 import { useApp } from '@/store'
 import { site } from '@/site'
 import { cn } from '@/lib/utils'
 
 const PAGES: { slug: string; label: MessageKey }[] = [
   { slug: 'general', label: 'settings.general' },
+  { slug: 'usage', label: 'settings.usage' },
   { slug: 'projects', label: 'settings.projects' },
   { slug: 'providers', label: 'settings.providers' },
   { slug: 'oauth', label: 'settings.oauth' },
@@ -61,18 +63,16 @@ function GeneralPage() {
           </Badge>
         </Row>
         <Row label={t('theme.toggle')}>
-          <div className="flex gap-2">
+          <select
+            aria-label={t('theme.toggle')}
+            className="h-9 w-full min-w-32 rounded-md border bg-background px-2 text-sm sm:w-44"
+            value={theme ?? 'system'}
+            onChange={(event) => setTheme(event.target.value)}
+          >
             {themes.map((entry) => (
-              <Button
-                key={entry.value}
-                size="sm"
-                variant={theme === entry.value ? 'default' : 'outline'}
-                onClick={() => setTheme(entry.value)}
-              >
-                {t(entry.label)}
-              </Button>
+              <option key={entry.value} value={entry.value}>{t(entry.label)}</option>
             ))}
-          </div>
+          </select>
         </Row>
         <Row label={t('language.toggle')}>
           <div className="flex gap-2">
@@ -245,6 +245,8 @@ export function SettingsPanel({
       <ProvidersPage />
     ) : active === 'oauth' ? (
       <OAuthPage />
+    ) : active === 'usage' ? (
+      <UsagePage />
     ) : active === 'models' ? (
       <ModelsPage />
     ) : active === 'connectors' ? (

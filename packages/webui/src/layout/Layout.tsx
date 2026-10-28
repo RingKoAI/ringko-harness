@@ -1,5 +1,5 @@
-import { Archive, ArchiveRestore, Folder, FolderPlus, GitBranch, MessageSquare, MoreHorizontal, PanelRight, Pencil, Plus, Settings as SettingsIcon, Trash2, Wrench } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { Archive, ArchiveRestore, Folder, FolderPlus, GitBranch, MessageSquare, MoreHorizontal, PanelRight, Pencil, Plus, Search, Settings as SettingsIcon, Trash2, Wrench, X } from 'lucide-react'
+import { useCallback, useEffect, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
@@ -28,7 +28,7 @@ import { Button } from '@/components/ui/button'
 import { DirectoryBrowser } from '@/components/directory-browser'
 import { RightSidebar, type RightSidebarTab } from '@/components/right-sidebar'
 import { SettingsDialog } from '@/components/settings-dialog'
-import { SidebarUsage } from '@/components/session-usage'
+import { BrandMark } from '@/components/brand-mark'
 import {
   Dialog,
   DialogContent,
@@ -61,6 +61,8 @@ import {
 } from '@/components/ui/sidebar'
 import { useI18n } from '@/i18n'
 import { useApp } from '@/store'
+import { cn } from '@/lib/utils'
+import { clampSidebarWidth, filterSessions, readSidebarWidth, SIDEBAR_WIDTH_DEFAULT, SIDEBAR_WIDTH_KEY, SIDEBAR_WIDTH_MAX, SIDEBAR_WIDTH_MIN } from '@/lib/sidebar'
 
 function relativeTime(value: number): string {
   const minutes = Math.round((Date.now() - value) / 60_000)
@@ -88,6 +90,42 @@ export function Layout() {
   const [projectLoadError, setProjectLoadError] = useState(false)
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false)
   const [rightSidebarTab, setRightSidebarTab] = useState<RightSidebarTab>('files')
+  const [sidebarWidth, setSidebarWidth] = useState(() => readSidebarWidth(globalThis.localStorage))
+  const [sessionQuery, setSessionQuery] = useState('')
+
+  const resizeSidebar = useCallback((value: number) => {
+    const next = clampSidebarWidth(value)
+    setSidebarWidth(next)
+    try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(next)) } catch { /* Storage may be unavailable; keep the in-memory width. */ }
+  }, [])
+  const startResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = sidebarWidth
+    const move = (moveEvent: PointerEvent): void => resizeSidebar(startWidth + (moveEvent.clientX - startX))
+    const end = (): void => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+      document.body.style.removeProperty('cursor')
+      document.body.style.removeProperty('user-select')
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
+  }
+  const resizeKeys = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    const step = event.shiftKey ? 32 : 16
+    if (event.key === 'ArrowLeft') resizeSidebar(sidebarWidth - step)
+    else if (event.key === 'ArrowRight') resizeSidebar(sidebarWidth + step)
+    else if (event.key === 'Home') resizeSidebar(SIDEBAR_WIDTH_MIN)
+    else if (event.key === 'End') resizeSidebar(SIDEBAR_WIDTH_MAX)
+    else return
+    event.preventDefault()
+  }
 
   const needsLogin = app.info?.auth.required === true && getToken() === null
   const loadProjects = useCallback(() => {
@@ -109,6 +147,8 @@ export function Layout() {
   if (needsLogin && location.pathname !== '/auth/login') return <Navigate to="/auth/login" replace />
 
   const visible = app.sessions.filter((session) => showArchived || !session.archived)
+  const normalizedQuery = sessionQuery.trim()
+  const filtered = filterSessions(visible, sessionQuery)
   function openRightSidebar(tab: RightSidebarTab): void {
     setRightSidebarTab(tab)
     setRightSidebarOpen(true)
@@ -200,7 +240,7 @@ export function Layout() {
   }
 
   return (
-    <SidebarProvider>
+    <SidebarProvider style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
       <Sidebar collapsible="icon">
         <SidebarHeader>
           <div className="flex items-center gap-1 group-data-[collapsible=icon]:justify-center">
@@ -213,7 +253,7 @@ export function Layout() {
                     navigate('/')
                   }}
                 >
-                  <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground">R</div>
+                  <BrandMark className="size-6 shrink-0 text-primary" />
                   <span className="truncate font-medium">{t('app.name')}</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -298,15 +338,35 @@ export function Layout() {
                 <Archive className="size-3.5" />
               </Button>
             </div>
+            <div className="relative px-1 pb-1 group-data-[collapsible=icon]:hidden">
+              <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+              <Input
+                value={sessionQuery}
+                onChange={(event) => setSessionQuery(event.target.value)}
+                placeholder={t('sidebar.search')}
+                aria-label={t('sidebar.search')}
+                className="h-8 pr-7 pl-7 text-xs"
+              />
+              {sessionQuery ? (
+                <button
+                  type="button"
+                  aria-label={t('sidebar.clearSearch')}
+                  className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  onClick={() => setSessionQuery('')}
+                >
+                  <X className="size-3.5" />
+                </button>
+              ) : null}
+            </div>
             <SidebarMenu>
-              {visible.length === 0 ? (
-                <p className="px-2 py-2 text-xs text-muted-foreground">{t('sidebar.empty')}</p>
+              {filtered.length === 0 ? (
+                <p className="px-2 py-2 text-xs text-muted-foreground">{normalizedQuery ? t('sidebar.noMatch') : t('sidebar.empty')}</p>
               ) : (
-                visible.map((session) => (
+                filtered.map((session) => (
                   <SidebarMenuItem key={session.id}>
                     <SidebarMenuButton
                       isActive={session.id === app.sessionId && location.pathname === '/'}
-                      className={session.archived ? 'opacity-60' : undefined}
+                      className={cn('max-md:min-h-11', session.archived && 'opacity-60')}
                       tooltip={session.title ?? t('sidebar.untitled')}
                       onClick={() => {
                         app.openSession(session.id)
@@ -327,7 +387,7 @@ export function Layout() {
                     </SidebarMenuButton>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <SidebarMenuAction showOnHover title={t('session.actions')}>
+                        <SidebarMenuAction showOnHover title={t('session.actions')} className="[@media(hover:none)]:opacity-100">
                           <MoreHorizontal />
                         </SidebarMenuAction>
                       </DropdownMenuTrigger>
@@ -372,9 +432,6 @@ export function Layout() {
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
-              <SidebarUsage />
-            </SidebarMenuItem>
-            <SidebarMenuItem>
               <SettingsDialog>
                 <SidebarMenuButton tooltip={t('nav.settings')}>
                   <SettingsIcon />
@@ -393,6 +450,19 @@ export function Layout() {
             </span>
           </div>
         </SidebarFooter>
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t('sidebar.resize')}
+          aria-valuemin={SIDEBAR_WIDTH_MIN}
+          aria-valuemax={SIDEBAR_WIDTH_MAX}
+          aria-valuenow={sidebarWidth}
+          tabIndex={0}
+          onPointerDown={startResize}
+          onKeyDown={resizeKeys}
+          onDoubleClick={() => resizeSidebar(SIDEBAR_WIDTH_DEFAULT)}
+          className="group/resize absolute inset-y-0 -right-1 z-20 hidden w-2 cursor-col-resize touch-none select-none outline-none group-data-[collapsible=icon]:hidden after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-transparent hover:after:bg-border focus-visible:after:bg-ring md:block"
+        />
       </Sidebar>
 
       <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden">

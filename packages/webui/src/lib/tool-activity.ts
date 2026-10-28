@@ -29,3 +29,16 @@ export function toolCallTarget(input: unknown): string | undefined {
   }
   return undefined
 }
+
+export type ToolActivityKind = 'read' | 'search' | 'write' | 'commands' | 'subtasks' | 'plan' | 'tools'
+
+/** Coarse tool category used by the collapsed activity summary. */
+export function toolActivityKind(name: string): ToolActivityKind {
+  if (name === 'read' || name === 'tree') return 'read'
+  if (name === 'glob' || name === 'grep') return 'search'
+  if (name === 'write' || name === 'edit') return 'write'
+  if (name === 'shell' || name === 'terminal') return 'commands'
+  if (name === 'task' || name === 'job' || name === 'subscribe') return 'subtasks'
+  if (name === 'plan' || name === 'update_plan') return 'plan'
+  return 'tools'
+}

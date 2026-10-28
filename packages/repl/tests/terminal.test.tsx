@@ -140,16 +140,16 @@ describe("terminal component interactions", () => {
     const app = render(<Repl workspace={root} model={model} modelLabel="test" config={{ expandTools: true }} />, { stdin: io.input as unknown as NodeJS.ReadStream, stdout: io.output as unknown as NodeJS.WriteStream, stderr: io.output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
     try {
       await settle(); io.input.write("!echo rkh-local-ok"); await settle(); io.input.write("\r");
-      await settle(); await settle(); await settle();
+      await waitForRender(() => io.read().includes("Exit 0"), "sandboxed explicit shell completion");
       expect(modelCalls).toBe(0);
       expect(io.read()).toContain("Exit 0");
       expect(io.read()).toContain("  rkh-local-ok");
     } finally {
       app.unmount(); io.input.destroy(); io.output.destroy();
       if (previousHome === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previousHome;
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-  });
+  }, process.platform === "win32" ? 30_000 : 5_000);
   it("keeps tool output in an indented block and toggles it with Ctrl+O", async () => {
     const io = terminal();
     const items = [{ id: 1, kind: "assistant" as const, text: "Checking the file" }, { id: 2, kind: "tool" as const, text: "RAW TOOL PAYLOAD", toolName: "read", arguments: { path: "main.ts" } }];
