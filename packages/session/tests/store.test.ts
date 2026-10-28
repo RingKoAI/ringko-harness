@@ -122,6 +122,24 @@ describe("SessionStore", () => {
     reopened.close();
   });
 
+  it("repairs a torn trailing write before appending new events", () => {
+    const session = store().create({ id: "s-torn-append" });
+    session.appendEvent("user/message", { text: "before" });
+    session.flush();
+    session.close();
+
+    const dir = store().findDir("s-torn-append")!;
+    appendFileSync(sessionLogPath(dir), '{"type":"tool/res');
+
+    const writer = store().open("s-torn-append", "write");
+    writer.appendEvent("user/message", { text: "after" });
+    writer.close();
+
+    const reopened = store().open("s-torn-append", "read");
+    expect(reopened.all().map((event) => (event.data as { text: string }).text)).toEqual(["before", "after"]);
+    reopened.close();
+  });
+
   it("throws for an unknown session", () => {
     expect(() => store().open("missing")).toThrow("No session with id");
   });

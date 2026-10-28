@@ -12,6 +12,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  truncateSync,
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -247,6 +248,7 @@ export class SessionHandle {
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     this.lock = acquireLock(sessionLockPath(this.dir));
     try {
+      this.adoptLog();
       this.fd = openSync(this.path, "a");
       // An existing-but-empty log (interrupted first write) still needs a header.
       if (!fileExists(this.path) || statSync(this.path).size === 0) {
@@ -258,6 +260,29 @@ export class SessionHandle {
       finally { this.fd = undefined; this.lock.release(); this.lock = undefined; }
       throw error;
     }
+  }
+
+  /**
+   * Re-read the log under the write lock, adopt its committed events, and
+   * truncate an interrupted final line. Appending after a torn tail would join
+   * the new record to the partial one and make the whole log unreadable.
+   */
+  private adoptLog(): void {
+    let text: string;
+    try {
+      text = readFileSync(this.path, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (text.trim().length === 0) return;
+    const parsed = parseLog(text);
+    if (parsed.tornTail) {
+      const complete = text.lastIndexOf("\n") + 1;
+      truncateSync(this.path, Buffer.byteLength(text.slice(0, complete), "utf8"));
+    }
+    this.events.splice(0, this.events.length, ...parsed.events);
+    this.seq = parsed.events.length;
   }
 
   /** Append events; `seq` and `time` are assigned here. Returns the events. */
