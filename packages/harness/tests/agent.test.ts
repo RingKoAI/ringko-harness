@@ -146,3 +146,49 @@ describe("agent harness", () => {
     expect(executed).toBe(false);
   });
 });
+
+function namedTool(name: string, execute: () => unknown): ToolDefinition<Record<string, unknown>, unknown> {
+  return {
+    name,
+    description: "Controlled probe.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    parseInput: value => value as Record<string, unknown>,
+    assessRisk: () => ({ kind: "safe", reason: "probe" }),
+    execute,
+  };
+}
+
+it("commits completed tool results and marks unstarted calls when cancelled", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve });
+  let slowStarted!: () => void;
+  const slowBegan = new Promise<void>(resolve => { slowStarted = resolve });
+  const tools = new ToolRegistry();
+  tools.register(namedTool("fast", () => "fast done"));
+  tools.register(namedTool("slow", async () => { slowStarted(); await gate; return "slow done"; }));
+  const events: { type: string; toolName?: string; message?: { content?: string } }[] = [];
+  const controller = new AbortController();
+  const agent = new Agent({
+    tools,
+    signal: controller.signal,
+    maxParallelTools: 1,
+    onEvent: event => events.push(event),
+    model: async () => ({ content: "", toolCalls: [
+      { id: "a", name: "fast", arguments: {} },
+      { id: "b", name: "slow", arguments: {} },
+      { id: "c", name: "fast", arguments: {} },
+    ] }),
+  });
+  const run = agent.run("probe").catch(error => error);
+  await slowBegan;
+  controller.abort(new Error("cancelled"));
+  release();
+  const outcome = await run;
+  expect(outcome).toBeInstanceOf(Error);
+  const toolEvents = events.filter(event => event.type === "tool" || event.type === "tool_error");
+  expect(toolEvents).toHaveLength(3);
+  expect(toolEvents[0]).toMatchObject({ type: "tool", toolName: "fast", message: { content: "fast done" } });
+  expect(toolEvents[1]).toMatchObject({ type: "tool", toolName: "slow", message: { content: "slow done" } });
+  expect(toolEvents[2]).toMatchObject({ type: "tool_error", toolName: "fast" });
+  expect(toolEvents[2]?.message?.content).toContain("not started");
+});

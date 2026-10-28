@@ -228,25 +228,29 @@ export class Agent {
       // Schedule the turn's calls: parallel calls batch up to the concurrency
       // limit, exclusive calls run alone as a barrier. Results stay in call
       // order regardless of completion order.
-      const results = await this.runToolCalls(response.toolCalls, turn);
-      this.signal?.throwIfAborted();
+      const { results, started } = await this.runToolCalls(response.toolCalls, turn);
+      // Commit every known outcome before observing cancellation: a completed
+      // write must not lose its result merely because a sibling was cancelled.
       response.toolCalls.forEach((call, index) => {
-        const { output, failed } = results[index];
+        const result = results[index];
         const toolMessage: ChatMessage = {
           role: "tool",
-          content: serialize(output),
+          content: result ? serialize(result.output) : started[index]
+            ? "Tool outcome unknown after interruption."
+            : "Tool was not started before the run was interrupted.",
           toolCallId: call.id,
           name: call.name,
         };
         messages.push(toolMessage);
         this.onEvent?.({
-          type: failed ? "tool_error" : "tool",
+          type: result && !result.failed ? "tool" : "tool_error",
           turn,
           message: toolMessage,
           toolName: call.name,
-          error: failed ? toolMessage.content : undefined,
+          error: result && !result.failed ? undefined : toolMessage.content,
         });
       });
+      this.signal?.throwIfAborted();
     }
 
     throw new AgentTurnLimitError(this.maxTurns);
@@ -256,11 +260,16 @@ export class Agent {
   private async runToolCalls(
     calls: readonly ModelToolCall[],
     turn: number,
-  ): Promise<Array<{ output: unknown; failed: boolean }>> {
-    const results: Array<{ output: unknown; failed: boolean }> = new Array(calls.length);
+  ): Promise<{ results: Array<{ output: unknown; failed: boolean } | undefined>; started: boolean[] }> {
+    const results: Array<{ output: unknown; failed: boolean } | undefined> = new Array(calls.length);
+    const started: boolean[] = new Array(calls.length).fill(false);
     let index = 0;
     while (index < calls.length) {
+      // Cancellation stops new work; calls already running are awaited so their
+      // real outcomes can be recorded.
+      if (this.signal?.aborted) break;
       if (this.tools.get(calls[index].name)?.concurrency === "exclusive") {
+        started[index] = true;
         results[index] = await this.invokeTool(calls[index], turn);
         index += 1;
         continue;
@@ -275,13 +284,15 @@ export class Agent {
         for (;;) {
           const at = cursor;
           cursor += 1;
-          if (at >= batch.length) return;
-          results[batch[at]] = await this.invokeTool(calls[batch[at]], turn);
+          if (at >= batch.length || this.signal?.aborted) return;
+          const callIndex = batch[at];
+          started[callIndex] = true;
+          results[callIndex] = await this.invokeTool(calls[callIndex], turn);
         }
       });
       await Promise.all(workers);
     }
-    return results;
+    return { results, started };
   }
 
   private async invokeTool(call: ModelToolCall, turn: number): Promise<{ output: unknown; failed: boolean }> {
