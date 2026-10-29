@@ -1,5 +1,8 @@
 # Unreleased
 
+- Replace the Settings language buttons with a labelled dropdown, matching the
+  theme control.
+
 - Make the approval dialog reviewable: show the exact target, mark the risk kind
   and level, focus Deny by default, and move the session/persistent grants into
   a secondary menu so only Deny and Approve look primary.

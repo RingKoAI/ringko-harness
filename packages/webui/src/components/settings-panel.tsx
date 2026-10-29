@@ -75,18 +75,16 @@ function GeneralPage() {
           </select>
         </Row>
         <Row label={t('language.toggle')}>
-          <div className="flex gap-2">
+          <select
+            aria-label={t('language.toggle')}
+            className="h-9 w-full min-w-32 rounded-md border bg-background px-2 text-sm sm:w-44"
+            value={locale}
+            onChange={(event) => setLocale(event.target.value as Locale)}
+          >
             {LOCALES.map((entry) => (
-              <Button
-                key={entry.value}
-                size="sm"
-                variant={locale === entry.value ? 'default' : 'outline'}
-                onClick={() => setLocale(entry.value as Locale)}
-              >
-                {entry.label}
-              </Button>
+              <option key={entry.value} value={entry.value}>{entry.label}</option>
             ))}
-          </div>
+          </select>
         </Row>
       </CardContent>
     </Card>
