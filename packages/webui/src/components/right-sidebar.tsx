@@ -87,7 +87,16 @@ export function RightSidebar({
   }
 
   return (
-    <aside className={`${open ? 'flex' : 'hidden'} h-svh w-80 shrink-0 flex-col border-l bg-sidebar text-sidebar-foreground`} aria-label={t('rightSidebar.title')}>
+    <>
+      {open ? (
+        <button
+          type="button"
+          aria-label={t('rightSidebar.close')}
+          className="fixed inset-0 z-30 bg-black/40 md:hidden"
+          onClick={onClose}
+        />
+      ) : null}
+      <aside className={`${open ? 'flex' : 'hidden'} h-svh w-80 shrink-0 flex-col border-l bg-sidebar text-sidebar-foreground max-md:fixed max-md:inset-y-0 max-md:right-0 max-md:z-40 max-md:w-[min(20rem,85vw)] max-md:shadow-xl`} aria-label={t('rightSidebar.title')}>
       <header className="flex h-14 shrink-0 items-center gap-1 border-b px-3">
         <Button
           variant={tab === 'files' ? 'secondary' : 'ghost'}
@@ -200,5 +209,6 @@ export function RightSidebar({
         <TerminalPanel enabled={terminalStarted} />
       </div>
     </aside>
+    </>
   )
 }

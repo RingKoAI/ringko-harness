@@ -1,5 +1,12 @@
 # Unreleased
 
+- Make the approval dialog reviewable: show the exact target, mark the risk kind
+  and level, focus Deny by default, and move the session/persistent grants into
+  a secondary menu so only Deny and Approve look primary.
+- Contain the right sidebar on small screens as an overlay with a dismiss
+  backdrop instead of shrinking the transcript to a sliver.
+- Stop provider edits from being lost: serialize the visual state when switching
+  to JSON, validate JSON before switching back, and show an unsaved indicator.
 - Persist the active instruction set in the session log at the start of each run
   so the exact instructions seen by the model can be replayed.
 - Record a `run/completed` event on successful run termination so the session log

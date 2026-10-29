@@ -157,6 +157,7 @@ export interface Approval {
   id: string;
   toolName: string;
   riskLevel: string;
+  riskKind?: string;
   reason: string;
   target: string | null;
 }

@@ -9,6 +9,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useI18n } from '@/i18n'
 import { isOAuthProviderType } from '@/lib/oauth'
 import { mergeDiscoveredModels, newModelCount } from '@/lib/provider-models'
+import { parseProviderFile } from '@/lib/provider-file'
 import { useApp } from '@/store'
 
 const TYPES = ['openai-compatible', 'openai', 'anthropic', 'google']
@@ -27,15 +28,41 @@ export function ProvidersPage() {
   const [presets, setPresets] = useState<ProviderPreset[]>([])
   const [presetId, setPresetId] = useState('')
   const [discovering, setDiscovering] = useState<number | null>(null)
+  const [savedText, setSavedText] = useState('')
+
+  const serialize = (value: ProviderFile): string => JSON.stringify({ model: value.model ?? '', small_model: value.small_model ?? '', providers: value.providers ?? [] }, null, 2)
+  const currentText = mode === 'json' ? json : serialize(file)
+  const dirty = savedText.length > 0 && currentText !== savedText
 
   const load = useCallback(() => {
     fetchProviders()
       .then((value) => {
+        const text = serialize(value)
         setFile(value)
-        setJson(JSON.stringify({ model: value.model ?? '', small_model: value.small_model ?? '', providers: value.providers ?? [] }, null, 2))
+        setJson(text)
+        setSavedText(text)
       })
       .catch((cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)))
   }, [])
+
+  /** Switch editors without losing either side: serialize visual state, validate JSON. */
+  function switchMode(next: 'visual' | 'json'): void {
+    if (next === mode) return
+    if (next === 'json') {
+      setJson(serialize(file))
+      setMode('json')
+      return
+    }
+    let parsed: ProviderFile
+    try {
+      parsed = parseProviderFile(json)
+    } catch {
+      toast.error(t('settings.invalidJson'))
+      return
+    }
+    setFile(parsed)
+    setMode('visual')
+  }
 
   useEffect(() => {
     load()
@@ -122,11 +149,12 @@ export function ProvidersPage() {
           <p className="mt-1 text-xs text-muted-foreground">{t('settings.providersHint')}</p>
         </div>
         <div className="flex items-center gap-2">
+          {dirty ? <span className="text-xs text-amber-600 dark:text-amber-400">{t('settings.unsaved')}</span> : null}
           <div className="flex rounded-md border p-0.5">
-            <Button size="sm" variant={mode === 'visual' ? 'secondary' : 'ghost'} onClick={() => setMode('visual')}>
+            <Button size="sm" variant={mode === 'visual' ? 'secondary' : 'ghost'} onClick={() => switchMode('visual')}>
               {t('settings.visual')}
             </Button>
-            <Button size="sm" variant={mode === 'json' ? 'secondary' : 'ghost'} onClick={() => setMode('json')}>
+            <Button size="sm" variant={mode === 'json' ? 'secondary' : 'ghost'} onClick={() => switchMode('json')}>
               {t('settings.json')}
             </Button>
           </div>

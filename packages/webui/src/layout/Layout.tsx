@@ -501,12 +501,25 @@ export function Layout() {
           <AlertDialogHeader>
             <AlertDialogTitle>{t('approval.title', { tool: app.approval?.toolName ?? '' })}</AlertDialogTitle>
             <AlertDialogDescription>{app.approval?.reason}</AlertDialogDescription>
+            {app.approval?.target ? (
+              <pre className="max-h-40 overflow-auto rounded-md bg-muted/50 p-2 text-xs break-all whitespace-pre-wrap">{app.approval.target}</pre>
+            ) : null}
+            {app.approval ? (
+              <div className="text-[11px] text-muted-foreground">{app.approval.riskKind} · {app.approval.riskLevel}</div>
+            ) : null}
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => app.decide(false)}>{t('approval.deny')}</AlertDialogCancel>
+            <AlertDialogCancel autoFocus onClick={() => app.decide(false)}>{t('approval.deny')}</AlertDialogCancel>
             <AlertDialogAction onClick={() => app.decide(true)}>{t('approval.approve')}</AlertDialogAction>
-            <AlertDialogAction onClick={() => app.decide(true, 'session')}>{t('approval.session')}</AlertDialogAction>
-            <AlertDialogAction onClick={() => app.decide(true, 'saved')}>{t('approval.saved')}</AlertDialogAction>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline">{t('approval.more')}</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => app.decide(true, 'session')}>{t('approval.session')}</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => app.decide(true, 'saved')}>{t('approval.saved')}</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
