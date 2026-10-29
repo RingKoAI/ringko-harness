@@ -1,13 +1,14 @@
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { fetchPresets, fetchProviders, saveProviders, type ProviderDefinition, type ProviderFile, type ProviderPreset } from '@/api'
+import { discoverProviderModels, fetchPresets, fetchProviders, saveProviders, type ProviderDefinition, type ProviderFile, type ProviderPreset } from '@/api'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useI18n } from '@/i18n'
 import { isOAuthProviderType } from '@/lib/oauth'
+import { mergeDiscoveredModels, newModelCount } from '@/lib/provider-models'
 import { useApp } from '@/store'
 
 const TYPES = ['openai-compatible', 'openai', 'anthropic', 'google']
@@ -25,6 +26,7 @@ export function ProvidersPage() {
   const [busy, setBusy] = useState(false)
   const [presets, setPresets] = useState<ProviderPreset[]>([])
   const [presetId, setPresetId] = useState('')
+  const [discovering, setDiscovering] = useState<number | null>(null)
 
   const load = useCallback(() => {
     fetchProviders()
@@ -63,6 +65,28 @@ export function ProvidersPage() {
       ...current,
       providers: (current.providers ?? []).map((provider, i) => (i === index ? { ...provider, ...patch } : provider)),
     }))
+  }
+
+  async function discover(index: number): Promise<void> {
+    const provider = (file.providers ?? [])[index]
+    if (!provider) return
+    setDiscovering(index)
+    try {
+      const result = await discoverProviderModels({
+        name: provider.name,
+        type: provider.type ?? 'openai-compatible',
+        ...(provider.baseURL ? { baseURL: provider.baseURL } : {}),
+        ...(provider.apiKey ? { apiKey: provider.apiKey } : {}),
+      })
+      const existing = provider.models ?? []
+      const added = newModelCount(existing, result.models)
+      patchProvider(index, { models: mergeDiscoveredModels(existing, result.models) })
+      toast.success(added > 0 ? t('settings.modelsFetched', { count: added }) : t('settings.noNewModels'))
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setDiscovering(null)
+    }
   }
 
   async function save(): Promise<void> {
@@ -156,6 +180,17 @@ export function ProvidersPage() {
                     list="ringko-provider-types"
                     className="w-48"
                   />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="shrink-0"
+                    disabled={discovering === index}
+                    title={t('settings.fetchModels')}
+                    onClick={() => void discover(index)}
+                  >
+                    <RefreshCw data-icon="inline-start" className={discovering === index ? 'animate-spin' : undefined} />
+                    {discovering === index ? t('settings.fetchingModels') : t('settings.fetchModels')}
+                  </Button>
                   <Button
                     size="icon"
                     variant="ghost"

@@ -670,6 +670,23 @@ export async function saveProviders(file: ProviderFile): Promise<Info> {
   return (await response.json()) as Info;
 }
 
+export interface DiscoveredProviderModel { id: string; name?: string }
+
+/** Query a provider endpoint for its model list using the host-side provider module. */
+export async function discoverProviderModels(input: { name: string; type: string; baseURL?: string; apiKey?: string }): Promise<{ models: DiscoveredProviderModel[]; truncated?: boolean }> {
+  const response = await fetch(`${BASE}/api/providers/models`, {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(input),
+  });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null) as { error?: unknown } | null;
+    throw new Error(typeof detail?.error === "string" ? detail.error : `Model discovery failed (${response.status}).`);
+  }
+  return (await response.json()) as { models: DiscoveredProviderModel[]; truncated?: boolean };
+}
+
 export interface AuthAccount {
   id: string;
   uuid: string;

@@ -86,6 +86,7 @@ import {
   mcpToolDefinitions,
   openMcpServer,
 } from "@ringko-ai/mcp";
+import { discoverModels } from "@ringko-ai/providers";
 import { listWorkflows, resolveWorkflow } from "@ringko-ai/workflow";
 import { EventLog, createTimeSource } from "@ringko-ai/runtime";
 import {
@@ -689,6 +690,36 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       return json({ error: error instanceof Error ? error.message : "Invalid provider file." }, 500);
     }
   }
+
+  /** Ask the configured provider endpoint for its model list (operator-initiated). */
+  async function handleDiscoverModels(request: Request): Promise<Response> {
+    const body = await readJson<{ name?: unknown; type?: unknown; baseURL?: unknown; apiKey?: unknown }>(request);
+    const type = typeof body?.type === "string" ? body.type.trim() : "";
+    if (!type || type.length > 64 || !/^[A-Za-z0-9._-]+$/.test(type)) return json({ error: "Invalid provider type." }, 400);
+    const baseURL = typeof body?.baseURL === "string" ? body.baseURL.trim() : "";
+    if (baseURL) {
+      try {
+        const parsed = new URL(baseURL);
+        if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error();
+      } catch {
+        return json({ error: "Invalid base URL." }, 400);
+      }
+    }
+    const apiKey = typeof body?.apiKey === "string" && body.apiKey.length > 0 ? body.apiKey.slice(0, 4096) : undefined;
+    const name = typeof body?.name === "string" ? body.name.slice(0, 128) : undefined;
+    try {
+      const models = await discoverModels({
+        type,
+        ...(baseURL ? { baseURL } : {}),
+        ...(apiKey ? { apiKey } : {}),
+        ...(name ? { providerId: name } : {}),
+      }, { strict: true });
+      return json({ models: models.slice(0, 500), truncated: models.length > 500 });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Model discovery failed." }, 502);
+    }
+  }
+
 
   async function handleSaveProviders(request: Request): Promise<Response> {
     const body = await readJson<{ model?: unknown; small_model?: unknown; providers?: unknown }>(request);
@@ -1930,6 +1961,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname === "/api/presets" && request.method === "GET") return json({ presets: PROVIDER_PRESETS });
       if (url.pathname === "/api/providers" && request.method === "GET") return handleProviders();
       if (url.pathname === "/api/providers" && request.method === "PUT") return await handleSaveProviders(request);
+      if (url.pathname === "/api/providers/models" && request.method === "POST") return await handleDiscoverModels(request);
       if (url.pathname === "/api/projects" && request.method === "GET") return handleProjects();
       if (url.pathname === "/api/projects" && request.method === "POST") return await handleAddProject(request);
       if (url.pathname === "/api/mcp" && request.method === "GET") return handleMcp();
