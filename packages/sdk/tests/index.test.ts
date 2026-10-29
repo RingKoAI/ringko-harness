@@ -71,7 +71,13 @@ describe("RingKo SDK facade", () => {
       await ringko.run("run");
       session.close();
       expect(store.open(session.id, "read").all().map((event) => event.type)).toEqual([
-        "user/message", "assistant/message", "tool/call", "tool/result", "assistant/message",
+        "user/message",
+        "session/instructions",
+        "assistant/message",
+        "tool/call",
+        "tool/result",
+        "assistant/message",
+        "run/completed",
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -93,7 +99,7 @@ describe("RingKo SDK facade", () => {
         model: async ({ messages }) => {
           expect(messages[0]).toMatchObject({ role: "assistant", toolCalls: [{ id: "c1" }] });
           expect(messages[1]).toMatchObject({ role: "tool", toolCallId: "c1" });
-          expect(messages[1]?.content).toContain("outcome unknown");
+          expect(messages[1]?.content).toContain("not started before the run was interrupted.");
           expect(store.open(session.id, "read").all()[1]?.type).toBe("tool/result");
           return { content: "safe", toolCalls: [] };
         },

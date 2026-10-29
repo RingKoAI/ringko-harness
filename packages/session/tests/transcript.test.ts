@@ -82,7 +82,7 @@ describe("transcript", () => {
     expect(repairInterruptedToolCalls({ ...handle, all: () => events })).toBe(1);
     expect(repairInterruptedToolCalls({ ...handle, all: () => events })).toBe(0);
     expect(events[1]).toMatchObject({ type: "tool/result", data: { failed: true, toolCallId: "c1" } });
-    expect(toChatMessages(events)[1]?.content).toContain("outcome unknown");
+    expect(toChatMessages(events)[1]?.content).toContain("not started before the run was interrupted.");
   });
 
   it("marks failed tool results", () => {

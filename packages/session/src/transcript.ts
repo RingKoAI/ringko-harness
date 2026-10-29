@@ -17,6 +17,7 @@ export const TRANSCRIPT_EVENT = {
   archive: "session/archived",
   compaction: "session/compaction",
   feedback: "session/feedback",
+  instructions: "session/instructions",
 } as const;
 
 export const FEEDBACK_VALUES = ["up", "down"] as const;
@@ -28,6 +29,10 @@ interface HandleLike {
 
 export function recordUserMessage(handle: HandleLike, content: string): SessionEvent {
   return handle.appendEvent(TRANSCRIPT_EVENT.user, { content });
+}
+
+export function recordInstructions(handle: HandleLike, content: string): SessionEvent {
+  return handle.appendEvent(TRANSCRIPT_EVENT.instructions, { content });
 }
 
 export function recordAssistantMessage(
@@ -189,27 +194,37 @@ export function recordAgentEvent(handle: HandleLike, event: AgentEvent): Session
   );
 }
 
-/** Mark calls left without a result by an interrupted process as unknown. */
+/** Mark calls left without a result by an interrupted process with appropriate status. */
 export function repairInterruptedToolCalls(handle: HandleLike & { all(): readonly SessionEvent[] }): number {
-  const pending = new Map<string, { turn: number; name: string }>();
+  const pending = new Map<string, { turn: number; name: string; started: boolean }>();
   for (const event of handle.all()) {
     const data = asRecord(event.data);
     if (!data) continue;
     if (event.type === TRANSCRIPT_EVENT.assistant) {
       for (const call of parseToolCalls(data.toolCalls)) {
-        pending.set(call.id, { turn: typeof data.turn === "number" ? data.turn : 0, name: call.name });
+        pending.set(call.id, { turn: typeof data.turn === "number" ? data.turn : 0, name: call.name, started: false });
+      }
+    } else if (event.type === TRANSCRIPT_EVENT.toolCall) {
+      if (typeof data.toolCallId === "string") {
+        const pendingCall = pending.get(data.toolCallId);
+        if (pendingCall) pendingCall.started = true;
       }
     } else if (event.type === TRANSCRIPT_EVENT.tool) {
       if (typeof data.toolCallId === "string") pending.delete(data.toolCallId);
     }
   }
   for (const [id, call] of pending) {
+    const message = call.started
+      ? "Tool outcome unknown after interruption. Check the external state before retrying an operation with side effects."
+      : "Tool was not started before the run was interrupted.";
     recordToolResult(
       handle,
       call.turn,
       id,
       call.name,
-      "Tool outcome unknown after interruption. Check the external state before retrying an operation with side effects.",
+      call.started
+        ? "Tool outcome unknown after interruption. Check the external state before retrying an operation with side effects."
+        : "Tool was not started before the run was interrupted.",
       true,
     );
   }

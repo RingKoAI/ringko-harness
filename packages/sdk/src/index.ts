@@ -26,6 +26,7 @@ import {
   repairInterruptedToolCalls,
   recordSessionCompaction,
   recordUserMessage,
+  recordInstructions,
   compactMessages,
   selectCompactionTail,
   toChatMessages,
@@ -278,7 +279,7 @@ export function createRingKo(config: RingKoConfig): RingKo {
         const estimated = estimateMessagesTokens(prepared) + estimateToolsTokens(tools.list());
         if (estimated < budget() * compaction.ratio) return prepared;
         try {
-          const result = await compactHistory(undefined, signal);
+          const result = await compactHistory(undefined, signal, session ? undefined : prepared);
           if (result.compacted) prepared = await rawPrepare(toChatMessages(session.all()), signal);
         } catch (error) {
           if (signal?.aborted) throw error;
@@ -293,10 +294,11 @@ export function createRingKo(config: RingKoConfig): RingKo {
   const overThreshold = (extra = 0): boolean =>
     compaction.enabled && (lastInputTokens ?? historyTokens()) + extra >= budget() * compaction.ratio;
 
-  async function compactHistory(instructions?: string, signal?: AbortSignal): Promise<CompactionResult> {
+  async function compactHistory(instructions?: string, signal?: AbortSignal, messages?: readonly ChatMessage[]): Promise<CompactionResult> {
     const keep = Math.max(0, compaction.keepRecent);
     let transcript: string;
     let shadowedSeqs: number[] | undefined;
+    const sourceMessages = messages ?? (session ? toChatSurface(session.all()) : history);
     if (session) {
       const selected = selectCompactionTail(toChatSurface(session.all()), keep);
       if (!selected) return { compacted: false };
@@ -398,6 +400,7 @@ export function createRingKo(config: RingKoConfig): RingKo {
       }
       if (session) {
         recordUserMessage(session, prompt);
+        recordInstructions(session, instructionContext.text);
         if (config.modelId) recordModelCall(session, config.modelId);
         session.flush();
       }
@@ -433,7 +436,15 @@ export function createRingKo(config: RingKoConfig): RingKo {
       lastInputTokens = result.usage?.inputTokens ?? historyTokens();
       lastInputInstructions = instructionContext.text;
       return result;
-      } finally { jobs.cancelAll(); await jobs.settle(); running = false; }
+} finally {
+        if (session) {
+          session.appendEvent("run/completed", { status: "completed" });
+          session.flush();
+        }
+        jobs.cancelAll();
+        await jobs.settle();
+        running = false;
+      }
     },
   };
 }
