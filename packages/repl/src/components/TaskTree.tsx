@@ -17,7 +17,7 @@ function formatElapsed(ms: number): string {
   return minutes % 60 === 0 ? `${hours}h` : `${hours}h ${minutes % 60}m`;
 }
 
-/** Main + delegated-task tree mirroring the reference terminal layout. */
+/** Main + delegated-task tree. */
 export function TaskTree({ tasks, selectedId, columns, maxRows = MAX_VISIBLE + 2 }: { tasks: readonly SubagentView[]; selectedId?: string; columns: number; maxRows?: number }) {
   const anyRunning = tasks.some(task => task.status === "running");
   const [now, setNow] = useState(() => Date.now());

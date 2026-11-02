@@ -1,9 +1,8 @@
 // Codex CLI client identity.
 //
-// OpenAI's backend rejects clients that do not present the Codex CLI's
-// originator/User-Agent pair; mirroring them keeps automated requests from
-// being treated as an unknown (and potentially abusive) client. Values are
-// taken from `codex-rs/login/src/auth/default_client.rs`:
+// OpenAI's backend rejects clients that do not present the expected
+// originator/User-Agent pair; sending both keeps automated requests from
+// being treated as an unknown (and potentially abusive) client:
 //
 //   User-Agent: "{originator}/{version} ({os_type} {os_version}; {arch}) {terminal}"
 //   originator: "codex_cli_rs" (DEFAULT_ORIGINATOR)

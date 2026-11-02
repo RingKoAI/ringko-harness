@@ -1,4 +1,4 @@
-// xAI (Grok) OAuth device-code login, mirroring the grok CLI (RFC 8628).
+// xAI (Grok) OAuth device-code login (RFC 8628).
 import { applyProxyEnv, type OAuthCredential } from "@ringko-ai/config";
 import type { QuotaTier } from "./openai.ts";
 

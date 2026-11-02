@@ -1,4 +1,4 @@
-// OpenAI (ChatGPT) OAuth login, mirroring the opencode/Codex flow:
+// OpenAI (ChatGPT) OAuth login:
 // loopback server on a fixed port with PKCE (browser) or the device-code flow.
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";

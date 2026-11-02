@@ -1,4 +1,4 @@
-// Anthropic OAuth (Claude Pro/Max subscription), mirroring the pi/Claude Code flow.
+// Anthropic OAuth (Claude Pro/Max subscription).
 // Loopback callback + PKCE; the resulting access token is used as an API bearer.
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
