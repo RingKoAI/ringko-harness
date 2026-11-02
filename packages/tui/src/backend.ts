@@ -2,13 +2,15 @@ import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { BackendClient, BackendError, PROTOCOL_VERSION } from "@ringko-ai/client";
 import { canonicalWorkspace, sharedPort } from "@ringko-ai/client/local";
-import { backendKey, DEFAULT_BACKEND_PORT, localBackendOrigin, readBackendRegistration } from "@ringko-ai/config";
+import { backendKey, DEFAULT_BACKEND_PORT, localBackendOrigin, readBackendRegistration, removeBackendRegistration } from "@ringko-ai/config";
 import { cliCommand } from "./cli-identity.ts";
 export { sharedPort } from "@ringko-ai/client/local";
 
 const START_TIMEOUT_MS = 15_000;
 const PROBE_TIMEOUT_MS = 1_000;
 const RETRY_MS = 200;
+/** A registration this old whose URL does not answer is stale, even if its PID was reused. */
+const STALE_REGISTRATION_MS = 10_000;
 export interface ConnectOptions { workspace: string; configPath?: string; url?: string; start?: (port: number) => void; startIfMissing?: boolean }
 export interface LiveBackend { client: BackendClient; url: string; workspace: string }
 
@@ -57,6 +59,8 @@ export async function findLiveBackend(options: Pick<ConnectOptions, "workspace" 
   candidates.push(`http://127.0.0.1:${sharedPort(workspace, configPath)}`);
   candidates.push(`http://127.0.0.1:${DEFAULT_BACKEND_PORT}`);
   const seen = new Set<string>();
+  const registrationUrl = registration ? localBackendOrigin(registration.url) : undefined;
+  let registrationUnreachable = false;
   for (const candidate of candidates) {
     const url = localBackendOrigin(candidate);
     if (!url || seen.has(url)) continue;
@@ -64,6 +68,13 @@ export async function findLiveBackend(options: Pick<ConnectOptions, "workspace" 
     const client = clientFor(url, workspace);
     const result = await probe(client, workspace, configPath);
     if (result.status === "ok") return { client, url, workspace };
+    if (registration && url === registrationUrl && result.status === "unreachable") registrationUnreachable = true;
+  }
+  // A crashed backend leaves its registration behind; the OS may reuse its PID,
+  // so liveness cannot be inferred from the PID alone. The HTTP probe above is
+  // authoritative. Only discard an aged record, never one that is still starting.
+  if (registration && registrationUnreachable && Date.now() - registration.startedAt >= STALE_REGISTRATION_MS) {
+    removeBackendRegistration(workspace, configPath, registration.instance);
   }
   return undefined;
 }

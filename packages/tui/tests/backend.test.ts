@@ -116,3 +116,35 @@ it("connects through a workspace alias without accepting a foreign workspace", a
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+it("discards a registration whose PID was reused by another process", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rkh-backend-reused-pid-"));
+  const previous = process.env.RINGKO_HOME; process.env.RINGKO_HOME = root;
+  const previousServer = process.env.RINGKO_SERVER; delete process.env.RINGKO_SERVER;
+  const previousToken = process.env.RINGKO_WEB_TOKEN; delete process.env.RINGKO_WEB_TOKEN;
+  let app: ReturnType<typeof startServer> | undefined;
+  try {
+    const deadPort = await freePort();
+    // process.pid is alive, simulating an OS PID reuse after the real owner died.
+    writeBackendRegistration({
+      workspace: root, configPath: null, url: `http://127.0.0.1:${deadPort}`, port: deadPort,
+      pid: process.pid, instance: "reused-pid", startedAt: Date.now() - 60_000,
+    });
+    expect(await findLiveBackend({ workspace: root })).toBeUndefined();
+    expect(readBackendRegistration(root)).toBeUndefined();
+
+    let starts = 0;
+    const live = await connectBackend({
+      workspace: root,
+      start: port => { starts += 1; app = startServer({ workspace: root, port, shared: true }); },
+    });
+    expect(starts).toBe(1);
+    expect(live.url).toBe(app!.url);
+  } finally {
+    app?.stop();
+    if (previous === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previous;
+    if (previousServer === undefined) delete process.env.RINGKO_SERVER; else process.env.RINGKO_SERVER = previousServer;
+    if (previousToken === undefined) delete process.env.RINGKO_WEB_TOKEN; else process.env.RINGKO_WEB_TOKEN = previousToken;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
