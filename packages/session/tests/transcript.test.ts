@@ -106,4 +106,55 @@ describe("transcript", () => {
     expect(sessionSummary(events)).toBe("did a thing");
     expect(events.map(event => event.type)).toEqual(["session/title", "session/summary", "session/title"]);
   });
+
+  it("persists and reconstructs structured tool parts", () => {
+    const { events, handle } = collector();
+    recordAgentEvent(handle, {
+      type: "tool",
+      turn: 1,
+      message: {
+        role: "tool",
+        content: "Image a.png",
+        toolCallId: "c1",
+        name: "read",
+        parts: [
+          { type: "text", text: "Image a.png" },
+          { type: "image", mediaType: "image/png", data: "aGVsbG8=" },
+        ],
+      },
+      toolName: "read",
+    });
+
+    expect(events[0]?.data).toMatchObject({
+      parts: [
+        { type: "text", text: "Image a.png" },
+        { type: "image", mediaType: "image/png", data: "aGVsbG8=" },
+      ],
+    });
+    expect(toChatMessages(events)[0]).toMatchObject({
+      role: "tool",
+      content: "Image a.png",
+      parts: [
+        { type: "text", text: "Image a.png" },
+        { type: "image", mediaType: "image/png", data: "aGVsbG8=" },
+      ],
+    });
+  });
+
+  it("drops unvalidated structured parts when loading a session", () => {
+    const { events, handle } = collector();
+    recordAgentEvent(handle, {
+      type: "tool",
+      turn: 1,
+      message: {
+        role: "tool",
+        content: "bad",
+        toolCallId: "c1",
+        name: "read",
+        parts: [{ type: "image", mediaType: "image/svg+xml", data: "aGVsbG8=" }],
+      },
+      toolName: "read",
+    });
+    expect(toChatMessages(events)[0]).toEqual({ role: "tool", content: "bad", toolCallId: "c1", name: "read" });
+  });
 });

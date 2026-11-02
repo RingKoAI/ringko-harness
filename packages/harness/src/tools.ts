@@ -8,6 +8,7 @@ import {
 } from "./access.ts";
 import { abortable } from "./cancellation.ts";
 import type { JobManager } from "./jobs.ts";
+import type { MessagePart, ToolMessageContent } from "./agent.ts";
 
 export interface ToolExecutionContext {
   permissionCheck?: PermissionCheck;
@@ -64,6 +65,12 @@ export interface ToolDefinition<Input, Output> {
    * agent's concurrency limit).
    */
   concurrency?: ToolConcurrency;
+  /**
+   * Render a successful result for the model. Defaults to serialized JSON.
+   * Return `parts` to carry structured content (for example an image read);
+   * `content` stays the human- and log-facing text summary.
+   */
+  toMessage?(output: Output): ToolMessageContent;
 }
 
 export interface ToolMetadata {
@@ -86,6 +93,7 @@ export type AnyToolDefinition = ToolDefinition<any, any>;
 type RegisteredTool = {
   metadata: ToolMetadata;
   invoke(input: unknown, requestApproval?: ApprovalHandler, mode?: AccessMode, context?: ToolExecutionContext): Promise<unknown>;
+  render(output: unknown): ToolMessageContent;
 };
 
 const RISK_KINDS = new Set<RiskKind>([
@@ -156,6 +164,70 @@ export function validateToolDefinition(tool: ToolDefinition<unknown, unknown>): 
   if (!tool.inputSchema || typeof tool.inputSchema !== "object" || tool.inputSchema.type !== "object") {
     throw new TypeError(`Tool "${tool.name}" must declare an object input schema.`);
   }
+  if (tool.toMessage !== undefined && typeof tool.toMessage !== "function") {
+    throw new TypeError(`Tool "${tool.name}" has an invalid toMessage renderer.`);
+  }
+}
+
+/** Bounds applied to structured tool results before they reach a model provider. */
+const MAX_MESSAGE_PARTS = 8;
+const MAX_PART_TEXT_CHARACTERS = 1_000_000;
+/** Base64 characters; roughly 6 MiB of raw image data. */
+const MAX_IMAGE_DATA_CHARACTERS = 8_000_000;
+const MESSAGE_IMAGE_TYPES: ReadonlySet<string> = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+
+export function serializeToolOutput(value: unknown): string {
+  if (typeof value === "string") return value;
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * Produce the model-facing message for a successful tool result. A definition
+ * without `toMessage` keeps the historical JSON-text behavior. Structured parts
+ * are re-validated here because they cross the harness trust boundary into a
+ * provider request and the session log.
+ */
+function renderToolOutput(tool: ToolDefinition<unknown, unknown>, output: unknown): ToolMessageContent {
+  if (!tool.toMessage) return { content: serializeToolOutput(output) };
+  const rendered = tool.toMessage(output);
+  if (!rendered || typeof rendered !== "object" || typeof rendered.content !== "string") {
+    throw new TypeError(`Tool "${tool.name}" returned an invalid message.`);
+  }
+  if (rendered.parts === undefined) return { content: rendered.content };
+  if (!Array.isArray(rendered.parts) || rendered.parts.length > MAX_MESSAGE_PARTS) {
+    throw new TypeError(`Tool "${tool.name}" returned too many message parts.`);
+  }
+  const parts: MessagePart[] = [];
+  for (const part of rendered.parts) {
+    if (!part || typeof part !== "object") {
+      throw new TypeError(`Tool "${tool.name}" returned an invalid message part.`);
+    }
+    if (part.type === "text") {
+      if (typeof part.text !== "string" || part.text.length > MAX_PART_TEXT_CHARACTERS) {
+        throw new TypeError(`Tool "${tool.name}" returned an invalid text part.`);
+      }
+      parts.push({ type: "text", text: part.text });
+      continue;
+    }
+    if (part.type === "image") {
+      if (typeof part.mediaType !== "string" || !MESSAGE_IMAGE_TYPES.has(part.mediaType)) {
+        throw new TypeError(`Tool "${tool.name}" returned an unsupported image type.`);
+      }
+      if (
+        typeof part.data !== "string" ||
+        part.data.length === 0 ||
+        part.data.length > MAX_IMAGE_DATA_CHARACTERS ||
+        !BASE64_PATTERN.test(part.data)
+      ) {
+        throw new TypeError(`Tool "${tool.name}" returned invalid image data.`);
+      }
+      parts.push({ type: "image", mediaType: part.mediaType, data: part.data });
+      continue;
+    }
+    throw new TypeError(`Tool "${tool.name}" returned an unknown message part.`);
+  }
+  return { content: rendered.content, ...(parts.length > 0 ? { parts } : {}) };
 }
 
 /**
@@ -283,6 +355,7 @@ export class ToolRegistry {
     this.tools.set(definition.name, {
       metadata,
       invoke: (input, requestApproval, mode, context) => executeTool(definition, input, requestApproval, mode, context),
+      render: (output) => renderToolOutput(definition as ToolDefinition<unknown, unknown>, output),
     });
   }
 
@@ -328,6 +401,15 @@ export class ToolRegistry {
   /** Registered tool names, in registration order. */
   names(): readonly string[] {
     return Array.from(this.tools.keys());
+  }
+
+  /**
+   * Render a successful tool output for the model. Unknown tools fall back to
+   * serialized text so a result is never dropped after the tool executed.
+   */
+  renderResult(toolName: string, output: unknown): ToolMessageContent {
+    const tool = this.tools.get(toolName);
+    return tool ? tool.render(output) : { content: serializeToolOutput(output) };
   }
 
   list(): readonly ToolMetadata[] {

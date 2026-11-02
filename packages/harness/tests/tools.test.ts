@@ -52,7 +52,7 @@ describe("tool approval boundary", () => {
   it("serializes assessment and execution across registries sharing a write group", async () => {
     let state = 0;
     const observed: number[] = [];
-    const tool = defineTool({ ...makeTool("safe", () => "unused"), serialGroup: "fixture-workspace", assessRisk: () => { observed.push(state); return { kind: "safe" as const, reason: "Fixture" }; }, execute: async () => { const previous = state; await new Promise(resolve => setTimeout(resolve, 5)); state = previous + 1; return state; } });
+    const tool = defineTool<Input, number>({ ...makeTool("safe", () => "unused"), serialGroup: "fixture-workspace", assessRisk: () => { observed.push(state); return { kind: "safe" as const, reason: "Fixture" }; }, execute: async () => { const previous = state; await new Promise(resolve => setTimeout(resolve, 5)); state = previous + 1; return state; }, toMessage: undefined });
     const first = new ToolRegistry(), second = new ToolRegistry();
     first.register(tool); second.register(tool);
     await Promise.all([first.call("sample_tool", { value: "first" }), second.call("sample_tool", { value: "second" })]);
@@ -227,5 +227,50 @@ describe("tool registry", () => {
     await expect(registry.call("missing", {})).rejects.toThrow(
       'No tool is registered with the name "missing".',
     );
+  });
+});
+
+describe("structured tool messages", () => {
+  it("validates and renders message parts at the registry boundary", () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      ...makeTool("safe", () => "ok"),
+      toMessage: () => ({
+        content: "captured",
+        parts: [
+          { type: "text", text: "captured" },
+          { type: "image", mediaType: "image/png", data: "aGVsbG8=" },
+        ],
+      }),
+    });
+    expect(registry.renderResult("sample_tool", "ok")).toEqual({
+      content: "captured",
+      parts: [
+        { type: "text", text: "captured" },
+        { type: "image", mediaType: "image/png", data: "aGVsbG8=" },
+      ],
+    });
+  });
+
+  it("rejects unsupported image types and malformed base64", () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      ...makeTool("safe", () => "ok"),
+      toMessage: () => ({ content: "x", parts: [{ type: "image", mediaType: "image/svg+xml", data: "aGVsbG8=" }] }),
+    });
+    expect(() => registry.renderResult("sample_tool", "ok")).toThrow("unsupported image type");
+
+    registry.unregister("sample_tool");
+    registry.register({
+      ...makeTool("safe", () => "ok"),
+      toMessage: () => ({ content: "x", parts: [{ type: "image", mediaType: "image/png", data: "not base64!" }] }),
+    });
+    expect(() => registry.renderResult("sample_tool", "ok")).toThrow("invalid image data");
+  });
+
+  it("falls back to serialized text when a tool has no renderer", () => {
+    const registry = new ToolRegistry();
+    registry.register(makeTool("safe", () => "ok"));
+    expect(registry.renderResult("sample_tool", "ok")).toEqual({ content: "ok" });
   });
 });

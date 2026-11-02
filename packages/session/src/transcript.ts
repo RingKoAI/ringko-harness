@@ -1,6 +1,6 @@
 // Transcript events: the mapping between the harness agent conversation and
 // session-log events. The log is the source of truth; ChatMessage[] is derived.
-import type { AgentEvent, ChatMessage, ModelToolCall, ReasoningDetail } from "@ringko-ai/harness";
+import type { AgentEvent, ChatMessage, MessagePart, ModelToolCall, ReasoningDetail } from "@ringko-ai/harness";
 import { compactionSummaryContent, type SurfaceNode } from "./compaction.ts";
 import type { SessionEvent } from "./types.ts";
 
@@ -57,8 +57,43 @@ export function recordToolResult(
   name: string,
   content: string,
   failed: boolean,
+  parts?: readonly MessagePart[],
 ): SessionEvent {
-  return handle.appendEvent(TRANSCRIPT_EVENT.tool, { turn, toolCallId, name, content, failed });
+  const safeParts = sanitizeParts(parts);
+  return handle.appendEvent(TRANSCRIPT_EVENT.tool, {
+    turn,
+    toolCallId,
+    name,
+    content,
+    failed,
+    ...(safeParts ? { parts: safeParts } : {}),
+  });
+}
+
+/** Bounds for structured parts persisted in the session log. */
+const MAX_TOOL_PARTS = 8;
+const MAX_PART_TEXT_CHARACTERS = 1_000_000;
+const MAX_IMAGE_DATA_CHARACTERS = 8_000_000;
+const MESSAGE_IMAGE_TYPES: ReadonlySet<string> = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/** Re-validate parts read from an event or supplied by a host. */
+function sanitizeParts(value: unknown): MessagePart[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_TOOL_PARTS) return undefined;
+  const parts: MessagePart[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+    const part = item as Record<string, unknown>;
+    if (part.type === "text") {
+      if (typeof part.text !== "string" || part.text.length > MAX_PART_TEXT_CHARACTERS) continue;
+      parts.push({ type: "text", text: part.text });
+    } else if (part.type === "image") {
+      if (typeof part.mediaType !== "string" || !MESSAGE_IMAGE_TYPES.has(part.mediaType)) continue;
+      if (typeof part.data !== "string" || part.data.length === 0 || part.data.length > MAX_IMAGE_DATA_CHARACTERS || !BASE64_PATTERN.test(part.data)) continue;
+      parts.push({ type: "image", mediaType: part.mediaType, data: part.data });
+    }
+  }
+  return parts.length > 0 ? parts : undefined;
 }
 
 /** Record the call immediately before the tool can execute. */
@@ -191,6 +226,7 @@ export function recordAgentEvent(handle: HandleLike, event: AgentEvent): Session
     event.message.name ?? "",
     event.message.content,
     event.type === "tool_error",
+    event.message.parts,
   );
 }
 
@@ -318,11 +354,13 @@ export function toChatSurface(events: readonly SessionEvent[]): SurfaceNode[] {
         },
       });
     } else if (event.type === TRANSCRIPT_EVENT.tool) {
+      const parts = sanitizeParts(data.parts);
       nodes.push({
         seq: event.seq,
         message: {
           role: "tool",
           content: typeof data.content === "string" ? data.content : "",
+          ...(parts ? { parts } : {}),
           ...(typeof data.toolCallId === "string" ? { toolCallId: data.toolCallId } : {}),
           ...(typeof data.name === "string" ? { name: data.name } : {}),
         },

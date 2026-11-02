@@ -24,6 +24,13 @@ export function estimateTokens(text: string): number {
   return Math.ceil(latin / 4) + Math.ceil(cjk / 1.5);
 }
 
+/**
+ * Conservative per-image budget. Providers derive image tokens from dimensions;
+ * without decoding, a fixed estimate keeps compaction from under-counting a
+ * large screenshot. Refine only with measured provider usage.
+ */
+const IMAGE_TOKEN_ESTIMATE = 1_600;
+
 /** Estimate the token count of a message history (content, reasoning, tool calls). */
 export function estimateMessagesTokens(messages: readonly ChatMessage[]): number {
   let total = 0;
@@ -33,6 +40,11 @@ export function estimateMessagesTokens(messages: readonly ChatMessage[]): number
     if (message.name) total += estimateTokens(message.name);
     if (message.toolCallId) total += estimateTokens(message.toolCallId);
     if (message.toolCalls) total += estimateTokens(JSON.stringify(message.toolCalls));
+    if (message.parts) {
+      for (const part of message.parts) {
+        if (part.type === "image") total += IMAGE_TOKEN_ESTIMATE;
+      }
+    }
   }
   return total;
 }

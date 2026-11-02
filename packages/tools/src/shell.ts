@@ -2,10 +2,11 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { defineTool, type ToolDefinition, type JobSnapshot } from "@ringko-ai/harness";
 import { Sandbox, type SandboxedProcess } from "./sandbox.ts";
+import type { ShellKind } from "./shell-resolver.ts";
 
 export const SHELL_LIMITS = Object.freeze({ defaultTimeoutMs: 300_000, commandCharacters: 16_384, outputCharacters: 65_536, outputEvents: 200 });
 export interface ShellInput { command: string; timeout?: number; description?: string; background?: boolean }
-export interface ShellOutput { command: string; exitCode: number; stdout: string; stderr: string; timedOut?: boolean; truncated?: boolean; eventsTruncated?: boolean }
+export interface ShellOutput { command: string; exitCode: number; stdout: string; stderr: string; shell?: ShellKind; timedOut?: boolean; truncated?: boolean; eventsTruncated?: boolean }
 export interface ShellOptions { cwd: string; defaultTimeoutMs?: number; sandbox?: Sandbox }
 function parseShell(value: unknown): ShellInput {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Expected an object input.");
@@ -80,7 +81,7 @@ export function createShellTool(options: ShellOptions): ToolDefinition<ShellInpu
           append("stdout", decoders.stdout.end()); append("stderr", decoders.stderr.end());
           if (failure) reject(failure);
           else if (signal?.aborted) reject(signal.reason);
-          else resolve({ command: input.command, exitCode: code ?? -1, stdout, stderr, ...(timedOut ? { timedOut } : {}), ...(truncated ? { truncated } : {}), ...(eventsTruncated ? { eventsTruncated } : {}) });
+          else resolve({ command: input.command, exitCode: code ?? -1, stdout, stderr, ...(invocation.shellKind ? { shell: invocation.shellKind } : {}), ...(timedOut ? { timedOut } : {}), ...(truncated ? { truncated } : {}), ...(eventsTruncated ? { eventsTruncated } : {}) });
         });
         });
       };

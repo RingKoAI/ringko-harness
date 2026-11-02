@@ -14,7 +14,7 @@ import {
   type ToolCallPart,
   type ToolResultPart,
 } from "ai";
-import type { ChatMessage, ModelClient, ModelToolCall, ModelTurn, ReasoningDetail, ToolMetadata } from "@ringko-ai/harness";
+import type { ChatMessage, MessagePart, ModelClient, ModelToolCall, ModelTurn, ReasoningDetail, ToolMetadata } from "@ringko-ai/harness";
 
 export interface AiSdkModelOptions {
   /** System instruction applied to every request. */
@@ -69,8 +69,38 @@ function toReasoningDetails(value: unknown): ReasoningDetail[] {
   return out;
 }
 
-function toolResult(toolCallId: string, toolName: string, value: string): ToolResultPart {
-  return { type: "tool-result", toolCallId, toolName, output: { type: "text", value } };
+type ToolResultOutput = ToolResultPart["output"];
+
+/** Map harness parts onto the AI SDK's tool-result content blocks. */
+function toToolResultOutput(parts: readonly MessagePart[] | undefined, fallback: string): ToolResultOutput {
+  if (!parts || parts.length === 0) return { type: "text", value: fallback };
+  const value: Array<{ type: "text"; text: string } | { type: "file"; mediaType: string; data: { type: "data"; data: string } }> = [];
+  for (const part of parts) {
+    if (part.type === "text") {
+      value.push({ type: "text", text: part.text });
+    } else if (part.type === "image") {
+      value.push({ type: "file", mediaType: part.mediaType, data: { type: "data", data: part.data } });
+    }
+  }
+  return value.length > 0 ? { type: "content", value } : { type: "text", value: fallback };
+}
+
+/** Map harness parts onto a user message, keeping the plain-text fast path. */
+function toUserContent(content: string, parts: readonly MessagePart[] | undefined): string | Array<{ type: "text"; text: string } | { type: "file"; mediaType: string; data: { type: "data"; data: string } }> {
+  if (!parts || parts.length === 0) return content;
+  const value: Array<{ type: "text"; text: string } | { type: "file"; mediaType: string; data: { type: "data"; data: string } }> = [];
+  for (const part of parts) {
+    if (part.type === "text") {
+      value.push({ type: "text", text: part.text });
+    } else if (part.type === "image") {
+      value.push({ type: "file", mediaType: part.mediaType, data: { type: "data", data: part.data } });
+    }
+  }
+  return value.length > 0 ? value : content;
+}
+
+function toolResult(toolCallId: string, toolName: string, value: string, parts?: readonly MessagePart[]): ToolResultPart {
+  return { type: "tool-result", toolCallId, toolName, output: toToolResultOutput(parts, value) };
 }
 
 /**
@@ -88,7 +118,7 @@ export function toModelMessages(messages: readonly ChatMessage[]): ModelMessage[
         out.push({ role: "system", content: message.content });
         break;
       case "user":
-        out.push({ role: "user", content: message.content });
+        out.push({ role: "user", content: toUserContent(message.content, message.parts) });
         break;
       case "assistant": {
         const parts: Array<TextPart | ReasoningPart | ToolCallPart> = [];
@@ -114,7 +144,7 @@ export function toModelMessages(messages: readonly ChatMessage[]): ModelMessage[
           const name = call.name ?? "";
           const args = message.toolCalls?.find((entry) => entry.id === id)?.arguments ?? {};
           parts.push({ type: "tool-call", toolCallId: id, toolName: name, input: args });
-          results.push(toolResult(id, name, call.content));
+          results.push(toolResult(id, name, call.content, call.parts));
           j += 1;
         }
         out.push({ role: "assistant", content: parts.length > 0 ? parts : message.content });
@@ -128,7 +158,7 @@ export function toModelMessages(messages: readonly ChatMessage[]): ModelMessage[
         // Orphan tool message (no preceding assistant turn).
         out.push({
           role: "tool",
-          content: [toolResult(message.toolCallId ?? "", message.name ?? "", message.content)],
+          content: [toolResult(message.toolCallId ?? "", message.name ?? "", message.content, message.parts)],
         });
         break;
     }

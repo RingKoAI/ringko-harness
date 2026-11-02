@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { forkSession, messageSeqAt } from "../src/fork.ts";
 import { SessionStore } from "../src/store.ts";
-import { recordUserMessage } from "../src/transcript.ts";
+import { recordAssistantMessage, recordUserMessage } from "../src/transcript.ts";
 
 function withStore(test: (store: SessionStore, root: string) => void): void {
   const root = mkdtempSync(join(tmpdir(), "ringko-fork-"));
@@ -36,6 +36,34 @@ it("branches at a message index and reports a missing session", () => withStore(
   const childId = forkSession(store, "source", { index: 0 });
   expect(store.open(childId, "read").all().filter(event => event.type === "user/message")).toHaveLength(1);
   expect(() => forkSession(store, "missing")).toThrow();
+}));
+
+it("forks before a user message for prompt editing", () => withStore(store => {
+  const source = store.create({ id: "source" });
+  recordUserMessage(source, "one");
+  recordUserMessage(source, "two");
+  recordUserMessage(source, "three");
+  source.flush();
+  source.close();
+
+  const childId = forkSession(store, "source", { index: 1, before: true });
+  const users = store.open(childId, "read").all()
+    .filter(event => event.type === "user/message")
+    .map(event => (event.data as { content: string }).content);
+  expect(users).toEqual(["one"]);
+
+  const firstChild = forkSession(store, "source", { index: 0, before: true });
+  expect(store.open(firstChild, "read").all().filter(event => event.type === "user/message")).toHaveLength(0);
+}));
+
+it("rejects editing a message that is not from the user", () => withStore(store => {
+  const source = store.create({ id: "source" });
+  recordUserMessage(source, "one");
+  recordAssistantMessage(source, 1, "answer", []);
+  source.flush();
+  source.close();
+
+  expect(() => forkSession(store, "source", { index: 1, before: true })).toThrow("Edit target must be a user message.");
 }));
 
 it("maps a message index to the right event sequence, resetting after compaction", () => {

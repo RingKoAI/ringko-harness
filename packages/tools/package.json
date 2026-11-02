@@ -14,7 +14,8 @@
     "@ringko-ai/harness": "workspace:*",
     "@ringko-ai/session": "workspace:*",
     "htmlparser2": "^10.1.0",
-    "turndown": "^7.2.4"
+    "turndown": "^7.2.4",
+    "unpdf": "^2.1.0"
   },
   "devDependencies": {
     "@types/turndown": "^5.0.6"

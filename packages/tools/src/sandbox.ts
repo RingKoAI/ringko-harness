@@ -3,6 +3,7 @@ import { mkdtempSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { ensureWindowsSandbox, prepareWindowsAcl, prepareWindowsSandbox } from "./windows-runner.ts";
+import { shellCommand, type ShellKind } from "./shell-resolver.ts";
 import { SandboxDeniedError, SandboxUnavailableError } from "./sandbox-errors.ts";
 import { sandboxEnvironment } from "./sandbox-environment.ts";
 
@@ -17,6 +18,8 @@ export interface SandboxedProcess {
   /** Native terminal launchers speak the same control/event protocol as the bridge. */
   protocol?: "jsonl";
   windowsVerbatimArguments?: boolean;
+  /** Shell family that built this invocation, when it came from `shell()`. */
+  shellKind?: ShellKind;
 }
 
 const MODES: readonly SandboxMode[] = ["read-only", "workspace-write", "danger-full-access"];
@@ -89,12 +92,6 @@ function detectRunner(): SandboxRunner {
     return probe.error === undefined ? "seatbelt" : "none";
   }
   return "none";
-}
-
-function shellCommand(command: string): { executable: string; args: string[] } {
-  return process.platform === "win32"
-    ? { executable: "cmd.exe", args: ["/d", "/s", "/c", command] }
-    : { executable: "/bin/sh", args: ["-c", command] };
 }
 
 /**
@@ -227,11 +224,17 @@ export class Sandbox {
 
   /** Wrap a shell command, or fail closed when process confinement is unavailable. */
   shell(command: string, cwd = this.workspaceRoot): SandboxedProcess {
-    const shell = shellCommand(command);
+    // Git Bash's MSYS runtime cannot initialize under the restricted-token
+    // Windows sandbox, so it is only selected outside that boundary.
+    const shell = shellCommand(command, process.platform, process.env, {
+      preferGitBash: this.mode === "danger-full-access",
+    });
     if (process.platform === "win32" && this.mode === "danger-full-access") {
-      return { executable: shell.executable, args: ["/d", "/s", "/c", `"${command}"`], cwd, windowsVerbatimArguments: true };
+      return shell.kind === "cmd"
+        ? { executable: shell.executable, args: ["/d", "/s", "/c", `"${command}"`], cwd, windowsVerbatimArguments: true, shellKind: shell.kind }
+        : { executable: shell.executable, args: shell.args, cwd, shellKind: shell.kind };
     }
-    return this.wrap(shell.executable, shell.args, cwd);
+    return { ...this.wrap(shell.executable, shell.args, cwd), shellKind: shell.kind };
   }
 
   /** Wrap an interactive shell for a PTY without changing its stdio shape. */

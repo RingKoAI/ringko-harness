@@ -57,6 +57,7 @@ import type {
   ChatMessage,
   GateDecision,
   GateRequest,
+  MessagePart,
   ModelClient,
   ModelRequest,
   ModelToolCall,
@@ -65,6 +66,7 @@ import type {
   RiskLevel,
   ToolApprovalRequest,
   ToolDefinition,
+  ToolMessageContent,
   ToolMetadata,
   ToolRiskAssessment,
 } from "@ringko-ai/harness";
@@ -98,6 +100,7 @@ export type {
   ChatMessage,
   GateDecision,
   GateRequest,
+  MessagePart,
   ModelClient,
   ModelRequest,
   ModelToolCall,
@@ -106,6 +109,7 @@ export type {
   RiskLevel,
   ToolApprovalRequest,
   ToolDefinition,
+  ToolMessageContent,
   ToolMetadata,
   ToolRiskAssessment,
 };

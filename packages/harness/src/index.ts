@@ -33,6 +33,7 @@ export type {
   AgentOptions,
   AgentRunResult,
   ChatMessage,
+  MessagePart,
   ModelClient,
   ModelDelta,
   ModelRequest,
@@ -40,6 +41,7 @@ export type {
   ModelTurn,
   ModelUsage,
   ReasoningDetail,
+  ToolMessageContent,
 } from "./agent.ts";
 export { estimateMessagesTokens, estimateTokens, estimateToolsTokens } from "./tokens.ts";
 export { JobManager, JOB_LIMITS } from "./jobs.ts";

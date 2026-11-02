@@ -34,6 +34,7 @@ import {
   AskManager,
   Sandbox,
   createShellTool,
+  interactiveShell,
   type AskHandler,
 } from "@ringko-ai/tools";
 import {
@@ -196,6 +197,24 @@ const MIME: Record<string, string> = {
   ".woff2": "font/woff2",
   ".map": "application/json; charset=utf-8",
 };
+
+/**
+ * Session logs keep inline image parts so a resumed run can replay them to the
+ * model. HTTP clients only receive the text summary: a single screenshot would
+ * otherwise add megabytes to every snapshot and trajectory response.
+ */
+function stripMessageParts(message: ChatMessage): ChatMessage {
+  if (!message.parts) return message;
+  const { parts: _parts, ...rest } = message;
+  return rest as ChatMessage;
+}
+
+function stripEventParts(event: SessionEvent): SessionEvent {
+  const data = event.data;
+  if (typeof data !== "object" || data === null || Array.isArray(data) || !("parts" in data)) return event;
+  const { parts: _parts, ...rest } = data as Record<string, unknown>;
+  return { ...event, data: rest };
+}
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -953,12 +972,15 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     } catch {
       return json({ error: "Unknown session." }, 404);
     }
-    const body = await readJson<{ index?: unknown }>(request);
+    const body = await readJson<{ index?: unknown; before?: unknown }>(request);
     const index = typeof body?.index === "number" && Number.isInteger(body.index) && body.index >= 0 ? body.index : undefined;
+    const before = body?.before === true;
+    if (before && index === undefined) return json({ error: "Editing requires a message index." }, 400);
     try {
-      return json({ sessionId: forkSession(store, id, { cwd: workspace, index }) });
+      return json({ sessionId: forkSession(store, id, { cwd: workspace, index, before }) });
     } catch (error) {
       if (error instanceof Error && error.message === "Nothing to branch.") return json({ error: "Nothing to branch." }, 400);
+      if (error instanceof Error && error.message === "Edit target must be a user message.") return json({ error: error.message }, 400);
       return json({ error: "Could not fork session." }, 500);
     }
   }
@@ -1149,7 +1171,9 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         title: sessionTitle(events) ?? null,
         summary: sessionSummary(events) ?? null,
         archived: sessionArchived(events),
-        messages: toChatMessages(events).map(message => message.role === "tool" ? { ...message, failed: message.toolCallId ? failedCalls.has(message.toolCallId) : false } : message),
+        messages: toChatMessages(events).map(message => message.role === "tool"
+          ? { ...stripMessageParts(message), failed: message.toolCallId ? failedCalls.has(message.toolCallId) : false }
+          : stripMessageParts(message)),
         tasks: taskSummaries(events, activeRuns.has(id)),
         todos: sessionTodos(events),
         usage: sessionUsage(events),
@@ -1169,7 +1193,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       return json({
         id, instance: sync.instance, revision: sync.revision,
         title: sessionTitle(events) ?? null, summary: sessionSummary(events) ?? null, archived: sessionArchived(events),
-        messages: toChatMessages(events), events, busy,
+        messages: toChatMessages(events).map(stripMessageParts), events: events.map(stripEventParts), busy,
         usage: sessionUsage(events),
         tasks: taskSummaries(events, busy), todos: sessionTodos(events), jobs: sessionJobs(events, busy),
         approvals: [...(state?.approvals.values() ?? [])], questions: [...(state?.questions.values() ?? [])],
@@ -1202,7 +1226,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (["limit", "before", "after"].some(key => url.searchParams.has(key) && !/^\d+$/.test(url.searchParams.get(key) ?? ""))) {
         return json({ error: "Invalid trajectory page." }, 400);
       }
-      return json(trajectoryPage(store.open(id, "read").all(), options));
+      return json(trajectoryPage(store.open(id, "read").all().map(stripEventParts), options));
     } catch (error) {
       return json({ error: error instanceof TypeError ? "Invalid trajectory page." : "Could not read session trajectory." }, error instanceof TypeError ? 400 : 404);
     }
@@ -1779,18 +1803,20 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
 
     const config = readConfig();
     if (typeof config === "string") return json({ error: config }, 500);
-    const shell = process.platform === "win32"
-      ? process.env.COMSPEC ?? "powershell.exe"
-      : process.env.SHELL ?? "/bin/bash";
-    const shellExecutable = Bun.which(shell);
-    if (!shellExecutable) return json({ error: `Interactive shell is unavailable: ${shell}` }, 500);
-    const args = process.platform === "win32"
-      ? (shell.toLowerCase().includes("powershell") ? ["-NoLogo", "-NoExit"] : [])
-      : ["-i"];
+    const sandboxMode = config.sandbox?.mode ?? "workspace-write";
+    let shell: ReturnType<typeof interactiveShell>;
+    try {
+      shell = interactiveShell(process.platform, process.env, { preferGitBash: sandboxMode === "danger-full-access" });
+    } catch (cause) {
+      return json({ error: cause instanceof Error ? cause.message : "Invalid interactive shell configuration." }, 500);
+    }
+    const shellExecutable = shell.kind === "git-bash" ? shell.executable : Bun.which(shell.executable);
+    if (!shellExecutable) return json({ error: `Interactive shell is unavailable: ${shell.executable}` }, 500);
+    const args = shell.args;
     let terminal: InteractiveTerminal;
     pendingTerminals += 1;
     try {
-      const sandbox = new Sandbox({ workspace, mode: config.sandbox?.mode ?? "workspace-write", additionalWritableRoots: config.sandbox?.additionalWritableRoots });
+      const sandbox = new Sandbox({ workspace, mode: sandboxMode, additionalWritableRoots: config.sandbox?.additionalWritableRoots });
       await sandbox.prepare();
       const wrapped = sandbox.pty(shellExecutable, args, workspace, { cols, rows });
       terminal = await startInteractiveTerminal(wrapped.executable, wrapped.args, wrapped.cwd, cols, rows, wrapped.protocol === "jsonl", wrapped.env);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Agent, AgentTurnLimitError, type ModelClient } from "../src/agent.ts";
+import { Agent, AgentTurnLimitError, type AgentEvent, type ChatMessage, type ModelClient } from "../src/agent.ts";
 import { ToolRegistry, type ToolDefinition } from "../src/tools.ts";
 
 function echoTool(kind: "safe" | "shell"): ToolDefinition<{ text: string }, string> {
@@ -191,4 +191,70 @@ it("commits completed tool results and marks unstarted calls when cancelled", as
   expect(toolEvents[1]).toMatchObject({ type: "tool", toolName: "slow", message: { content: "slow done" } });
   expect(toolEvents[2]).toMatchObject({ type: "tool_error", toolName: "fast" });
   expect(toolEvents[2]?.message?.content).toContain("not started");
+});
+
+it("carries structured tool parts into the next model request and event", async () => {
+  let seen: readonly ChatMessage[] | undefined;
+  const model: ModelClient = async (request) => {
+    if (request.messages.some((message) => message.role === "tool")) {
+      seen = request.messages;
+      return { content: "done", toolCalls: [] };
+    }
+    return { content: "", toolCalls: [{ id: "c1", name: "capture", arguments: {} }] };
+  };
+  const tools = new ToolRegistry();
+  tools.register({
+    name: "capture",
+    description: "Capture a fixture image.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    parseInput: () => ({}),
+    assessRisk: () => ({ kind: "safe", reason: "fixture" }),
+    execute: () => ({ ok: true }),
+    toMessage: () => ({
+      content: "captured",
+      parts: [
+        { type: "text", text: "captured" },
+        { type: "image", mediaType: "image/png", data: "aGVsbG8=" },
+      ],
+    }),
+  });
+  const events: AgentEvent[] = [];
+  await new Agent({ model, tools, onEvent: (event) => events.push(event) }).run("go");
+
+  const toolMessage = seen?.find((message) => message.role === "tool");
+  expect(toolMessage).toMatchObject({
+    content: "captured",
+    parts: [
+      { type: "text", text: "captured" },
+      { type: "image", mediaType: "image/png", data: "aGVsbG8=" },
+    ],
+  });
+  expect(events.find((event) => event.type === "tool")?.message.parts).toHaveLength(2);
+});
+
+it("records a renderer failure as a tool error without losing the run", async () => {
+  let seen: readonly ChatMessage[] | undefined;
+  const model: ModelClient = async (request) => {
+    if (request.messages.some((message) => message.role === "tool")) {
+      seen = request.messages;
+      return { content: "done", toolCalls: [] };
+    }
+    return { content: "", toolCalls: [{ id: "c1", name: "capture", arguments: {} }] };
+  };
+  const tools = new ToolRegistry();
+  tools.register({
+    name: "capture",
+    description: "Capture a malformed fixture.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    parseInput: () => ({}),
+    assessRisk: () => ({ kind: "safe", reason: "fixture" }),
+    execute: () => ({ ok: true }),
+    toMessage: () => ({ content: "x", parts: [{ type: "image", mediaType: "image/png", data: "not base64!" }] }),
+  });
+  const events: AgentEvent[] = [];
+  const result = await new Agent({ model, tools, onEvent: (event) => events.push(event) }).run("go");
+
+  expect(result.content).toBe("done");
+  expect(seen?.find((message) => message.role === "tool")?.content).toContain("invalid image data");
+  expect(events.find((event) => event.type === "tool_error")?.toolName).toBe("capture");
 });

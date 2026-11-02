@@ -152,4 +152,50 @@ describe("toModelMessages", () => {
       },
     ]);
   });
+
+  it("maps structured image parts onto AI SDK content blocks", () => {
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content: "look",
+        parts: [
+          { type: "text", text: "look" },
+          { type: "image", mediaType: "image/png", data: "aGVsbG8=" },
+        ],
+      },
+      { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", arguments: { path: "a.png" } }] },
+      {
+        role: "tool",
+        content: "Image a.png",
+        toolCallId: "c1",
+        name: "read",
+        parts: [
+          { type: "text", text: "Image a.png" },
+          { type: "image", mediaType: "image/png", data: "aGVsbG8=" },
+        ],
+      },
+    ];
+    const out = toModelMessages(messages);
+    expect(out[0]).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: "look" },
+        { type: "file", mediaType: "image/png", data: { type: "data", data: "aGVsbG8=" } },
+      ],
+    });
+    expect(out[2]).toMatchObject({
+      role: "tool",
+      content: [{
+        type: "tool-result",
+        toolCallId: "c1",
+        output: {
+          type: "content",
+          value: [
+            { type: "text", text: "Image a.png" },
+            { type: "file", mediaType: "image/png", data: { type: "data", data: "aGVsbG8=" } },
+          ],
+        },
+      }],
+    });
+  });
 });

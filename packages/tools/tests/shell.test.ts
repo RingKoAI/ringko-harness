@@ -10,6 +10,8 @@ import {
   type ToolApprovalRequest,
 } from "@ringko-ai/harness";
 import { createShellTool } from "../src/shell.ts";
+import { Sandbox } from "../src/sandbox.ts";
+import { findGitBash } from "../src/shell-resolver.ts";
 
 let cwd: string;
 beforeEach(() => { cwd = mkdtempSync(join(tmpdir(), "rkh-shell-tool-")); });
@@ -32,7 +34,7 @@ describe("shell tool", () => {
 
   it("kills a cancelled background process tree and retains bounded output", async () => {
     const jobs = new JobManager();
-    const command = process.platform === "win32" ? 'ping -n 30 127.0.0.1 > nul' : 'sleep 30';
+    const command = process.platform === "win32" ? 'ping -n 30 127.0.0.1' : 'sleep 30';
     const output = await executeTool(createShellTool({ cwd }), { command, background: true }, async () => true, "approval", { jobs });
     if (!("jobId" in output)) throw new Error("Expected background job id.");
     jobs.cancel(output.jobId); await jobs.settle();
@@ -47,7 +49,7 @@ describe("shell tool", () => {
   }, PROCESS_TEST_TIMEOUT_MS);
 
   it("enforces timeout for a foreground process", async () => {
-    const command = process.platform === "win32" ? 'ping -n 30 127.0.0.1 > nul' : 'sleep 30';
+    const command = process.platform === "win32" ? 'ping -n 30 127.0.0.1' : 'sleep 30';
     const output = await executeTool(createShellTool({ cwd }), { command, timeout: 30 }, async () => true);
     expect(output).toMatchObject({ timedOut: true });
   }, PROCESS_TEST_TIMEOUT_MS);
@@ -87,4 +89,15 @@ describe("shell tool", () => {
     ).rejects.toThrow("non-empty command");
     expect(asked).toBe(false);
   });
+
+  it("uses Git Bash outside the restricted-token sandbox", async () => {
+    if (process.platform !== "win32" || !findGitBash()) return;
+    const sandbox = new Sandbox({ workspace: cwd, mode: "danger-full-access" });
+    const output = await executeTool(
+      createShellTool({ cwd, sandbox }),
+      { command: "printf git-bash-ok" },
+      async () => true,
+    );
+    expect(output).toMatchObject({ exitCode: 0, shell: "git-bash", stdout: "git-bash-ok" });
+  }, PROCESS_TEST_TIMEOUT_MS);
 });

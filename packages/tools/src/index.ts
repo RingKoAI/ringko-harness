@@ -16,6 +16,8 @@ import { Sandbox, SandboxDeniedError, SandboxUnavailableError, type SandboxMode,
 
 export { createWorkspace, FileTracker, Sandbox, SandboxDeniedError, SandboxUnavailableError };
 export type { SandboxMode, SandboxRunner };
+export { findGitBash, interactiveShell, shellCommand, GIT_BASH_PATH_ENV } from "./shell-resolver.ts";
+export type { ShellInvocation, ShellKind } from "./shell-resolver.ts";
 export { AskManager, ASK_LIMITS, validateAskOutput } from "./ask.ts";
 export type { AskEvent } from "./ask.ts";
 export type { FileVersion, ResolvedTarget, Workspace };

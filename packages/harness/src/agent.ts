@@ -3,9 +3,25 @@ import type { ApprovalHandler, ToolMetadata, ToolRegistry } from "./tools.ts";
 import { abortable } from "./cancellation.ts";
 import type { JobManager } from "./jobs.ts";
 
+/**
+ * One structured piece of a chat message. Images carry their bytes as base64;
+ * a provider adapter maps them onto its own multimodal content blocks.
+ */
+export type MessagePart =
+  | { type: "text"; text: string }
+  | { type: "image"; mediaType: string; data: string };
+
+/** The model-facing form of a tool result: text plus optional structured parts. */
+export interface ToolMessageContent {
+  content: string;
+  parts?: readonly MessagePart[];
+}
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  /** Structured content for messages that carry more than text (e.g. images). */
+  parts?: readonly MessagePart[];
   toolCallId?: string;
   name?: string;
   /** Tool calls the model requested in this assistant turn (arguments included). */
@@ -233,21 +249,37 @@ export class Agent {
       // write must not lose its result merely because a sibling was cancelled.
       response.toolCalls.forEach((call, index) => {
         const result = results[index];
+        // Successful results may render structured parts (e.g. an image read).
+        // A renderer failure must not lose a completed side effect: record the
+        // error as the tool message and keep the outcome sequence intact.
+        let rendered: ToolMessageContent | undefined;
+        let renderError: string | undefined;
+        if (result && !result.failed) {
+          try {
+            rendered = this.tools.renderResult(call.name, result.output);
+          } catch (error) {
+            renderError = `Tool "${call.name}" returned an invalid message: ${error instanceof Error ? error.message : "unknown error"}`;
+          }
+        }
+        // A missing result means the call never completed (cancelled before
+        // start, or still running); it must surface as a tool error.
+        const failed = !result || result.failed || Boolean(renderError);
         const toolMessage: ChatMessage = {
           role: "tool",
-          content: result ? serialize(result.output) : started[index]
+          content: rendered?.content ?? renderError ?? (result ? serialize(result.output) : started[index]
             ? "Tool outcome unknown after interruption."
-            : "Tool was not started before the run was interrupted.",
+            : "Tool was not started before the run was interrupted."),
+          ...(rendered?.parts && rendered.parts.length > 0 ? { parts: rendered.parts } : {}),
           toolCallId: call.id,
           name: call.name,
         };
         messages.push(toolMessage);
         this.onEvent?.({
-          type: result && !result.failed ? "tool" : "tool_error",
+          type: failed ? "tool_error" : "tool",
           turn,
           message: toolMessage,
           toolName: call.name,
-          error: result && !result.failed ? undefined : toolMessage.content,
+          error: failed ? toolMessage.content : undefined,
         });
       });
       this.signal?.throwIfAborted();
