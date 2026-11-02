@@ -363,11 +363,11 @@ export function fetchContext(id: string): Promise<ContextUsage> {
   return getJson<ContextUsage>(`/api/sessions/${encodeURIComponent(id)}/context`);
 }
 
-export async function forkSession(id: string, index?: number): Promise<{ sessionId: string }> {
+export async function forkSession(id: string, index?: number, before = false): Promise<{ sessionId: string }> {
   const response = await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/fork`, {
     method: "POST",
     headers: authHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify(index === undefined ? {} : { index }),
+    body: JSON.stringify({ ...(index === undefined ? {} : { index }), ...(before ? { before: true } : {}) }),
   })
   if (response.status === 401) throw new UnauthorizedError()
   if (!response.ok) throw new Error(`Branch failed (${response.status}).`)

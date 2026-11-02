@@ -1,4 +1,4 @@
-import { Activity, ArrowDown, ArrowUp, Brain, Check, Copy, Folder, GitBranch, ListTree, MessageSquare, Paperclip, Square, Terminal, ThumbsDown, ThumbsUp, User, Wrench, X } from 'lucide-react'
+import { Activity, ArrowDown, ArrowUp, Brain, Check, Copy, Folder, GitBranch, ListTree, MessageSquare, Paperclip, Pencil, Square, Terminal, ThumbsDown, ThumbsUp, User, Wrench, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type SetStateAction } from 'react'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -227,9 +227,11 @@ function ToolResult({ message, t }: { message: ServerMessage; t: Translate }) {
 function MessageRow({
   message,
   index,
+  forkIndex,
   showThinking,
   showTools,
   onBranch,
+  onEdit,
   onFeedback,
   feedback,
   toolResults,
@@ -237,17 +239,33 @@ function MessageRow({
 }: {
   message: ServerMessage
   index: number
+  forkIndex: number
   showThinking: boolean
   showTools: boolean
   onBranch: (index: number) => void
+  onEdit: (index: number, content: string) => Promise<boolean>
   onFeedback: (index: number, value: 'up' | 'down') => void
   feedback?: 'up' | 'down'
   toolResults?: ReadonlyMap<string, ServerMessage>
   busy: boolean
 }) {
   const { t } = useI18n()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(message.content)
+  const [saving, setSaving] = useState(false)
   const isUser = message.role === 'user'
   const isTool = message.role === 'tool'
+  const canEdit = isUser && !busy && message.content.length > 0
+  const save = async (): Promise<void> => {
+    const next = draft.trim()
+    if (next.length === 0 || next === message.content) { setEditing(false); return }
+    setSaving(true)
+    try {
+      if (await onEdit(forkIndex, next)) setEditing(false)
+    } finally {
+      setSaving(false)
+    }
+  }
   return (
     <div className="group min-w-0 space-y-2" data-chat-message>
       <div className="flex items-center gap-2">
@@ -284,7 +302,26 @@ function MessageRow({
               </p>
             )
           ) : isUser ? (
-            <div className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</div>
+            editing ? (
+              <div className="space-y-2">
+                <textarea
+                  className="min-h-20 w-full resize-y rounded-md border bg-background p-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  value={draft}
+                  onChange={event => setDraft(event.target.value)}
+                  onKeyDown={event => {
+                    if (event.key === 'Escape') { event.preventDefault(); setEditing(false) }
+                    else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void save() }
+                  }}
+                  autoFocus
+                />
+                <div className="flex justify-end gap-2">
+                  <Button size="sm" variant="ghost" disabled={saving} onClick={() => setEditing(false)}>{t('message.cancel')}</Button>
+                  <Button size="sm" disabled={saving || !draft.trim() || draft.trim() === message.content} onClick={() => void save()}>{t('message.save')}</Button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</div>
+            )
           ) : (
             <Markdown content={message.content} />
           )
@@ -295,7 +332,12 @@ function MessageRow({
             {message.content ? (
               <CopyButton text={message.content} t={t} />
             ) : null}
-            <Button variant="ghost" size="icon" className="size-6" title={t('message.branch')} onClick={() => onBranch(index)}>
+            {canEdit && !editing ? (
+              <Button variant="ghost" size="icon" className="size-6" title={t('message.edit')} onClick={() => { setDraft(message.content); setEditing(true) }}>
+                <Pencil className="size-3" />
+              </Button>
+            ) : null}
+            <Button variant="ghost" size="icon" className="size-6" title={t('message.branch')} onClick={() => onBranch(forkIndex)}>
               <GitBranch className="size-3" />
             </Button>
             {!isUser && message.content ? (
@@ -526,6 +568,12 @@ export function ChatPage() {
   const showThinking = app.info?.expandThinking ?? false
   const showTools = app.info?.expandTools ?? false
   const toolActivity = useMemo(() => matchToolResults(app.messages), [app.messages])
+  // Fork indexes count transcript messages only; system notices (compaction,
+  // background job notifications) are not branching targets.
+  const forkIndexes = useMemo(() => {
+    let count = 0
+    return app.messages.map(message => message.role === 'system' ? -1 : count++)
+  }, [app.messages])
 
   async function branch(index: number): Promise<void> {
     const current = app.sessionId
@@ -537,6 +585,21 @@ export function ChatPage() {
       void app.openSession(sessionId)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function edit(index: number, content: string): Promise<boolean> {
+    const current = app.sessionId
+    if (!current) return false
+    try {
+      const { sessionId } = await forkSession(current, index, true)
+      toast.success(t('message.edited'))
+      app.sendTo(sessionId, content)
+      navigate(`/${sessionId}`)
+      return true
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+      return false
     }
   }
 
@@ -594,9 +657,11 @@ export function ChatPage() {
                 key={index}
                 message={message}
                 index={index}
+                forkIndex={forkIndexes[index]}
                 showThinking={showThinking}
                 showTools={showTools}
                 onBranch={branch}
+                onEdit={edit}
                 onFeedback={rate}
                 feedback={feedback[index]}
                 toolResults={toolActivity.results.get(index)}

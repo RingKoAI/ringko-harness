@@ -8,7 +8,7 @@ export interface AppState extends Conversation {
   info: Info | null; unauthorized: boolean; sessions: SessionMeta[]; sessionId: string | undefined
   refreshInfo(): void; refreshSessions(): void; clearSession(): void
   answer(output?: QuestionOutput): void; controlJob(id: string, action: 'status' | 'cancel' | 'background'): void
-  send(prompt: string, attachments?: string[], loop?: { args: string }): void; stop(): void; decide(approved: boolean, scope?: 'session' | 'saved'): void
+  send(prompt: string, attachments?: string[], loop?: { args: string }): void; sendTo(id: string, prompt: string): void; stop(): void; decide(approved: boolean, scope?: 'session' | 'saved'): void
   openSession(id: string): void; newChat(): void; setDraft(value: string): void
   editQueued(id: string, prompt: string): void; removeQueued(id: string): void; resumeQueue(): void
   runningSessions: string[]
@@ -76,6 +76,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const send = useCallback((prompt: string, attachments?: string[], loop?: { args: string }) => {
     void ensureSession().then(id => conversations.send(id, prompt, attachments, loop)).catch(reportError)
   }, [conversations, ensureSession])
+  /** Select a session and start a run without fetching its snapshot first. */
+  const sendTo = useCallback((id: string, prompt: string) => {
+    select(id)
+    try { conversations.get(id); conversations.send(id, prompt) } catch (error) { reportError(error) }
+  }, [conversations, select])
   const newChat = useCallback(() => {
     newDraftRef.current = ''; setNewDraft(''); select()
     const version = selectionVersion.current
@@ -95,13 +100,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void jobAction(id, jobId, action).then(job => conversations.patch(id, { jobs: conversations.get(id).jobs.map(item => item.jobId === jobId ? { ...item, ...job } : item) })).catch(reportError)
   }, [conversations])
   const state = useMemo(() => { void revision; return sessionId ? conversations.get(sessionId) : { ...blank, draft: newDraft } }, [sessionId, conversations, revision, newDraft])
-  const value = useMemo<AppState>(() => ({ ...state, info, unauthorized, sessions, sessionId, refreshInfo, refreshSessions, openSession, newChat, send, stop, answer, decide, controlJob,
+  const value = useMemo<AppState>(() => ({ ...state, info, unauthorized, sessions, sessionId, refreshInfo, refreshSessions, openSession, newChat, send, sendTo, stop, answer, decide, controlJob,
     clearSession: () => select(), setDraft: draft => { if (selected.current) conversations.patch(selected.current, { draft }); else { newDraftRef.current = draft; setNewDraft(draft) } },
     editQueued: (id, prompt) => { if (selected.current) { try { conversations.editQueued(selected.current, id, prompt) } catch (error) { reportError(error) } } },
     removeQueued: id => { if (selected.current) conversations.removeQueued(selected.current, id) },
     resumeQueue: () => { if (selected.current) conversations.resume(selected.current) },
     runningSessions: sessions.filter(item => item.busy || conversations.peek(item.id)?.busy).map(item => item.id),
-  }), [state, info, unauthorized, sessions, sessionId, refreshInfo, refreshSessions, openSession, newChat, send, stop, answer, decide, controlJob, select, conversations])
+  }), [state, info, unauthorized, sessions, sessionId, refreshInfo, refreshSessions, openSession, newChat, send, sendTo, stop, answer, decide, controlJob, select, conversations])
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }
 export function useApp(): AppState { const context = useContext(AppContext); if (!context) throw new Error('useApp must be used within an AppProvider'); return context }
