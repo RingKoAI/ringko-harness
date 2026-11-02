@@ -11,7 +11,7 @@
     },
     "packages/tui": {
       "name": "@ringko-ai/tui",
-      "version": "0.6.7-rc1",
+      "version": "0.7.0-rc1",
       "bin": {
         "ringko": "./src/cli.ts",
       },
