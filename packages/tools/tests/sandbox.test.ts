@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { statSync } from "node:fs";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -30,7 +31,15 @@ describe("Sandbox", () => {
     await mkdir(extra);
     const withExtra = new Sandbox({ workspace, mode: "workspace-write", runner: "bwrap", additionalWritableRoots: [extra] });
     expect(() => withExtra.assertWrite(join(extra, "allowed.txt"))).not.toThrow();
-    expect(new Sandbox({ workspace, additionalWritableRoots: [extra, extra, workspace] }).additionalWritableRoots).toEqual([await realpath(extra)]);
+    const deduped = new Sandbox({ workspace, additionalWritableRoots: [extra, extra, workspace] }).additionalWritableRoots;
+    expect(deduped).toHaveLength(1);
+    const [root] = deduped;
+    if (!root) throw new Error("Expected one additional writable root.");
+    // Windows may spell the same directory as a long path or an 8.3 alias.
+    const rootStat = statSync(root, { bigint: true });
+    const extraStat = statSync(extra, { bigint: true });
+    expect(rootStat.dev).toBe(extraStat.dev);
+    expect(rootStat.ino).toBe(extraStat.ino);
 
     const full = new Sandbox({ workspace, mode: "danger-full-access" });
     expect(() => full.assertWrite(join(dir, "outside.txt"))).not.toThrow();
