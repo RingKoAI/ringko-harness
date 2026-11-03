@@ -1,13 +1,15 @@
 # RingKo Harness
 
-RingKo is a provider-neutral agent harness. The `ringko` command offers two
-interface styles: an interactive terminal UI (plain `ringko`, the default) and a
-browser UI (`ringko serve`, which prints the URL to open). Both run the same tool
-registry, the same approval gate and the same event-sourced session log.
+RingKo is a set of provider-neutral Agent Harness facilities, not a single chat
+front end. The packages provide the tool registry and approval gate, event-sourced
+sessions, context compaction, delegated tasks, MCP, skills, and a host-facing SDK.
 
-`@ringko-ai/rkh` installs that command globally. The executable is a Bun bundle, so
-Node.js 24+ **and** [Bun](https://bun.sh/) 1.2+ must be on `PATH` — Bun is not
-optional.
+`@ringko-ai/rkh` installs the built-in `ringko` command over those facilities: an
+interactive terminal UI (plain `ringko`, the default) and a browser UI
+(`ringko serve`, which prints the URL to open). Both run the same tool registry,
+the same approval gate and the same event-sourced session log. The executable is a
+Bun bundle, so Node.js 24+ **and** [Bun](https://bun.sh/) 1.2+ must be on `PATH` —
+Bun is not optional.
 
 ```sh
 npm install -g @ringko-ai/rkh

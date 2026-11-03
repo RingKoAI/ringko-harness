@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
+  "description": "Provider-neutral Agent Harness infrastructure with terminal and web interfaces.",
   "bin": {
     "ringko": "./src/cli.ts"
   },

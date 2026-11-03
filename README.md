@@ -1,26 +1,29 @@
 # RingKo Harness
 
-English | [绠€浣撲腑鏂嘳(README.zh-CN.md)
+English | [简体中文](README.zh-CN.md)
 
-RingKo Harness is a provider-neutral agent harness. One installed command offers
-two interface styles: an interactive terminal UI (plain `ringko`, the default) and
-a browser UI (`ringko serve`). A VS Code extension is in progress. Every interface
-runs the same tool registry, the same approval gate and the same event-sourced
-session log, so a session started in one can be inspected and resumed in the other.
+RingKo Harness is a set of provider-neutral **Agent Harness** facilities rather
+than a single chat front end. The packages provide the tool registry and
+risk/approval gate, event-sourced sessions, context compaction, delegated tasks,
+MCP, skills, and a host-facing SDK. The installed `ringko` command is one built-in
+surface over them: an interactive terminal UI (plain `ringko`, the default) and a
+browser UI (`ringko serve`). A VS Code extension is in progress. Every interface
+runs the same registry, approval gate and session log, so a session started in one
+can be inspected and resumed in the other.
 
 The packages below are the harness itself:
 
-- **`packages/harness`** 鈥?provider-neutral tool registry, risk/approval gate,
+- **`packages/harness`** —provider-neutral tool registry, risk/approval gate,
   and the agent turn loop.
-- **`packages/tools`** 鈥?gated built-in tools: workspace files, outbound
+- **`packages/tools`** —gated built-in tools: workspace files, outbound
   network, and shell execution.
-- **`packages/sdk`** 鈥?stable public facade (`createRingKo`) for hosts.
-- **`packages/session`** 鈥?event-sourced session storage (`~/.ringko/sessions`).
-- **`packages/providers`** 鈥?AI SDK-backed model providers (OpenAI, Anthropic).
-- **`packages/repl`** 鈥?interactive Ink terminal UI (`ringko`).
-- **`packages/protocol` / `client`** 鈥?platform-neutral wire contracts and shared HTTP/SSE client.
-- **`packages/app/src/services`** 鈥?backend-owned synchronization and in-flight run state.
-- **`packages/tui` / `webui` / `app` / `code`** 鈥?the user-facing surfaces.
+- **`packages/sdk`** —stable public facade (`createRingKo`) for hosts.
+- **`packages/session`** —event-sourced session storage (`~/.ringko/sessions`).
+- **`packages/providers`** —AI SDK-backed model providers (OpenAI, Anthropic).
+- **`packages/repl`** —interactive Ink terminal UI (`ringko`).
+- **`packages/protocol` / `client`** —platform-neutral wire contracts and shared HTTP/SSE client.
+- **`packages/app/src/services`** —backend-owned synchronization and in-flight run state.
+- **`packages/tui` / `webui` / `app` / `code`** —the user-facing surfaces.
 
 Every tool invocation passes through the harness approval gate; hosts supply the
 approval handler, and risky operations fail closed when none is configured.
@@ -29,7 +32,7 @@ approval handler, and risky operations fail closed when none is configured.
 
 RingKo is published on npm as `@ringko-ai/rkh` and is meant to be installed
 globally. It installs one command, `ringko`, which starts either interface. It
-needs Node.js 24+ **and** Bun 1.2+ on `PATH` 鈥?the executable is a Bun bundle, so
+needs Node.js 24+ **and** Bun 1.2+ on `PATH` —the executable is a Bun bundle, so
 Bun is not optional:
 
 ```sh
@@ -234,7 +237,7 @@ they are never compiled into the CLI binary:
 
 Custom OpenAI-compatible endpoints and reading a VS Code providers file are
 covered by maintainer notes kept outside this repository. Never commit real API
-keys or endpoint URLs 鈥?the examples use placeholders only.
+keys or endpoint URLs —the examples use placeholders only.
 
 ## Development
 
