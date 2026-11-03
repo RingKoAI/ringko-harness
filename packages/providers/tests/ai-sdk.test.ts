@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { MockLanguageModelV4 } from "ai/test";
 import type { ChatMessage, ToolMetadata } from "@ringko-ai/harness";
-import { createAiSdkModelClient, toModelMessages } from "../src/ai-sdk.ts";
+import { createAiSdkModelClient, reasoningReplayFor, toModelMessages } from "../src/ai-sdk.ts";
 
 const usage = {
   inputTokens: { total: 1, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
@@ -197,5 +197,92 @@ describe("toModelMessages", () => {
         },
       }],
     });
+  });
+
+  it("replays only reasoning the active provider accepts", () => {
+    const messages: ChatMessage[] = [{
+      role: "assistant",
+      content: "answer",
+      reasoning: "fallback",
+      reasoningDetails: [
+        { text: "plain" },
+        { text: "signed", providerOptions: { anthropic: { signature: "sig" } } },
+        { text: "google", providerOptions: { google: { thoughtSignature: "gs" } } },
+        { text: "openai", providerOptions: { openai: { itemId: "i" } } },
+      ],
+    }];
+    expect(toModelMessages(messages, { reasoningReplay: "anthropic" })[0]).toMatchObject({ role: "assistant", content: [
+      { type: "reasoning", text: "signed", providerOptions: { anthropic: { signature: "sig" } } },
+      { type: "text", text: "answer" },
+    ] });
+    expect(toModelMessages(messages, { reasoningReplay: "google" })[0]).toMatchObject({ content: [
+      { type: "reasoning", text: "google", providerOptions: { google: { thoughtSignature: "gs" } } },
+      { type: "text", text: "answer" },
+    ] });
+    expect(toModelMessages(messages, { reasoningReplay: "openai" })[0]).toMatchObject({ content: [
+      { type: "reasoning", text: "openai", providerOptions: { openai: { itemId: "i" } } },
+      { type: "text", text: "answer" },
+    ] });
+    expect(toModelMessages(messages, { reasoningReplay: "text" })[0]).toMatchObject({ content: [
+      { type: "reasoning", text: "plain" },
+      { type: "text", text: "answer" },
+    ] });
+  });
+
+  it("falls back to reasoning text only for text providers", () => {
+    const messages: ChatMessage[] = [{ role: "assistant", content: "answer", reasoning: "plain" }];
+    expect(toModelMessages(messages, { reasoningReplay: "text" })[0]).toMatchObject({ content: [
+      { type: "reasoning", text: "plain" },
+      { type: "text", text: "answer" },
+    ] });
+    expect(toModelMessages(messages, { reasoningReplay: "anthropic" })[0]).toMatchObject({ content: [
+      { type: "text", text: "answer" },
+    ] });
+  });
+
+  it("drops foreign reasoning instead of relabelling it", () => {
+    const messages: ChatMessage[] = [{
+      role: "assistant",
+      content: "answer",
+      reasoning: "fallback",
+      reasoningDetails: [{ text: "signed", providerOptions: { anthropic: { signature: "sig" } } }],
+    }];
+    expect(toModelMessages(messages, { reasoningReplay: "text" })[0]).toMatchObject({ content: [
+      { type: "text", text: "answer" },
+    ] });
+  });
+
+  it("maps thinking levels to each provider's own request field", async () => {
+    const seen: unknown[] = [];
+    const model = () => new MockLanguageModelV4({
+      doGenerate: async (input: { providerOptions?: unknown }) => {
+        seen.push(input.providerOptions);
+        return { content: [{ type: "text", text: "ok" }], finishReason: { unified: "stop", raw: undefined }, usage, warnings: [] };
+      },
+    });
+    const call = async (options: Parameters<typeof createAiSdkModelClient>[1]) => {
+      await createAiSdkModelClient(model(), options)({ messages: [{ role: "user", content: "hi" }], tools: [] });
+    };
+    await call({ provider: "anthropic", model: "claude-opus-5-5", thinking: "high" });
+    await call({ provider: "anthropic", model: "claude-3-5-sonnet", thinking: "low", maxOutputTokens: 8_000 });
+    await call({ provider: "google", model: "gemini-2.5-pro", thinking: "high" });
+    await call({ provider: "openai-compatible", name: "futureppo-codex", thinking: "max" });
+    await call({ provider: "openai", thinking: "off" });
+    expect(seen).toEqual([
+      { anthropic: { cacheControl: { type: "ephemeral" }, thinking: { type: "adaptive", display: "summarized" }, effort: "high" } },
+      { anthropic: { cacheControl: { type: "ephemeral" }, thinking: { type: "enabled", budgetTokens: 4_000 } } },
+      { google: { thinkingConfig: { thinkingBudget: 16_000, includeThoughts: true } } },
+      { "futureppo-codex": { reasoningEffort: "max" } },
+      { openai: { reasoningEffort: "none" } },
+    ]);
+  });
+
+  it("maps provider kinds to reasoning replay rules", () => {
+    expect(reasoningReplayFor("anthropic")).toBe("anthropic");
+    expect(reasoningReplayFor("anthropic-oauth")).toBe("anthropic");
+    expect(reasoningReplayFor("google")).toBe("google");
+    expect(reasoningReplayFor("openai-oauth")).toBe("openai");
+    expect(reasoningReplayFor("openai-compatible")).toBe("text");
+    expect(reasoningReplayFor("xai-oauth")).toBe("text");
   });
 });

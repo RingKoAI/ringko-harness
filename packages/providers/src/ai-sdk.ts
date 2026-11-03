@@ -25,6 +25,8 @@ export interface AiSdkModelOptions {
   name?: string;
   /** Provider kind (e.g. "google"), for provider-specific options. */
   provider?: string;
+  /** Model id, used to select provider-specific replay rules. */
+  model?: string;
   /** Reasoning/thinking depth: "off" | "low" | "high" | "max". */
   thinking?: string;
   /** Stable cache key for provider-side prompt caching (OpenAI family). */
@@ -69,6 +71,52 @@ function toReasoningDetails(value: unknown): ReasoningDetail[] {
   return out;
 }
 
+/** How a provider accepts replayed assistant reasoning. */
+export type ReasoningReplay = "anthropic" | "google" | "openai" | "text";
+
+/** Pick the replay rule from the configured provider kind. */
+export function reasoningReplayFor(provider: string | undefined): ReasoningReplay {
+  switch (provider) {
+    case "anthropic":
+    case "anthropic-oauth":
+      return "anthropic";
+    case "google":
+      return "google";
+    case "openai":
+    case "openai-oauth":
+      return "openai";
+    default:
+      // openai-compatible, xai-oauth, github-copilot and custom gateways.
+      return "text";
+  }
+}
+
+/**
+ * Keep only reasoning the current provider can accept. Anthropic requires a
+ * signed thinking block, Google requires its thought signature, and OpenAI
+ * reasoning items are provider-specific; a plain text block cannot be replayed
+ * across providers. OpenAI-compatible endpoints use `reasoning_content`, so a
+ * text fallback is valid there.
+ */
+function replayReasoning(message: ChatMessage, replay: ReasoningReplay): ReasoningDetail[] {
+  const details = message.reasoningDetails ?? [];
+  if (replay === "anthropic") {
+    return details.filter(detail => detail.providerOptions?.anthropic &&
+      (detail.providerOptions.anthropic.signature !== undefined || detail.providerOptions.anthropic.redactedData !== undefined));
+  }
+  if (replay === "google") {
+    return details.filter(detail => detail.providerOptions?.google?.thoughtSignature !== undefined);
+  }
+  if (replay === "openai") {
+    return details.filter(detail => detail.providerOptions?.openai !== undefined);
+  }
+  // Text providers: native details have no provider options. If the history
+  // carries only foreign reasoning blocks, drop them instead of relabelling.
+  const native = details.filter(detail => !detail.providerOptions || Object.keys(detail.providerOptions).length === 0);
+  if (details.length > 0) return native;
+  return message.reasoning && message.reasoning.length > 0 ? [{ text: message.reasoning }] : [];
+}
+
 type ToolResultOutput = ToolResultPart["output"];
 
 /** Map harness parts onto the AI SDK's tool-result content blocks. */
@@ -109,7 +157,10 @@ function toolResult(toolCallId: string, toolName: string, value: string, parts?:
  * its following tool results is rebuilt into one assistant message (text +
  * tool-call parts) followed by one tool message (tool-result parts).
  */
-export function toModelMessages(messages: readonly ChatMessage[]): ModelMessage[] {
+export function toModelMessages(
+  messages: readonly ChatMessage[],
+  options: { reasoningReplay?: ReasoningReplay } = {},
+): ModelMessage[] {
   const out: ModelMessage[] = [];
   for (let i = 0; i < messages.length; i += 1) {
     const message = messages[i];
@@ -122,16 +173,17 @@ export function toModelMessages(messages: readonly ChatMessage[]): ModelMessage[
         break;
       case "assistant": {
         const parts: Array<TextPart | ReasoningPart | ToolCallPart> = [];
-        if (message.reasoningDetails && message.reasoningDetails.length > 0) {
-          for (const detail of message.reasoningDetails) {
-            parts.push({
-              type: "reasoning",
-              text: detail.text,
-              ...(detail.providerOptions ? { providerOptions: detail.providerOptions as Record<string, Record<string, JSONValue>> } : {}),
-            });
-          }
-        } else if (message.reasoning && message.reasoning.length > 0) {
-          parts.push({ type: "reasoning", text: message.reasoning });
+        const reasoning = options.reasoningReplay
+          ? replayReasoning(message, options.reasoningReplay)
+          : message.reasoningDetails && message.reasoningDetails.length > 0
+            ? message.reasoningDetails
+            : message.reasoning && message.reasoning.length > 0 ? [{ text: message.reasoning }] : [];
+        for (const detail of reasoning) {
+          parts.push({
+            type: "reasoning",
+            text: detail.text,
+            ...(detail.providerOptions ? { providerOptions: detail.providerOptions as Record<string, Record<string, JSONValue>> } : {}),
+          });
         }
         if (message.content.length > 0) {
           parts.push({ type: "text", text: message.content });
@@ -238,33 +290,58 @@ function isInvalidParameter(error: unknown): boolean {
 }
 
 /** AI SDK expects the provider-options key to be the camelCased provider name. */
-function providerOptionsKey(name: string): string {
-  const parts = name.split(/[^A-Za-z0-9]+/).filter((part) => part.length > 0);
-  if (parts.length === 0) return name;
-  const [first, ...rest] = parts;
-  const head = first.charAt(0).toLowerCase() + first.slice(1);
-  return head + rest.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
-}
-
 type ProviderOptions = Record<string, Record<string, JSONValue>>;
 
-/** Map the thinking depth onto Google's `thinkingConfig`. */
-function googleThinking(level: string): Record<string, JSONValue> {
-  if (level === "off") return { thinkingBudget: 0, includeThoughts: true };
-  if (level === "max") return { thinkingLevel: "high", includeThoughts: true };
-  return { thinkingLevel: level, includeThoughts: true };
+/** Models that reject enabled/disabled thinking and expose `effort` instead. */
+const ANTHROPIC_ADAPTIVE = /(?:opus|sonnet|fable)-5|(?:opus|sonnet)-4[.-][6-9]|claude-5[.-][1-9]/i;
+
+/** A thinking budget below the output cap; Anthropic requires at least 1024. */
+function thinkingBudget(level: string, maxOutputTokens?: number): number {
+  const preferred = level === "max" ? 32_000 : level === "high" ? 16_000 : level === "medium" ? 8_000 : 4_000;
+  if (maxOutputTokens === undefined || !Number.isFinite(maxOutputTokens)) return preferred;
+  return Math.max(1_024, Math.min(preferred, Math.floor(maxOutputTokens) - 1_024));
 }
 
-/** Map the thinking depth onto provider options (reasoning effort). */
+function anthropicThinking(level: string, model: string, maxOutputTokens?: number): Record<string, JSONValue> {
+  if (level === "off") return { thinking: { type: "disabled" } };
+  if (ANTHROPIC_ADAPTIVE.test(model)) return { thinking: { type: "adaptive", display: "summarized" }, effort: level };
+  return { thinking: { type: "enabled", budgetTokens: thinkingBudget(level, maxOutputTokens) } };
+}
+
+/** Map the thinking depth onto Google's `thinkingConfig`. */
+function googleThinking(level: string, model: string): Record<string, JSONValue> {
+  if (level === "off") return { thinkingBudget: 0, includeThoughts: true };
+  if (model.includes("2.5")) {
+    const budget = level === "max" ? 24_576 : level === "high" ? 16_000 : level === "medium" ? 8_000 : 4_000;
+    return { thinkingBudget: budget, includeThoughts: true };
+  }
+  return { thinkingLevel: level === "max" ? "high" : level, includeThoughts: true };
+}
+
+/**
+ * Map the thinking depth onto each provider's own field. Provider option keys
+ * must match the name the AI SDK provider was created with, including hyphens.
+ */
 function reasoningOptions(options: AiSdkModelOptions): { providerOptions?: ProviderOptions } {
   const level = options.thinking;
-  if (options.provider === "google") {
-    if (!level) return {};
-    return { providerOptions: { google: { thinkingConfig: googleThinking(level) } } };
+  if (!level) return {};
+  const model = (options.model ?? "").toLowerCase();
+  switch (options.provider) {
+    case "anthropic":
+    case "anthropic-oauth":
+      return { providerOptions: { anthropic: anthropicThinking(level, model, options.maxOutputTokens) } };
+    case "google":
+      return { providerOptions: { google: { thinkingConfig: googleThinking(level, model) } } };
+    case "openai":
+    case "openai-oauth":
+      return { providerOptions: { openai: { reasoningEffort: level === "off" ? "none" : level } } };
+    case "xai-oauth":
+      return level === "off" ? {} : { providerOptions: { xai: { reasoningEffort: level } } };
+    case "github-copilot":
+      return level === "off" ? {} : { providerOptions: { "github-copilot": { reasoningEffort: level } } };
+    default:
+      return level === "off" ? {} : { providerOptions: { [options.name ?? "openaiCompatible"]: { reasoningEffort: level } } };
   }
-  if (!level || level === "off") return {};
-  const key = providerOptionsKey(options.name ?? "openaiCompatible");
-  return { providerOptions: { [key]: { reasoningEffort: level } } };
 }
 
 /** Provider-side prompt caching: Anthropic `cache_control`, OpenAI `prompt_cache_key`. */
@@ -339,7 +416,9 @@ export function createAiSdkModelClient(model: LanguageModel, options: AiSdkModel
   return async (request) => {
     // AI SDK v7 accepts system messages through instructions, not the messages array.
     const instructions = [options.system, ...request.messages.filter(message => message.role === "system").map(message => message.content)].filter((value): value is string => typeof value === "string" && value.length > 0).join("\n\n");
-    const messages = toModelMessages(request.messages.filter(message => message.role !== "system"));
+    const messages = toModelMessages(request.messages.filter(message => message.role !== "system"), {
+      reasoningReplay: reasoningReplayFor(options.provider),
+    });
     const base = {
       model,
       messages,
