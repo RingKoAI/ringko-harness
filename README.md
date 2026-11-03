@@ -6,6 +6,15 @@
 
 English | [简体中文](README.zh-CN.md)
 
+<p align="center">
+  <a href="https://github.com/RingKoAI/ringko-harness/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/RingKoAI/ringko-harness/ci.yml?branch=main&label=ci&style=flat-square" alt="CI status"></a>
+  <a href="https://www.npmjs.com/package/@ringko-ai/rkh"><img src="https://img.shields.io/npm/v/@ringko-ai/rkh?label=npm&style=flat-square" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/@ringko-ai/rkh"><img src="https://img.shields.io/npm/dm/@ringko-ai/rkh?label=downloads&style=flat-square" alt="npm downloads"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-1A73E8?style=flat-square" alt="Apache-2.0 license"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%E2%89%A524-339933?logo=nodedotjs&logoColor=white&style=flat-square" alt="Node.js 24 or newer"></a>
+  <a href="https://bun.sh"><img src="https://img.shields.io/badge/bun-%E2%89%A51.2-fbf0df?logo=bun&logoColor=black&style=flat-square" alt="Bun 1.2 or newer"></a>
+</p>
+
 RingKo Harness is a set of provider-neutral **Agent Harness** facilities rather
 than a single chat front end. The packages provide the tool registry and
 risk/approval gate, event-sourced sessions, context compaction, delegated tasks,

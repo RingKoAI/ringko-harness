@@ -6,6 +6,15 @@
 
 [English](README.md) | 简体中文
 
+<p align="center">
+  <a href="https://github.com/RingKoAI/ringko-harness/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/RingKoAI/ringko-harness/ci.yml?branch=main&label=ci&style=flat-square" alt="CI 状态"></a>
+  <a href="https://www.npmjs.com/package/@ringko-ai/rkh"><img src="https://img.shields.io/npm/v/@ringko-ai/rkh?label=npm&style=flat-square" alt="npm 版本"></a>
+  <a href="https://www.npmjs.com/package/@ringko-ai/rkh"><img src="https://img.shields.io/npm/dm/@ringko-ai/rkh?label=downloads&style=flat-square" alt="npm 下载量"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-1A73E8?style=flat-square" alt="Apache-2.0 许可证"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%E2%89%A524-339933?logo=nodedotjs&logoColor=white&style=flat-square" alt="需要 Node.js 24 或更新版本"></a>
+  <a href="https://bun.sh"><img src="https://img.shields.io/badge/bun-%E2%89%A51.2-fbf0df?logo=bun&logoColor=black&style=flat-square" alt="需要 Bun 1.2 或更新版本"></a>
+</p>
+
 RingKo Harness 是一套与模型供应商无关的 **Agent Harness 基础设施**，而不是单一的聊天前端。
 这些包提供工具注册表与风险/审批门、事件溯源会话、上下文压缩、任务委派、MCP、技能，以及
 面向宿主的 SDK。安装后的 `ringko` 命令只是它们之上的一个内置界面：交互式终端界面（直接运行
