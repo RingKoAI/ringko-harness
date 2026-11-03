@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Folder, FolderPlus, GitBranch, MessageSquare, MoreHorizontal, PanelRight, Pencil, Plus, Search, Settings as SettingsIcon, Trash2, Wrench, X } from 'lucide-react'
+import { Archive, ArchiveRestore, Folder, FolderPlus, GitBranch, LoaderCircle, MessageSquare, MoreHorizontal, PanelRight, Pencil, Plus, Search, Settings as SettingsIcon, Trash2, Wrench, X } from 'lucide-react'
 import { useCallback, useEffect, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -374,10 +374,14 @@ export function Layout() {
                       }}
                     >
                       <MessageSquare />
+                      {app.runningSessions.includes(session.id) ? (
+                        <span role="status" aria-label={t('session.running')} title={t('session.running')} className="inline-flex shrink-0">
+                          <LoaderCircle aria-hidden="true" className="size-3 animate-spin text-primary" />
+                        </span>
+                      ) : null}
                       <span className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
                         <span className="block truncate text-xs">
                           {session.title ?? t('sidebar.untitled')}
-                          {app.runningSessions.includes(session.id) ? <span className="ml-2 text-primary"> · {t('session.running')}</span> : null}
                           {session.archived ? ` · ${t('session.archived')}` : ''}
                         </span>
                         <span className="block truncate text-[10px] text-muted-foreground" title={session.summary ?? undefined}>

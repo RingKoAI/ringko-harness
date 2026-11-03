@@ -1,5 +1,8 @@
 # Unreleased
 
+- Show a spinner next to a running session in the WebUI sidebar instead of a
+  text suffix, including when the sidebar is collapsed.
+
 - Move the WebUI subtask and job panels out of the chat transcript into
   right-sidebar tabs; the composer keeps a one-line running summary.
 
