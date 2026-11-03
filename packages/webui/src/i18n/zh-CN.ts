@@ -459,6 +459,7 @@ export const zhCN: Record<MessageKey, string> = {
   'ask.submit': '提交回答',
   'ask.cancel': '取消提问',
   'job.title': '任务与事件订阅',
+  'job.runningSummary': '{running} 运行中 · 共 {total} 个作业',
   'job.background': '后台',
   'job.foreground': '前台',
   'job.detach': '转到后台',

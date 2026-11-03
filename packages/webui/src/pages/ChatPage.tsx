@@ -25,8 +25,6 @@ import { Markdown } from '@/components/markdown'
 import { ModelPicker } from '@/components/model-picker'
 import { ThinkingPicker } from '@/components/thinking-picker'
 import { TodoPanel } from '@/components/todo-panel'
-import { TaskPanel } from '@/components/task-panel'
-import { JobPanel } from '@/components/job-panel'
 import { QuestionPanel } from '@/components/question-panel'
 import { TrajectoryView } from '@/components/trajectory-view'
 import { TaskView } from '@/components/task-view'
@@ -619,6 +617,9 @@ export function ChatPage() {
   }
   const empty = app.messages.length === 0
   const landing = empty && view === 'chat'
+  const shellJobs = app.jobs.filter(job => job.kind === 'shell')
+  const runningJobs = shellJobs.filter(job => job.status === 'running').length
+  const runningTasks = app.tasks.filter(task => task.status === 'running').length
   const workspaceLabel = app.info?.project?.name ?? app.info?.workspace?.split(/[\\/]/).filter(Boolean).at(-1) ?? t('workspace.title')
   const commandHints =
     draft.startsWith('/') && !draft.includes(' ') ? COMMANDS.filter((command) => command.name.startsWith(draft.slice(1))) : []
@@ -668,8 +669,6 @@ export function ChatPage() {
                 busy={app.busy}
               />
             ))}
-            <TaskPanel />
-            <JobPanel />
             {app.partial ? <div aria-live="off" aria-label={t('stream.live')} className="min-w-0">
               {app.partial.reasoning ? <details open={showThinking} className="mb-3 rounded-lg border p-3"><summary className="cursor-pointer text-sm text-muted-foreground">{t('ui.showThinking')}</summary><div className="mt-2 whitespace-pre-wrap break-words text-sm text-muted-foreground">{app.partial.reasoning}</div></details> : null}
               <Markdown content={app.partial.content} />
@@ -840,14 +839,15 @@ export function ChatPage() {
           </div>
         </div>
         <ComposerStatus usage={app.usage} context={context ?? app.info?.context} model={app.model ?? app.info?.model} />
-        {app.tasks.length > 0 ? (
+        {app.tasks.length > 0 || shellJobs.length > 0 ? (
           <div className="mt-1 flex flex-wrap items-center justify-center gap-2 text-[10px] text-muted-foreground">
-            <GitBranch aria-hidden="true" className="size-3" />
-            <span>{t('task.runningSummary', { running: app.tasks.filter(item => item.status === 'running').length, total: app.tasks.length })}</span>
-            <Button size="sm" variant="ghost" className="h-5 px-2 text-[10px]" onClick={() => {
-              const target = [...app.tasks].reverse().find(item => item.status === 'running') ?? app.tasks.at(-1)
-              if (target) setTaskView(target.taskId)
-            }}>{t('task.inspect')}</Button>
+            <Activity aria-hidden="true" className="size-3" />
+            {app.tasks.length > 0 ? (
+              <Button size="sm" variant="ghost" className="h-5 px-2 text-[10px]" onClick={() => openRightSidebar('tasks')}>{t('task.runningSummary', { running: runningTasks, total: app.tasks.length })}</Button>
+            ) : null}
+            {shellJobs.length > 0 ? (
+              <Button size="sm" variant="ghost" className="h-5 px-2 text-[10px]" onClick={() => openRightSidebar('jobs')}>{t('job.runningSummary', { running: runningJobs, total: shellJobs.length })}</Button>
+            ) : null}
           </div>
         ) : null}
         </div>

@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
-import { ArrowUp, File, Folder, PanelRight, RefreshCw, Terminal } from 'lucide-react'
+import { ArrowUp, File, Folder, GitBranch, ListChecks, PanelRight, RefreshCw, Terminal } from 'lucide-react'
 import { fetchWorkspaceDiff, fetchWorkspaceFile, fetchWorkspaceFiles, type WorkspaceEntry } from '@/api'
 import { useI18n } from '@/i18n'
 import { useApp } from '@/store'
 import { Button } from './ui/button'
 import { TerminalPanel } from './terminal-panel'
+import { TaskPanel } from './task-panel'
+import { JobPanel } from './job-panel'
 
-export type RightSidebarTab = 'files' | 'terminal'
+export type RightSidebarTab = 'files' | 'terminal' | 'tasks' | 'jobs'
 
 export function RightSidebar({
   tab,
@@ -120,6 +122,26 @@ export function RightSidebar({
           {t('rightSidebar.terminal')}
         </Button>
         <Button
+          variant={tab === 'tasks' ? 'secondary' : 'ghost'}
+          size="icon-sm"
+          aria-label={t('task.title')}
+          title={t('task.title')}
+          aria-pressed={tab === 'tasks'}
+          onClick={() => onTabChange('tasks')}
+        >
+          <GitBranch />
+        </Button>
+        <Button
+          variant={tab === 'jobs' ? 'secondary' : 'ghost'}
+          size="icon-sm"
+          aria-label={t('job.title')}
+          title={t('job.title')}
+          aria-pressed={tab === 'jobs'}
+          onClick={() => onTabChange('jobs')}
+        >
+          <ListChecks />
+        </Button>
+        <Button
           className="ml-auto"
           variant="ghost"
           size="icon"
@@ -205,6 +227,12 @@ export function RightSidebar({
           </section>
         </div>
       ) : null}
+      <div className={tab === 'tasks' ? 'flex min-h-0 flex-1 flex-col overflow-y-auto p-3' : 'hidden'}>
+        <TaskPanel />
+      </div>
+      <div className={tab === 'jobs' ? 'flex min-h-0 flex-1 flex-col overflow-y-auto p-3' : 'hidden'}>
+        <JobPanel />
+      </div>
       <div className={tab === 'terminal' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
         <TerminalPanel enabled={terminalStarted} />
       </div>

@@ -458,6 +458,7 @@ export const en = {
   'ask.submit': 'Submit answers',
   'ask.cancel': 'Cancel questions',
   'job.title': 'Jobs and subscriptions',
+  'job.runningSummary': '{running} running · {total} jobs',
   'job.background': 'Background',
   'job.foreground': 'Foreground',
   'job.detach': 'Move to background',

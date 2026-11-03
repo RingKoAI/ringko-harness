@@ -1,5 +1,8 @@
 # Unreleased
 
+- Move the WebUI subtask and job panels out of the chat transcript into
+  right-sidebar tabs; the composer keeps a one-line running summary.
+
 - Map thinking levels onto each provider's own request field: Anthropic
   `thinking`/`effort`, Google `thinkingConfig`, OpenAI `reasoningEffort`, and
   the exact provider-option key for hyphenated OpenAI-compatible providers.
