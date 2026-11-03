@@ -8,12 +8,12 @@ import { theme } from "../theme.ts";
 /** Rows shown before the list collapses to a "+N older" summary. */
 const MAX_VISIBLE = 6;
 
-/** The subagent's latest visible activity, mirroring Claude Code's progress line. */
+/** The subagent's latest visible activity, shown as a compact progress line. */
 function lastActivity(task: SubagentView): string {
   for (let index = task.items.length - 1; index >= 0; index -= 1) {
     const item = task.items[index]!;
     if (item.kind === "tool" && item.toolName) return item.toolName;
-    if (item.kind === "assistant" && item.text.trim()) return item.text.trim().replace(/\s+/g, " ").slice(0, 40);
+    if (item.kind === "assistant" && item.text.trim()) return "responding";
     if (item.kind === "thinking" && item.text.trim()) return "thinking";
   }
   return "";
