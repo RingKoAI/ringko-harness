@@ -109,7 +109,9 @@ for (const mode of ["danger-full-access", "workspace-write", "read-only"] as con
 it("returns a startup error when the PTY shell cannot be spawned", async () => {
   const root = mkdtempSync(join(tmpdir(), "rkh-terminal-failure-"));
   const previousHome = process.env.RINGKO_HOME;
-  const shellVariable = process.platform === "win32" ? "COMSPEC" : "SHELL";
+  // danger-full-access prefers Git Bash on Windows, so that override is the
+  // configured shell; other platforms use SHELL.
+  const shellVariable = process.platform === "win32" ? "RINGKO_GIT_BASH_PATH" : "SHELL";
   const previousShell = process.env[shellVariable];
   process.env.RINGKO_HOME = root;
   process.env[shellVariable] = join(root, "missing-shell-executable");
