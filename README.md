@@ -158,6 +158,12 @@ terminal uses `node-pty`. See [unreleased changes](CHANGELOG/unreleased.md).
 
 ## Documentation
 
+- [Configuration](docs/configuration.md)
+- [MCP servers](docs/mcp.md)
+- [Providers](docs/providers.md)
+- [Sandbox](SANDBOX.md)
+- [Usage statistics](docs/usage-statistics.md)
+
 Package READMEs document each package's API and behavior. This README and
 [README.zh-CN.md](README.zh-CN.md) are the top-level reference; the English
 version wins if they disagree.

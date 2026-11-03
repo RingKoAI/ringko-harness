@@ -144,6 +144,12 @@ npm 包内含 CLI、内置供应商与 WebUI。浏览器终端使用 `node-pty`�
 
 ## 文档
 
+- [配置](docs/configuration.zh-CN.md)
+- [MCP server](docs/mcp.zh-CN.md)
+- [供应商](docs/providers.zh-CN.md)
+- [沙盒](SANDBOX.md)
+- [使用统计](docs/usage-statistics.md)
+
 各包的自述记录该包的 API 与行为。本文件与 [README.md](README.md) 是顶层参考；
 两者如有歧义，以英文版为准。
 

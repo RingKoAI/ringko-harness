@@ -35,6 +35,13 @@ use the same name. For source development and standalone binaries, see the
 [repository](https://github.com/RingKoAI/ringko-harness); the Chinese README is
 [README.zh-CN.md](https://github.com/RingKoAI/ringko-harness/blob/main/README.zh-CN.md).
 
+## Documentation
+
+- [Configuration](https://github.com/RingKoAI/ringko-harness/blob/main/docs/configuration.md)
+- [MCP servers](https://github.com/RingKoAI/ringko-harness/blob/main/docs/mcp.md)
+- [Providers](https://github.com/RingKoAI/ringko-harness/blob/main/docs/providers.md)
+- [Sandbox](https://github.com/RingKoAI/ringko-harness/blob/main/SANDBOX.md)
+
 ## Automatic npm releases
 
 The `release.yml` workflow publishes this package after all platform binaries,
