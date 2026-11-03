@@ -1205,7 +1205,6 @@ export function Repl(props: ReplProps) {
   return (
     <Box flexDirection="column" width={size.columns} height={layout.height}>
       {!sessionStarted ? <Banner modelLabel={modelLabelText} workspace={workspace} /> : null}
-      {!modal && taskViews.length > 0 ? <TaskTree tasks={taskViews} selectedId={selectedTask?.id} columns={size.columns} maxRows={layout.compact ? 1 : Math.min(6, Math.floor(layout.height / 6) + 1)} /> : null}
       <Box ref={transcriptBox} flexDirection="column" flexGrow={1} flexShrink={1} minHeight={0} justifyContent={!sessionStarted ? "flex-start" : "flex-end"} overflowY="hidden">
         <Transcript viewKey={`${sessionId ?? "new"}:${viewedTaskId ?? "main"}`} items={visibleItems} expandThinking={expandThinking} expandTools={expandTools} columns={size.columns} rows={Math.floor(transcriptSize.height)} offset={scrollOffset} onOffset={setScrollOffset} />
         {!sessionStarted ? <Box flexDirection="column" paddingX={2} marginTop={1} marginBottom={1}>
@@ -1238,6 +1237,7 @@ export function Repl(props: ReplProps) {
       ) : (
         <PromptInput maxEditorLines={layout.inputRows} running={running || switching} editor={editor} onEdit={setEditor} history={history} onSubmit={submit} onShortcut={handleShortcut} onInterrupt={interrupt} />
       )}
+      {!modal && taskViews.length > 0 ? <TaskTree tasks={taskViews} selectedId={selectedTask?.id} columns={size.columns} maxRows={layout.compact ? 1 : Math.min(4, Math.floor(layout.height / 6) + 1)} /> : null}
       <StatusBar
         modelLabel={thinking === "off" ? `${modelLabelText} • thinking off` : `${modelLabelText} • ${thinking}`}
         workspace={workspace}

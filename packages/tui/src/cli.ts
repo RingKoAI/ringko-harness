@@ -282,6 +282,20 @@ async function runCommand(parsed: ParsedArgs, io: CliIo, loop?: CliLoop): Promis
     task: true,
     taskModels: configuredModelIds(config),
     resolveTaskModel: async id => { const client = await loadProviderModel({ ...config, model: id }); if (typeof client === "string") throw new Error(client); return client; },
+    onTaskEvent: event => {
+      if (event.type === "started") io.err(`subagent ${event.description} started (${event.mode}${event.model ? ` · ${event.model}` : ""})`);
+      else if (event.type === "completed") io.err(`subagent ${event.description} completed`);
+      else if (event.type === "failed" || event.type === "cancelled") io.err(`subagent ${event.description} ${event.type}${event.reason ? ` (${event.reason})` : ""}`);
+      else if (event.type === "event" && event.event) {
+        const child = event.event;
+        if (child.type === "tool_call") {
+          const names = (child.message.toolCalls ?? []).map(call => call.name).join(", ");
+          io.err(`subagent ${event.description}: ${names || "tool"}`);
+        } else if (child.type === "model" && child.message.content.trim()) {
+          io.err(`subagent ${event.description}: ${child.message.content.trim().replace(/\s+/g, " ").slice(0, 120)}`);
+        }
+      }
+    },
     requestApproval: denyApprovals(io),
     session,
     history,

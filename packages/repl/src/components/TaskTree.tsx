@@ -8,6 +8,17 @@ import { theme } from "../theme.ts";
 /** Rows shown before the list collapses to a "+N older" summary. */
 const MAX_VISIBLE = 6;
 
+/** The subagent's latest visible activity, mirroring Claude Code's progress line. */
+function lastActivity(task: SubagentView): string {
+  for (let index = task.items.length - 1; index >= 0; index -= 1) {
+    const item = task.items[index]!;
+    if (item.kind === "tool" && item.toolName) return item.toolName;
+    if (item.kind === "assistant" && item.text.trim()) return item.text.trim().replace(/\s+/g, " ").slice(0, 40);
+    if (item.kind === "thinking" && item.text.trim()) return "thinking";
+  }
+  return "";
+}
+
 function formatElapsed(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   if (seconds < 60) return `${seconds}s`;
@@ -47,7 +58,8 @@ export function TaskTree({ tasks, selectedId, columns, maxRows = MAX_VISIBLE + 2
         const color = task.status === "failed" || task.status === "cancelled" ? theme.error : viewed ? theme.brand : theme.dim;
         const elapsed = formatElapsed((task.endedAt ?? now) - task.startedAt);
         const tools = task.toolCount > 0 ? ` · ${task.toolCount} tool${task.toolCount === 1 ? "" : "s"}` : "";
-        const suffix = `${isRunning ? GLYPH.running : GLYPH.paused} ${elapsed}${tools}`;
+        const activity = lastActivity(task);
+        const suffix = `${isRunning ? GLYPH.running : GLYPH.paused} ${elapsed}${tools}${activity ? ` · ${activity}` : ""}`;
         return (
           <Text key={task.id} color={color} bold={viewed}>
             {fitTerminalLine(`${viewed ? `${GLYPH.pointer} ` : "  "}${index === visible.length - 1 ? GLYPH.last : GLYPH.tee} ${viewed ? GLYPH.bulletOn : GLYPH.bulletOff} ${task.description}  ${suffix}`, width)}

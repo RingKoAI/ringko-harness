@@ -83,7 +83,7 @@ export function TrajectoryView({ sessionId }: { sessionId?: string }) {
                   className={cn('flex w-full items-start gap-2 rounded-lg border border-transparent p-2 text-left hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-ring', selected?.seq === record.seq && 'border-border bg-muted/50')}>
                   <Icon className={cn('mt-0.5 size-4 shrink-0 text-muted-foreground', record.failed && 'text-destructive')} />
                   <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-baseline gap-x-2"><span className="text-sm font-medium">{record.label}</span><span className="font-mono text-[11px] text-muted-foreground">#{record.seq} · {record.type}</span>{record.failed ? <span className="text-xs text-destructive">{t('toolLog.error')}</span> : null}</div>
+                    <div className="flex flex-wrap items-baseline gap-x-2"><span className="text-sm font-medium">{record.label}</span><span className="font-mono text-[11px] text-muted-foreground">#{record.seq} · {record.type}</span>{record.agent === 'subagent' ? <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">{t('trajectory.subagent')}</span> : null}{record.failed ? <span className="text-xs text-destructive">{t('toolLog.error')}</span> : null}</div>
                     <p className="truncate text-xs text-muted-foreground">{record.preview}</p>
                     <p className="mt-1 text-[11px] text-muted-foreground">{time(record.time)}{record.durationMs !== null ? ` · ${record.durationMs} ms` : ''}</p>
                   </div>

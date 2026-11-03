@@ -123,6 +123,7 @@ export interface ToolLogPage {
 export type TrajectoryKind = 'user' | 'assistant' | 'model' | 'tool' | 'task' | 'compaction' | 'session'
 export interface TrajectoryRecord {
   seq: number; time: number; type: string; kind: TrajectoryKind; turn: number | null;
+  taskId?: string; agent?: 'main' | 'subagent';
   label: string; preview: string; details: string; truncated: boolean; failed: boolean; durationMs: number | null;
 }
 export interface TrajectoryPage {

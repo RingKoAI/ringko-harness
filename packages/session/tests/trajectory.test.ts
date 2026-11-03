@@ -38,6 +38,19 @@ describe("trajectory projection", () => {
     expect((source.data as { content: string }).content.length).toBe(TRAJECTORY_DETAILS_LIMIT);
   });
 
+  it("links subagent events to their task and keeps the child turn", () => {
+    const result = trajectoryPage([event(0, "task/event", {
+      taskId: "task-1", description: "Inspect auth", mode: "read", model: "fixture", type: "event",
+      event: {
+        type: "tool_call", turn: 3, toolName: "grep",
+        message: { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "grep", arguments: { pattern: "auth" } }] },
+      },
+    })]).records[0];
+    expect(result).toMatchObject({ kind: "task", taskId: "task-1", agent: "subagent", turn: 3 });
+    expect(result.label).toContain("Inspect auth");
+    expect(result.label).toContain("grep");
+  });
+
   it("rejects invalid or ambiguous cursor requests", () => {
     for (const options of [{ before: 1, after: 2 }, { before: -1 }, { limit: 51 }, { limit: NaN }, { after: 1.5 }]) {
       expect(() => trajectoryPage([], options)).toThrow("Invalid trajectory page");

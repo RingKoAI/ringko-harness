@@ -1,5 +1,12 @@
 # Unreleased
 
+- Show delegated subagents below the prompt in the TUI with their latest
+  activity, print subagent start/tool/result progress from `ringko run`, and
+  surface a running-subtask row with an inspect action in the WebUI.
+
+- Link task/subagent events in the trajectory by task id and child turn, and
+  mark them as subagent records instead of opaque task payloads.
+
 - Return plain text from `read` text, directory and notebook results instead of
   escaped JSON, so the model sees the content directly.
 

@@ -13,6 +13,10 @@ export interface TrajectoryRecord {
   truncated: boolean;
   failed: boolean;
   durationMs: number | null;
+  /** Set for task/subagent records; links the record to its delegated task. */
+  taskId?: string;
+  /** Whether the record belongs to the main agent or a delegated subagent. */
+  agent?: "main" | "subagent";
 }
 export interface TrajectoryPage {
   records: TrajectoryRecord[];
@@ -63,23 +67,44 @@ export function trajectoryPage(events: readonly SessionEvent[], options: {
   }
   const records = selected.map((event): TrajectoryRecord => {
     const data = record(event.data);
+    const isTask = event.type.startsWith("task/");
+    const child = isTask && typeof data.event === "object" && data.event !== null && !Array.isArray(data.event)
+      ? data.event as Record<string, unknown>
+      : undefined;
+    const childMessage = child && typeof child.message === "object" && child.message !== null && !Array.isArray(child.message)
+      ? child.message as Record<string, unknown>
+      : undefined;
+    const taskId = isTask && typeof data.taskId === "string" ? data.taskId : undefined;
     const kind: TrajectoryKind = event.type === "user/message" ? "user"
       : event.type === "assistant/message" ? "assistant"
       : event.type === "model/call" || event.type === "model/usage" ? "model"
       : event.type.startsWith("tool/") ? "tool"
-      : event.type.startsWith("task/") ? "task"
+      : isTask ? "task"
       : event.type === "session/compaction" ? "compaction" : "session";
-    const label = typeof data.description === "string" && kind === "task" ? `[${data.mode}] ${data.description}` : typeof data.name === "string" ? data.name
-      : typeof data.model === "string" ? data.model : event.type;
-    const content = typeof data.content === "string" ? data.content
-      : typeof data.summary === "string" ? data.summary : typeof data.title === "string" ? data.title : label;
+    const childLabel = child
+      ? typeof child.toolName === "string" ? child.toolName
+        : typeof child.type === "string" ? child.type : "event"
+      : event.type.slice(5);
+    const label = isTask
+      ? `[${typeof data.mode === "string" ? data.mode : "task"}] ${typeof data.description === "string" ? data.description : "subagent"} · ${childLabel}`
+      : typeof data.name === "string" ? data.name
+        : typeof data.model === "string" ? data.model : event.type;
+    const result = typeof data.result === "object" && data.result !== null && !Array.isArray(data.result)
+      ? data.result as Record<string, unknown>
+      : undefined;
+    const content = typeof childMessage?.content === "string" ? childMessage.content
+      : typeof data.content === "string" ? data.content
+        : typeof result?.content === "string" ? result.content
+          : typeof data.summary === "string" ? data.summary : typeof data.title === "string" ? data.title : label;
+    const turn = typeof child?.turn === "number" && Number.isSafeInteger(child.turn) ? child.turn
+      : typeof data.turn === "number" && Number.isSafeInteger(data.turn) ? data.turn : null;
     const details = JSON.stringify(event.data ?? null, null, 2);
     return {
-      seq: event.seq, time: event.time, type: event.type, kind,
-      turn: typeof data.turn === "number" && Number.isSafeInteger(data.turn) ? data.turn : null,
+      seq: event.seq, time: event.time, type: event.type, kind, turn,
       label: label.slice(0, PREVIEW_LIMIT), preview: content.replace(/\s+/g, " ").slice(0, PREVIEW_LIMIT),
       details: details.slice(0, TRAJECTORY_DETAILS_LIMIT), truncated: details.length > TRAJECTORY_DETAILS_LIMIT,
       failed: data.failed === true || event.type === "task/failed" || event.type === "task/cancelled", durationMs: durations.get(event.seq) ?? null,
+      ...(taskId ? { taskId, agent: "subagent" as const } : { agent: "main" as const }),
     };
   });
   const first = selected[0]?.seq;

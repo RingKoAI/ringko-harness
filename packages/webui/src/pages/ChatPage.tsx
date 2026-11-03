@@ -840,6 +840,16 @@ export function ChatPage() {
           </div>
         </div>
         <ComposerStatus usage={app.usage} context={context ?? app.info?.context} model={app.model ?? app.info?.model} />
+        {app.tasks.length > 0 ? (
+          <div className="mt-1 flex flex-wrap items-center justify-center gap-2 text-[10px] text-muted-foreground">
+            <GitBranch aria-hidden="true" className="size-3" />
+            <span>{t('task.runningSummary', { running: app.tasks.filter(item => item.status === 'running').length, total: app.tasks.length })}</span>
+            <Button size="sm" variant="ghost" className="h-5 px-2 text-[10px]" onClick={() => {
+              const target = [...app.tasks].reverse().find(item => item.status === 'running') ?? app.tasks.at(-1)
+              if (target) setTaskView(target.taskId)
+            }}>{t('task.inspect')}</Button>
+          </div>
+        ) : null}
         </div>
       </div>}
     </div>
