@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="icon/ringko.svg" alt="RingKo Harness" width="96" height="96">
+</p>
+
 # RingKo Harness
 
 English | [简体中文](README.zh-CN.md)

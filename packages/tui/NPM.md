@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="icon/ringko.svg" alt="RingKo Harness" width="96" height="96">
+</p>
+
 # RingKo Harness
 
 RingKo is a set of provider-neutral Agent Harness facilities, not a single chat

@@ -39,7 +39,7 @@ writeFileSync(resolve(output, "package.json"), `${JSON.stringify({
   license: manifest.license,
   bin: { [command]: `bin/${entry}` },
   engines: { node: ">=24", bun: ">=1.2.0" },
-  files: ["bin/", "webui/", "README.md", "LICENSE", "NOTICE"],
+  files: ["bin/", "webui/", "icon/", "README.md", "LICENSE", "NOTICE"],
   dependencies: { "node-pty": appManifest.dependencies["node-pty"] },
   repository: { type: "git", url: "git+https://github.com/RingKoAI/ringko-harness.git" },
   publishConfig: { access: "public" },
@@ -48,6 +48,7 @@ copyFileSync(resolve(repositoryRoot, "LICENSE"), resolve(output, "LICENSE"));
 copyFileSync(resolve(repositoryRoot, "NOTICE"), resolve(output, "NOTICE"));
 copyFileSync(resolve(repositoryRoot, "packages/app/src/terminal-bridge.mjs"), resolve(output, "bin/terminal-bridge.mjs"));
 cpSync(webui, resolve(output, "webui"), { recursive: true });
+cpSync(resolve(repositoryRoot, "icon"), resolve(output, "icon"), { recursive: true });
 copyFileSync(resolve(packageRoot, "NPM.md"), resolve(output, "README.md"));
 console.log(`Prepared ${npmName}@${manifest.version} in ${output}`);
 
