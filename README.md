@@ -13,6 +13,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-1A73E8?style=flat-square" alt="Apache-2.0 license"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%E2%89%A524-339933?logo=nodedotjs&logoColor=white&style=flat-square" alt="Node.js 24 or newer"></a>
   <a href="https://bun.sh"><img src="https://img.shields.io/badge/bun-%E2%89%A51.2-fbf0df?logo=bun&logoColor=black&style=flat-square" alt="Bun 1.2 or newer"></a>
+  <a href="https://github.com/RingKoAI/ringko-harness/stargazers"><img src="https://img.shields.io/github/stars/RingKoAI/ringko-harness?label=stars&style=flat-square" alt="GitHub stars"></a>
 </p>
 
 <p align="center">English | <a href="README.zh-CN.md">简体中文</a></p>
@@ -164,3 +165,13 @@ version wins if they disagree.
 ## License
 
 [Apache-2.0](LICENSE) - Copyright 2025-2026 KaguyaRing (RingKoAI)
+
+## Star History
+
+<a href="https://www.star-history.com/#RingKoAI/ringko-harness&amp;Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=RingKoAI/ringko-harness&amp;type=Date&amp;theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=RingKoAI/ringko-harness&amp;type=Date" />
+    <img src="https://api.star-history.com/svg?repos=RingKoAI/ringko-harness&amp;type=Date" alt="Star History Chart" />
+  </picture>
+</a>
