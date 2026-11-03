@@ -233,7 +233,7 @@ export function createReadTool(workspace: Workspace, tracker: FileTracker = new 
     },
     async execute({ path, offset, limit }, context) {
       const target = workspace.resolve(path);
-      const shown = target.insideWorkspace ? target.relative : target.absolute;
+      const shown = target.insideWorkspace ? (target.relative || ".") : target.absolute;
       const info = await stat(target.absolute);
       context?.signal?.throwIfAborted();
 
@@ -319,6 +319,17 @@ export function createReadTool(workspace: Workspace, tracker: FileTracker = new 
             { type: "image", mediaType: output.image.mediaType, data: output.image.data },
           ],
         };
+      }
+      const notice = output.notice ? `\n\n${output.notice}` : "";
+      if (output.pdf) {
+        return { content: `PDF: ${output.path} (${String(output.pdf.pages)} pages${output.truncated ? ", truncated" : ""})\n${output.content ?? ""}${notice}` };
+      }
+      if (output.entries) {
+        return { content: `Directory: ${output.path}${output.truncated ? " (truncated)" : ""}\n${output.entries.join("\n")}${notice}` };
+      }
+      if (output.content !== undefined) {
+        const kind = output.path.toLowerCase().endsWith(".ipynb") ? "Notebook" : "File";
+        return { content: `${kind}: ${output.path}${output.truncated ? " (truncated)" : ""}\n${output.content}${notice}` };
       }
       return { content: JSON.stringify(output) };
     },

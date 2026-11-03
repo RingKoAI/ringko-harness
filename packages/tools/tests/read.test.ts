@@ -86,12 +86,24 @@ describe("read", () => {
       .rejects.toThrow("appears to be binary");
   });
 
-  it("keeps JSON text output for non-image results", async () => {
+  it("returns plain text for text files instead of escaped JSON", async () => {
     await writeFile(join(dir, "a.txt"), "one");
     const tool = createReadTool(createWorkspace(dir));
     const output = await executeTool(tool, { path: "a.txt" }, never);
-    expect(tool.toMessage!(output).content).toBe(JSON.stringify(output));
-    expect(tool.toMessage!(output).parts).toBeUndefined();
+    const message = tool.toMessage!(output);
+    expect(message.content).toContain("File: a.txt");
+    expect(message.content).toContain("     1→one");
+    expect(message.content).not.toContain('\\"content\\"');
+    expect(message.parts).toBeUndefined();
+  });
+
+  it("renders directory listings as plain text", async () => {
+    await writeFile(join(dir, "b.txt"), "x");
+    const tool = createReadTool(createWorkspace(dir));
+    const output = await executeTool(tool, { path: "." }, never);
+    const message = tool.toMessage!(output);
+    expect(message.content).toContain("Directory: .");
+    expect(message.content).toContain("b.txt");
   });
 
   it("extracts PDF text per page", async () => {
