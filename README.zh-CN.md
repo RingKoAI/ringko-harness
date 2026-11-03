@@ -4,7 +4,7 @@
 
 <h1 align="center">RingKo Harness</h1>
 
-<p align="center">与模型供应商无关的编码 Agent 运行时。</p>
+<p align="center">与模型供应商无关的编码 Agent Harness。</p>
 
 <p align="center">
   <a href="https://github.com/RingKoAI/ringko-harness/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/RingKoAI/ringko-harness/ci.yml?branch=main&label=ci&style=flat-square" alt="CI 状态"></a>
@@ -17,8 +17,8 @@
 
 <p align="center"><a href="README.md">English</a> | 简体中文</p>
 
-RingKo 通过受审批门约束的工具注册表操作工作区，并把会话写成只追加的事件日志。它
-提供终端界面和浏览器界面，两者共用同一个本地服务。
+RingKo 是一套 Agent Harness。它通过受审批门约束的工具注册表操作工作区，并把会话
+写成只追加的事件日志。它提供终端界面和浏览器界面，两者共用同一个本地服务。
 
 ## 运行
 

@@ -4,9 +4,10 @@
 
 # RingKo Harness
 
-RingKo Harness is a provider-neutral runtime for coding agents, not a single chat
-front end. The packages provide the tool registry and approval gate, event-sourced
-sessions, context compaction, delegated tasks, MCP, skills, and a host-facing SDK.
+RingKo Harness is a provider-neutral Agent Harness for coding agents, not a single
+chat front end. The packages provide the tool registry and approval gate,
+event-sourced sessions, context compaction, delegated tasks, MCP, skills, and a
+host-facing SDK.
 
 `@ringko-ai/rkh` installs the built-in `ringko` command over those facilities: an
 interactive terminal UI (plain `ringko`, the default) and a browser UI

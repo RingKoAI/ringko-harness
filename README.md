@@ -4,7 +4,7 @@
 
 <h1 align="center">RingKo Harness</h1>
 
-<p align="center">A provider-neutral runtime for coding agents.</p>
+<p align="center">A provider-neutral Agent Harness for coding agents.</p>
 
 <p align="center">
   <a href="https://github.com/RingKoAI/ringko-harness/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/RingKoAI/ringko-harness/ci.yml?branch=main&label=ci&style=flat-square" alt="CI status"></a>
@@ -17,9 +17,9 @@
 
 <p align="center">English | <a href="README.zh-CN.md">简体中文</a></p>
 
-RingKo runs a model against a workspace through a gated tool registry and an
-append-only session log. It ships with a terminal UI and a browser UI; both use
-the same local server.
+RingKo is an Agent Harness. It runs a model against a workspace through a gated
+tool registry and an append-only session log. It ships with a terminal UI and a
+browser UI; both use the same local server.
 
 ## Run
 
