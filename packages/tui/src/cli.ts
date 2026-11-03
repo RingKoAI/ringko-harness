@@ -312,6 +312,7 @@ async function runCommand(parsed: ParsedArgs, io: CliIo, loop?: CliLoop): Promis
         }
       }
     }
+    io.err(`model ${selectionLabel(selection)}`);
     io.err(`session ${session.id}`);
     return 0;
   } finally {

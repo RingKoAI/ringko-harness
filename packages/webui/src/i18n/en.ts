@@ -206,6 +206,8 @@ export const en = {
   'composer.speedDetails': 'Most recent primary call with recorded usage: actual output tokens divided by total call time, including initial wait. Helper calls are excluded.',
   'composer.cacheDetails': 'Session cache hit rate, weighted by input tokens for calls reporting cache usage.',
   'composer.context': 'Context usage',
+  'composer.model': 'Model',
+  'composer.modelDetails': 'Model recorded for the most recent run in this session.',
   'usage.input': 'Input tokens',
   'usage.output': 'Output tokens',
   'usage.cacheHit': 'Cache hit rate',

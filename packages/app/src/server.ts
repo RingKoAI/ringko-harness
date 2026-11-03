@@ -104,6 +104,7 @@ import {
   recordToolResult,
   sessionArchived,
   sessionFeedback,
+  sessionModel,
   sessionSummary,
   sessionTitle,
   toolLogEntries,
@@ -1193,6 +1194,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       return json({
         id, instance: sync.instance, revision: sync.revision,
         title: sessionTitle(events) ?? null, summary: sessionSummary(events) ?? null, archived: sessionArchived(events),
+        model: sessionModel(events) ?? null,
         messages: toChatMessages(events).map(stripMessageParts), events: events.map(stripEventParts), busy,
         usage: sessionUsage(events),
         tasks: taskSummaries(events, busy), todos: sessionTodos(events), jobs: sessionJobs(events, busy),

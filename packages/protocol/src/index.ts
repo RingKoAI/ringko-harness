@@ -47,6 +47,7 @@ export interface JobSummary { jobId: string; kind: "sub" | "shell"; description:
 export interface LoopStatus { iteration: number; maxIterations: number; promise: string | null }
 export interface SessionSnapshot {
   id: string; instance: string; revision: number; title: string | null; summary: string | null; archived: boolean;
+  model?: string | null;
   messages: ServerMessage[]; events: SessionEvent[];
   busy: boolean; approvals: Approval[]; questions: QuestionRequest[]; tasks: TaskSummary[]; todos: TodoItem[]; jobs: JobSummary[];
   partial: { content: string; reasoning: string } | null; loop: LoopStatus | null; error: string | null;

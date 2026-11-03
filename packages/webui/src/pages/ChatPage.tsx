@@ -839,7 +839,7 @@ export function ChatPage() {
             />
           </div>
         </div>
-        <ComposerStatus usage={app.usage} context={context ?? app.info?.context} />
+        <ComposerStatus usage={app.usage} context={context ?? app.info?.context} model={app.model ?? app.info?.model} />
         </div>
       </div>}
     </div>

@@ -1,4 +1,4 @@
-import { CircleDashed, Database, Gauge } from 'lucide-react'
+import { CircleDashed, Cpu, Database, Gauge } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { SessionUsage } from '@/api'
 import { ContextRingLabeled } from '@/components/context-ring'
@@ -19,12 +19,15 @@ function Metric({ label, description, children }: { label: string; description: 
 }
 
 /** Actual call/session metrics share a compact row below the composer. */
-export function ComposerStatus({ usage, context }: { usage: SessionUsage | null; context?: { used: number; limit: number } | null }) {
+export function ComposerStatus({ usage, context, model }: { usage: SessionUsage | null; context?: { used: number; limit: number } | null; model?: string | null }) {
   const { t, locale } = useI18n()
   const speed = usage?.outputTokensPerSecond != null ? new Intl.NumberFormat(locale, { maximumFractionDigits: 1, notation: usage.outputTokensPerSecond >= SCIENTIFIC_SPEED_THRESHOLD ? 'scientific' : 'standard' }).format(usage.outputTokensPerSecond) : '—'
   const rate = usage?.cacheHitRate != null ? new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 1 }).format(usage.cacheHitRate) : t('usage.unavailable')
   const knownContext = context && Number.isFinite(context.used) && context.used >= 0 && Number.isFinite(context.limit) && context.limit > 0
   return <div role="region" aria-label={t('composer.stats')} className="mt-2 flex min-h-4 max-w-full flex-wrap items-center justify-center gap-x-5 gap-y-1 text-[10px] leading-4 text-muted-foreground tabular-nums">
+    {model ? <Metric label={`${t('composer.model')}: ${model}`} description={t('composer.modelDetails')}>
+      <Cpu aria-hidden="true" className="size-3" /><span className="max-w-56 truncate">{model}</span>
+    </Metric> : null}
     <Metric label={`${t('composer.speed')}: ${speed} tok/s`} description={t(usage?.outputTokensPerSecond != null ? 'composer.speedDetails' : 'composer.speedUnavailable')}>
       <Gauge aria-hidden="true" className="size-3" /><span>{`${speed} tok/s`}</span>
     </Metric>

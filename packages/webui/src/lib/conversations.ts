@@ -8,9 +8,9 @@ export interface Conversation {
   messages: ServerMessage[]; busy: boolean; approval: Approval | null; question: QuestionRequest | null
   tasks: TaskSummary[]; jobs: JobSummary[]; todos: TodoItem[]; queue: QueuedMessage[]
   partial: { content: string; reasoning: string } | null; draft: string; error: string | null; loop: LoopStatus | null
-  usage: SessionUsage | null
+  usage: SessionUsage | null; model: string | null
 }
-export const emptyConversation = (): Conversation => ({ messages: [], busy: false, approval: null, question: null, tasks: [], jobs: [], todos: [], queue: [], partial: null, draft: '', error: null, loop: null, usage: null })
+export const emptyConversation = (): Conversation => ({ messages: [], busy: false, approval: null, question: null, tasks: [], jobs: [], todos: [], queue: [], partial: null, draft: '', error: null, loop: null, usage: null, model: null })
 type Transport = (input: { sessionId: string; prompt: string; attachments: string[]; loop?: { args: string } }, handlers: ChatHandlers) => { abort(): void }
 
 /** Owns each stream independently of the currently visible route. Late callbacks are discarded. */
@@ -58,6 +58,7 @@ export class Conversations {
       question: snapshot.questions[0] ?? null, tasks: snapshot.tasks, todos: snapshot.todos, jobs: snapshot.jobs,
       loop: snapshot.loop, error: snapshot.error,
       usage: normalizeSessionUsage(snapshot.usage),
+      model: snapshot.model ?? null,
     })
     this.revisions.set(snapshot.id, { instance: snapshot.instance, revision: snapshot.revision })
     if (!snapshot.busy && !snapshot.error && !this.paused.has(snapshot.id)) queueMicrotask(() => this.resume(snapshot.id))

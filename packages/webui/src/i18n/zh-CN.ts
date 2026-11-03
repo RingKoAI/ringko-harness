@@ -207,6 +207,8 @@ export const zhCN: Record<MessageKey, string> = {
   'composer.speedDetails': '最近一次有用量记录的主模型调用：实际输出 Tokens 除以完整调用耗时，包含首字等待；辅助调用不影响此速度。',
   'composer.cacheDetails': '当前会话中报告缓存用量的调用，按输入 Tokens 加权计算命中率。',
   'composer.context': '上下文占用',
+  'composer.model': '模型',
+  'composer.modelDetails': '当前会话最近一次运行记录的模型。',
   'usage.input': '输入 Tokens',
   'usage.output': '输出 Tokens',
   'usage.cacheHit': '缓存命中率',
