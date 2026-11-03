@@ -30,8 +30,8 @@ Models are replaceable. Interfaces are replaceable. The guarantees are not.
   the tool loop and session format stay provider-neutral.
 - **Authority is explicit and fail-closed.** Every tool call is risk-classified
   and passes the host's approval gate. With no handler, risky operations are
-  denied. Network tools and shell execution are capabilities a host opts into,
-  not defaults.
+  denied. Hosts register network and shell tools explicitly; they are not
+  implied by workspace access.
 - **Session state is data.** A session is an append-only JSONL event log, not
   process memory. That is what makes resume, fork, trajectory inspection and
   multi-client synchronization possible without a second source of truth.
@@ -52,8 +52,9 @@ ringko          # terminal interface (default)
 ringko serve    # local backend + browser interface, prints its URL (port 8787)
 ```
 
-`ringko help` lists every command. `npx @ringko-ai/rkh tui` runs without a global
-install. From a source checkout, every `ringko <command>` below maps to
+`ringko help` lists every command. `npx @ringko-ai/rkh` starts the default
+terminal interface without a global install. From a source checkout, every
+`ringko <command>` below maps to
 `bun packages/tui/src/cli.ts <command>`, and `pnpm dev:tui` starts the TUI alone.
 
 Prerelease versions publish under the `next` dist-tag:
@@ -65,7 +66,7 @@ Prerelease versions publish under the `next` dist-tag:
 | --- | --- |
 | Agent runtime | Streaming turn loop, tool continuation, cancellation, automatic and manual context compaction |
 | Built-in tools | `read` (text, images, PDF, notebooks), `write`, `edit`, `glob`, `grep`, `tree`, `shell`, `webfetch`, `websearch`, `ask`, `plan`, `update_plan`, `task`, `job` |
-| Policy | Risk assessment, approval gate, saved permission rules, explicit confirmation before full access |
+| Policy | Risk assessment, approval gate, saved permission rules, explicit confirmation before full access in the Web UI |
 | Sandbox | `read-only`, `workspace-write`, `danger-full-access`; bubblewrap on Linux, Seatbelt on macOS, restricted tokens and job objects on Windows |
 | Sessions | Event-sourced JSONL, resume, fork, trajectory view, usage statistics |
 | Delegation | `read` / `write` / `full` subagents with independent context and an optional model, background execution, cancellation, live progress |
@@ -257,8 +258,9 @@ provider-option key for hyphenated OpenAI-compatible endpoints. Assistant
 reasoning is replayed only in the form the active provider accepts; foreign
 reasoning is dropped instead of being relabelled when the provider changes.
 
-Providers are introduced **through configuration** and loaded at run time, so
-they are never compiled into the CLI binary:
+Providers are selected **through configuration**. The built-in provider module
+ships with the CLI; an entry may instead name another module, which is imported
+at run time and never compiled into the binary:
 
 ```json
 { "provider": { "name": "openai", "model": "gpt-4o-mini" } }

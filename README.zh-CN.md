@@ -27,10 +27,10 @@ RingKo Harness 是编码 Agent 的运行时层，而不是又一个聊天前端�
   推理回放、思考预算、工具结果格式这些供应商差异在适配层消化，工具循环与会话格式
   始终保持供应商无关。
 - **权限显式，默认拒绝。** 每次工具调用都先做风险评估，再交给宿主的审批门。宿主
-  没有提供审批处理器时，有风险的操作直接拒绝。网络工具和 shell 执行是宿主显式
-  开启的能力，不是默认配置。
+  没有提供审批处理器时，有风险的操作直接拒绝。网络工具和 shell 由宿主显式注册，
+  不会被工作区访问权限隐含。
 - **会话状态就是数据。** 会话是只追加的 JSONL 事件日志，而不是进程内存。正因如此，
-  续接、派生、轨迹检查和多客户端同步才不需要第二份事实来源。
+  续接、分叉、轨迹检查和多客户端同步才不需要第二份事实来源。
 - **一套运行时，多个界面。** 终端界面、浏览器界面和 SDK 建立在同一套工具注册表、
   审批门与会话模型之上。TUI 与 Web UI 还可以接入同一个共享后端，因此在一个界面里
   开始的运行，可以在另一个界面检查或继续。
@@ -47,8 +47,8 @@ ringko          # 终端界面（默认）
 ringko serve    # 本地后端 + 浏览器界面，会打印访问地址（默认端口 8787）
 ```
 
-`ringko help` 列出全部命令；不想全局安装时可以用 `npx @ringko-ai/rkh tui`。
-从源码检出运行时，下文每个 `ringko <command>` 对应
+`ringko help` 列出全部命令；不想全局安装时可以用 `npx @ringko-ai/rkh` 直接启动
+终端界面。从源码检出运行时，下文每个 `ringko <command>` 对应
 `bun packages/tui/src/cli.ts <command>`，`pnpm dev:tui` 则直接启动 TUI。
 
 预发布版本发布在 `next` dist-tag 下：`npm install -g @ringko-ai/rkh@next`。
@@ -59,9 +59,9 @@ ringko serve    # 本地后端 + 浏览器界面，会打印访问地址（默�
 | --- | --- |
 | Agent 运行时 | 流式回合循环、工具续跑、取消、自动与手动上下文压缩 |
 | 内置工具 | `read`（文本、图片、PDF、Notebook）、`write`、`edit`、`glob`、`grep`、`tree`、`shell`、`webfetch`、`websearch`、`ask`、`plan`、`update_plan`、`task`、`job` |
-| 策略 | 风险评估、审批门、已保存的权限规则、进入完全访问前的显式确认 |
+| 策略 | 风险评估、审批门、已保存的权限规则、Web UI 进入完全访问前的显式确认 |
 | 沙盒 | `read-only`、`workspace-write`、`danger-full-access`；Linux 用 bubblewrap，macOS 用 Seatbelt，Windows 用受限令牌与 Job Object |
-| 会话 | 事件溯源 JSONL、续接、派生、轨迹视图、使用统计 |
+| 会话 | 事件溯源 JSONL、续接、分叉、轨迹视图、使用统计 |
 | 任务委派 | `read` / `write` / `full` 子代理，独立上下文与可选模型，后台执行、取消、实时进度 |
 | 扩展 | MCP server、技能、`AGENTS.md` 指令、自定义供应商、宿主 SDK |
 
@@ -213,7 +213,8 @@ AI SDK 语言模型包装成 harness 的 `ModelClient`；工具循环与审批�
 键。助手推理只按当前供应商接受的形式回放；切换供应商时，外来推理会被丢弃，而不是
 重新贴标签。
 
-供应商**通过配置**引入，在运行时加载，因此永远不会被编进 CLI 二进制：
+供应商**通过配置**选择。内置供应商模块随 CLI 一起发布；配置项也可以指定其他模块，
+后者在运行时导入，不会编进二进制：
 
 ```json
 { "provider": { "name": "openai", "model": "gpt-4o-mini" } }
