@@ -3,16 +3,13 @@
 // One JSON object per line: a header line first, then one event per line. A
 // file whose last line has no terminating newline is treated as a torn tail
 // (an interrupted write) and the partial line is ignored.
+import { isRecord } from "@ringko-ai/config";
 import {
   SESSION_FORMAT_VERSION,
   SESSION_HEADER_TYPE,
   type SessionEvent,
   type SessionHeader,
 } from "./types.ts";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export function serializeHeader(header: SessionHeader): string {
   const record: Record<string, unknown> = {

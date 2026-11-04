@@ -3,6 +3,7 @@
 import { readFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { extname, join, relative, resolve, sep } from "node:path";
+import { isPathInside } from "@ringko-ai/config";
 import { json } from "./http.ts";
 
 const MIME: Record<string, string> = {
@@ -20,9 +21,9 @@ const MIME: Record<string, string> = {
 
 export async function serveStatic(webuiDir: string, pathname: string): Promise<Response> {
   const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
-  const target = resolve(join(webuiDir, rel));
-  const withinRoot = relative(webuiDir, target);
-  if (withinRoot.startsWith("..") || withinRoot.includes("..")) return json({ error: "not found" }, 404);
+  const root = resolve(webuiDir);
+  const target = resolve(join(root, rel));
+  if (!isPathInside(root, target)) return json({ error: "not found" }, 404);
   let file = target;
   try {
     if (statSync(file).isDirectory()) file = join(file, "index.html");

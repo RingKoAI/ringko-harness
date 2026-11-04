@@ -1,4 +1,5 @@
 export * from "./paths.ts";
+export * from "./util.ts";
 export * from "./config.ts";
 export * from "./context.ts";
 export * from "./backend-registry.ts";

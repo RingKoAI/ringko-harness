@@ -8,7 +8,8 @@
 // and portable installs).
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { isPathInside } from "./util.ts";
 
 export const RINGKO_DIR_NAME = ".ringko";
 export const AGENTS_DIR_NAME = ".agents";
@@ -177,8 +178,7 @@ export function projectSkillsDirs(cwd: string = process.cwd(), env: NodeJS.Proce
 export function ancestorSkillsDirs(cwd: string = process.cwd(), env: NodeJS.ProcessEnv = process.env): string[] {
   const home = resolve(homeOf(env, "RINGKO_HOME"));
   const from = resolve(cwd);
-  const insideHome = relative(home, from);
-  if (insideHome === "" || insideHome === ".." || insideHome.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(insideHome)) return [];
+  if (from === home || !isPathInside(home, from)) return [];
   const dirs: string[] = [];
   let dir = from;
   for (;;) {

@@ -6,7 +6,7 @@
 // data; hosts ask this package to resolve and route them.
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { canonicalToolName, workflowsPath } from "@ringko-ai/config";
+import { canonicalToolName, isRecord, workflowsPath } from "@ringko-ai/config";
 
 export interface WorkflowTools {
   /** When non-empty, only these tool names are allowed. */
@@ -67,10 +67,6 @@ export const BUILTIN_WORKFLOWS: Record<string, WorkflowDef> = {
 export interface WorkflowFile {
   version?: number;
   workflows?: Record<string, WorkflowDef>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Read `workflows.json` alone (missing/invalid yields `{}`). */

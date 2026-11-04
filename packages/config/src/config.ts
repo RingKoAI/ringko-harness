@@ -10,6 +10,7 @@ import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readF
 import { dirname } from "node:path";
 import type { CatalogModel } from "./catalog.ts";
 import { providerPath, settingsPath } from "./paths.ts";
+import { isRecord } from "./util.ts";
 
 /** One model offered by a provider. */
 export interface ModelDefinition {
@@ -109,10 +110,6 @@ export interface LoadConfigOptions {
   path?: string;
   /** Environment (for `RINGKO_HOME`); defaults to `process.env`. */
   env?: NodeJS.ProcessEnv;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readObject(path: string, required: boolean): Record<string, unknown> {

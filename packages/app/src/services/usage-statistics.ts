@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, opendir, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, sep } from "node:path";
-import { backendKey } from "@ringko-ai/config";
+import { join } from "node:path";
+import { backendKey, isPathInside } from "@ringko-ai/config";
 import { parseLog, projectDirName, SESSION_LOG_NAME, sessionTitle, sessionUsage, type SessionEvent, type SessionHeader } from "@ringko-ai/session";
 import type { UsageCallKind, UsageRequest, UsageStatistics, UsageStatisticsBucket, UsageStatisticsQuery } from "@ringko-ai/protocol";
 
@@ -46,11 +46,6 @@ export function parseUsageStatisticsQuery(params: URLSearchParams): UsageStatist
   return result;
 }
 
-function contained(base: string, candidate: string): boolean {
-  const path = relative(base, candidate);
-  return path === "" || (path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path));
-}
-
 /** Only read bounded regular logs beneath the selected workspace's session directory. */
 async function loadUsage(root: string, workspace: string): Promise<LoadedUsage> {
   const loaded: LoadedUsage = { sources: [], skipped: 0, limited: false };
@@ -58,7 +53,7 @@ async function loadUsage(root: string, workspace: string): Promise<LoadedUsage> 
   let directory;
   try {
     if ((await lstat(project)).isSymbolicLink()) throw new Error("Linked session directory is unsupported.");
-    if (!contained(await realpath(root), await realpath(project))) throw new Error("Invalid session directory.");
+    if (!isPathInside(await realpath(root), await realpath(project))) throw new Error("Invalid session directory.");
     directory = await opendir(project);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return loaded;
@@ -73,7 +68,7 @@ async function loadUsage(root: string, workspace: string): Promise<LoadedUsage> 
     if (!entry.isDirectory() || entry.isSymbolicLink()) { loaded.skipped++; continue; }
     try {
       const path = join(project, entry.name, SESSION_LOG_NAME);
-      if (!contained(base, await realpath(path)) || (await lstat(path)).isSymbolicLink()) throw new Error("Linked session log is unsupported.");
+      if (!isPathInside(base, await realpath(path)) || (await lstat(path)).isSymbolicLink()) throw new Error("Linked session log is unsupported.");
       const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
       let text: string;
       try {

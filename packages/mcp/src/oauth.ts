@@ -3,7 +3,7 @@
 // remote servers such as Cloudflare's; tokens land in `tool.auth.json`.
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { getToolAuth, setToolAuth, type ToolOAuthCredential } from "@ringko-ai/config";
+import { getToolAuth, isRecord, setToolAuth, type ToolOAuthCredential } from "@ringko-ai/config";
 
 const CALLBACK_PATH = "/callback";
 const AUTHORIZE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -11,10 +11,6 @@ const REFRESH_SKEW_MS = 60_000;
 
 function base64Url(bytes: Buffer): string {
   return bytes.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 async function getJson(url: string): Promise<Record<string, unknown> | undefined> {

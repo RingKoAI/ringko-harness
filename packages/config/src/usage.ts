@@ -6,6 +6,7 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { usagePath } from "./paths.ts";
+import { isRecord } from "./util.ts";
 
 export interface UsageTotals {
   calls: number;
@@ -30,10 +31,6 @@ export interface UsageDelta {
 
 function emptyTotals(): UsageTotals {
   return { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function num(value: unknown): number {

@@ -5,6 +5,7 @@
 import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { projectsPath } from "./paths.ts";
+import { isRecord } from "./util.ts";
 
 export interface ProjectEntry {
   id: string;
@@ -15,10 +16,6 @@ export interface ProjectEntry {
 export interface ProjectsFile {
   projects: ProjectEntry[];
   current?: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseProject(value: unknown): ProjectEntry | undefined {

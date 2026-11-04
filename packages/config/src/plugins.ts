@@ -7,11 +7,12 @@
 // enable its own plugin. Invalid manifests are rejected whole (fail closed) and
 // reported through the result instead of partially applied.
 import { closeSync, existsSync, fstatSync, openSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { RingkoConfig } from "./config.ts";
 import { loadConfig } from "./config.ts";
 import type { McpServerConfig } from "./mcp.ts";
 import { PLUGIN_FILE_NAME, pluginRoots, projectPluginRoots } from "./paths.ts";
+import { isPathInside, isRecord } from "./util.ts";
 
 const MAX_PLUGINS = 128;
 const MAX_MANIFEST_BYTES = 256 * 1024;
@@ -79,15 +80,6 @@ export interface LoadPluginsOptions {
   cwd?: string;
   /** Explicit trust list; defaults to the user-level settings file. */
   trusted?: readonly string[];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function inside(root: string, target: string): boolean {
-  const rel = relative(root, target);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function fail(message: string): never {
@@ -206,7 +198,7 @@ function resolveSkillDirs(dir: string, manifest: PluginManifest): string[] {
   const out: string[] = [];
   for (const entry of candidates) {
     const target = resolve(dir, entry);
-    if (!inside(dir, target)) fail(`Plugin skill path "${entry}" escapes the plugin directory.`);
+    if (!isPathInside(dir, target)) fail(`Plugin skill path "${entry}" escapes the plugin directory.`);
     if (!existsSync(target)) {
       if (declared === undefined) continue;
       fail(`Plugin skill directory "${entry}" does not exist.`);
@@ -216,7 +208,7 @@ function resolveSkillDirs(dir: string, manifest: PluginManifest): string[] {
       fail(`Plugin skill path "${entry}" is not a directory.`);
     }
     const real = realpathSync(target);
-    if (!inside(root, real)) fail(`Plugin skill path "${entry}" escapes the plugin directory.`);
+    if (!isPathInside(root, real)) fail(`Plugin skill path "${entry}" escapes the plugin directory.`);
     out.push(real);
   }
   return out;

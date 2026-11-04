@@ -1,5 +1,5 @@
 // MCP client: initialize, list tools, call tools over a chosen transport.
-import { getToolAuth, type McpServerConfig } from "@ringko-ai/config";
+import { getToolAuth, isRecord, type McpServerConfig } from "@ringko-ai/config";
 import { ensureToolAuth } from "./oauth.ts";
 import { mcpEndpoint, type McpSandboxMode } from "./policy.ts";
 import {
@@ -36,10 +36,6 @@ const MAX_TOOL_PAGES = 32;
 const MAX_SERVER_TOOLS = 512;
 const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "ringko", version: "0.1.0" };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function stringMap(value: unknown): Record<string, string> {
   if (!isRecord(value)) return {};

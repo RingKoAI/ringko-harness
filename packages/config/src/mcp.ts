@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { writeDiagnostic } from "./diagnostics.ts";
 import { agentsRoot, findProjectRoot, mcpPaths, projectMcpPaths, ringkoRoot } from "./paths.ts";
 import { loadPlugins } from "./plugins.ts";
+import { isRecord } from "./util.ts";
 
 export interface McpServerConfig {
   /** stdio transport command. */
@@ -29,10 +30,6 @@ export interface McpServer {
   source: "project" | "ringko" | "agents";
   /** Project-level vs user-level. */
   scope: McpScope;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export interface LoadMcpServersOptions {

@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { authPath } from "./paths.ts";
+import { isRecord } from "./util.ts";
 
 /** OAuth auth domains the harness knows how to sign in to. */
 export const OAUTH_DOMAINS = ["openai-oauth", "github-copilot", "xai-oauth", "anthropic-oauth"] as const;
@@ -49,10 +50,6 @@ export interface OAuthDomain {
 export interface AuthState {
   oauth: Record<string, OAuthDomain>;
   apikeys: Record<string, string>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function emptyState(): AuthState {

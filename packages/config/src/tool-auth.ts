@@ -7,6 +7,7 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { toolAuthPath } from "./paths.ts";
+import { isRecord } from "./util.ts";
 
 export interface ToolOAuthCredential {
   type: "oauth";
@@ -38,10 +39,6 @@ export interface ToolHeadersCredential {
 
 export type ToolAuthInfo = ToolOAuthCredential | ToolApiCredential | ToolHeadersCredential;
 export type ToolAuthStore = Record<string, ToolAuthInfo>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function parseInfo(value: unknown): ToolAuthInfo | undefined {
   if (!isRecord(value)) return undefined;
