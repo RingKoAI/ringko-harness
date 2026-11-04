@@ -119,6 +119,7 @@ import {
 } from "@ringko-ai/session";
 import { loadModel as resolveLoadedModel } from "./model.ts";
 import { json, readJson, sse } from "./server/http.ts";
+import { OAUTH_ISSUE_TIMEOUT_MS, oauthKind, pruneOAuthFlows, type OAuthFlow } from "./server/oauth.ts";
 import { proxyDev, serveStatic } from "./server/static.ts";
 import { startInteractiveTerminal, type InteractiveTerminal } from "./server/terminal.ts";
 import { sessionTitleView, stripEventParts, stripMessageParts } from "./server/views.ts";
@@ -570,7 +571,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   /** Start the OAuth loopback flow for a remote MCP server (e.g. Cloudflare). */
   async function handleMcpOAuth(request: Request): Promise<Response> {
     const now = Date.now();
-    pruneOAuthFlows(now);
+    pruneOAuthFlows(oauthFlows, now);
     const body = await readJson<{ name?: unknown; url?: unknown }>(request);
     const name = typeof body?.name === "string" ? body.name.trim() : "";
     const url = typeof body?.url === "string" ? body.url.trim() : "";
@@ -714,24 +715,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
   // OAuth device-code flows in flight, keyed by a flow id the WebUI polls.
-  const oauthFlows = new Map<string, { status: "pending" | "success" | "error"; error?: string; createdAt: number }>();
-  const OAUTH_FLOW_TTL_MS = 10 * 60 * 1000;
-  const OAUTH_ISSUE_TIMEOUT_MS = 30 * 1000;
-
-  /** Map an auth domain to the OAuth flow it speaks, if any. */
-  function oauthKind(domain: string): "openai" | "copilot" | "xai" | "anthropic" | undefined {
-    if (domain === "openai-oauth") return "openai";
-    if (domain === "github-copilot") return "copilot";
-    if (domain === "xai-oauth") return "xai";
-    if (domain === "anthropic-oauth") return "anthropic";
-    return undefined;
-  }
-
-  function pruneOAuthFlows(now: number): void {
-    for (const [id, flow] of oauthFlows) {
-      if (now - flow.createdAt > OAUTH_FLOW_TTL_MS) oauthFlows.delete(id);
-    }
-  }
+  const oauthFlows = new Map<string, OAuthFlow>();
 
   /** Account states only; token material never leaves the server. */
   function handleAuth(): Response {
@@ -782,7 +766,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
 
   async function handleStartOAuth(request: Request): Promise<Response> {
     const now = Date.now();
-    pruneOAuthFlows(now);
+    pruneOAuthFlows(oauthFlows, now);
     const body = await readJson<{ domain?: unknown }>(request);
     const domain = typeof body?.domain === "string" ? body.domain.trim() : "";
     if (domain.length === 0) return json({ error: "domain is required." }, 400);
