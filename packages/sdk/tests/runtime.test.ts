@@ -304,6 +304,52 @@ it("includes contribution tools in runtime previews", async () => isolated(async
   }
 }));
 
+it("runs model hooks with primary usage kinds and records failures", async () => isolated(async directory => {
+  const runtime = new RuntimeManager(directory);
+  const events: string[] = [];
+  runtime.events.on("model/before-request", event => {
+    events.push(`before:${event.kind}`);
+    expect(event.toolCount).toBeGreaterThan(0);
+  });
+  runtime.events.on("model/after-response", event => {
+    events.push(`after:${event.kind}:${event.failed}:${event.usage?.outputTokens ?? 0}`);
+  });
+  const managed = runtime.createAgent({}, {
+    model: async () => ({ content: "done", toolCalls: [], usage: { inputTokens: 5, outputTokens: 2 } }),
+  });
+  try {
+    expect((await managed.agent.run("hello")).content).toBe("done");
+    expect(events).toEqual(["before:primary", "after:primary:false:2"]);
+  } finally { managed.close(); await runtime.close(); }
+}));
+
+it("blocks model requests when a before hook fails and reports failing turns", async () => isolated(async directory => {
+  const runtime = new RuntimeManager(directory);
+  const events: string[] = [];
+  let calls = 0;
+  runtime.events.on("model/after-response", event => {
+    events.push(`after:${event.failed}:${event.error ?? ""}`);
+  });
+  const managed = runtime.createAgent({}, {
+    model: async () => {
+      calls += 1;
+      throw new Error("provider failed");
+    },
+  });
+  try {
+    await expect(managed.agent.run("failed")).rejects.toThrow("provider failed");
+    expect(calls).toBe(1);
+    expect(events).toEqual(["after:true:provider failed"]);
+  } finally { managed.close(); await runtime.close(); }
+  const blocker = new RuntimeManager(directory);
+  blocker.events.on("model/before-request", () => { throw new Error("model blocked"); });
+  const blocked = blocker.createAgent({}, { model: async () => { calls += 1; return { content: "unexpected", toolCalls: [] }; } });
+  try {
+    await expect(blocked.agent.run("blocked")).rejects.toThrow("model blocked");
+    expect(calls).toBe(1);
+  } finally { blocked.close(); await blocker.close(); }
+}));
+
 it("runs tool hooks and blocks execution when a pre-execute hook fails", async () => isolated(async directory => {
   const runtime = new RuntimeManager(directory);
   const events: string[] = [];

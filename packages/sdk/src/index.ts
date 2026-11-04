@@ -35,7 +35,7 @@ import {
   type ModelUsageKind,
 } from "@ringko-ai/session";
 import { createScheduleTool, createSubscribeTool, Scheduler, type EventLog } from "@ringko-ai/runtime";
-import { recordUsage, resolveContextLimits } from "@ringko-ai/config";
+import { recordUsage, resolveContextLimits, writeDiagnostic } from "@ringko-ai/config";
 import { TaskManager, type TaskEvent } from "./task.ts";
 import { InstructionContext } from "./instructions.ts";
 export { TASK_LIMITS, TaskManager } from "./task.ts";
@@ -114,6 +114,20 @@ export type {
   ToolRiskAssessment,
 };
 
+export interface ModelExecutionEvent {
+  kind: ModelUsageKind;
+  modelId?: string;
+  messages: readonly ChatMessage[];
+  toolCount: number;
+}
+
+export interface ModelExecutionResult extends ModelExecutionEvent {
+  durationMs: number;
+  usage?: ModelTurn["usage"];
+  failed: boolean;
+  error?: string;
+}
+
 export interface RingKoConfig {
   onDelta?: import("@ringko-ai/harness").ModelRequest["onDelta"];
   model: ModelClient;
@@ -141,6 +155,10 @@ export interface RingKoConfig {
   onToolBefore?: (event: import("@ringko-ai/harness").ToolExecutionEvent) => void | Promise<void>;
   /** Observe a settled tool call; hook errors become tool failures. */
   onToolAfter?: (event: import("@ringko-ai/harness").ToolExecutionResult) => void | Promise<void>;
+  /** Runs before a model request; throwing blocks the request. */
+  onModelBefore?: (event: ModelExecutionEvent) => void | Promise<void>;
+  /** Observes a settled model request; hook errors are diagnostic-only. */
+  onModelAfter?: (event: ModelExecutionResult) => void | Promise<void>;
   /** Opt in to the file-scoped task tool. Child tasks never inherit parent history. */
   task?: boolean;
   onTaskEvent?: (event: TaskEvent) => void;
@@ -222,11 +240,36 @@ export function createRingKo(config: RingKoConfig): RingKo {
     return pending;
   } : undefined;
   const session = config.session;
+  const notifyModelAfter = async (result: ModelExecutionResult): Promise<void> => {
+    if (!config.onModelAfter) return;
+    try { await config.onModelAfter(result); }
+    catch (error) { writeDiagnostic("model.hook", String(error)); }
+  };
   // Record token/cache usage for every model call (agent, task, summarizer).
   const trackModel = (client: ModelClient, modelId?: string, kind: ModelUsageKind = "primary"): ModelClient => async request => {
+    const event: ModelExecutionEvent = {
+      kind,
+      ...(modelId ? { modelId } : {}),
+      messages: request.messages,
+      toolCount: request.tools.length,
+    };
+    await config.onModelBefore?.(event);
     const started = performance.now();
-    const turn = await client(request);
+    let turn: ModelTurn;
+    try {
+      turn = await client(request);
+    } catch (error) {
+      const failure: ModelExecutionResult = {
+        ...event,
+        durationMs: performance.now() - started,
+        failed: true,
+        error: error instanceof Error ? error.message : String(error),
+      };
+      await notifyModelAfter(failure);
+      throw error;
+    }
     const durationMs = performance.now() - started;
+    await notifyModelAfter({ ...event, durationMs, ...(turn.usage ? { usage: turn.usage } : {}), failed: false });
     if (turn.usage) {
       recordUsage(modelId ?? "", {
         ...(turn.usage.inputTokens !== undefined ? { inputTokens: turn.usage.inputTokens } : {}),

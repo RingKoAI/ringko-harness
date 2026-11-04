@@ -6,7 +6,7 @@ import { sessionTodos } from "@ringko-ai/session";
 import { Sandbox, createTodoStore, registerNetworkTools, registerSessionQueryTools, registerSessionTools, registerShellTools, registerWorkspaceTools, type AskHandler, type TodoItem } from "@ringko-ai/tools";
 import { resolveWorkflow, workflowAllowsTool, workflowInstructions, type Workflow } from "@ringko-ai/workflow";
 import { abortable, type ToolExecutionEvent, type ToolExecutionResult } from "@ringko-ai/harness";
-import { createRingKo, isAccessMode, type AgentEvent, type RingKo, type RingKoConfig as AgentConfig } from "./index.ts";
+import { createRingKo, isAccessMode, type AgentEvent, type ModelExecutionEvent, type ModelExecutionResult, type RingKo, type RingKoConfig as AgentConfig } from "./index.ts";
 import { registerRuntimeSkills } from "./skills.ts";
 import { PermissionManager } from "./permissions.ts";
 import { McpManager } from "./mcp-manager.ts";
@@ -27,6 +27,8 @@ export interface RuntimeEvents extends Record<string, unknown> {
   "agent/event": AgentEvent;
   "tool/pre-execute": ToolExecutionEvent;
   "tool/post-execute": ToolExecutionResult;
+  "model/before-request": ModelExecutionEvent;
+  "model/after-response": ModelExecutionResult;
   "tool/permission": { toolName: string; target?: string; decision: "allow" | "deny" | "ask" | "default" };
 }
 
@@ -210,6 +212,12 @@ export class RuntimeManager {
       },
       onToolAfter: async event => {
         await this.events.parallel("tool/post-execute", event).catch(error => writeDiagnostic("runtime.tool.post", String(error)));
+      },
+      onModelBefore: async event => {
+        await this.events.serial("model/before-request", event);
+      },
+      onModelAfter: async event => {
+        await this.events.parallel("model/after-response", event).catch(error => writeDiagnostic("runtime.model.post", String(error)));
       },
     });
     const toolSandbox = registerRuntimeTools(agent, config, this.workspace, host, options.session);
