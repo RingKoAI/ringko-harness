@@ -17,7 +17,7 @@ it("installs skills and exposes the trusted plugin inventory over the API", asyn
   process.env.AGENTS_HOME = home;
   mkdirSync(join(root, ".git"));
   mkdirSync(join(home, ".ringko"), { recursive: true });
-  writeFileSync(join(home, ".ringko", "settings.local.json"), JSON.stringify({ plugins: { trusted: ["demo"] } }));
+  writeFileSync(join(home, ".ringko", "settings.local.json"), JSON.stringify({ plugins: { trusted: [] } }));
   const source = join(root, "source-skill");
   mkdirSync(source, { recursive: true });
   writeFileSync(join(source, "SKILL.md"), "---\nname: api-skill\ndescription: Installed through the API\n---\nBody");
@@ -58,11 +58,20 @@ it("installs skills and exposes the trusted plugin inventory over the API", asyn
       candidates: Array<{ id: string; trusted: boolean }>;
       errors: unknown[];
     };
-    expect(inventory.plugins[0]?.id).toBe("demo");
-    expect(inventory.plugins[0]?.commands.map(command => command.name)).toEqual(["demo-command"]);
-    expect(inventory.candidates).toContainEqual(expect.objectContaining({ id: "demo", trusted: true }));
+    expect(inventory.plugins).toEqual([]);
+    expect(inventory.candidates).toContainEqual(expect.objectContaining({ id: "demo", trusted: false }));
     expect(inventory.candidates).toContainEqual(expect.objectContaining({ id: "second", trusted: false }));
     expect(inventory.errors).toEqual([]);
+
+    const firstTrust = await fetch(`${app.url}/api/plugins/trust`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ name: "demo" }),
+    });
+    expect(firstTrust.status).toBe(200);
+    const firstInventory = await firstTrust.json() as { plugins: Array<{ id: string; commands: Array<{ name: string }> }> };
+    expect(firstInventory.plugins[0]?.id).toBe("demo");
+    expect(firstInventory.plugins[0]?.commands.map(command => command.name)).toEqual(["demo-command"]);
 
     const trusted = await fetch(`${app.url}/api/plugins/trust`, {
       method: "POST",

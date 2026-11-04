@@ -8,7 +8,7 @@
 // reported through the result instead of partially applied.
 import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import type { RingkoConfig } from "./config.ts";
+import type { PluginTrust, PluginTrustEntry, RingkoConfig } from "./config.ts";
 import { loadConfig, saveConfigFile } from "./config.ts";
 import type { McpServerConfig } from "./mcp.ts";
 import { PLUGIN_FILE_NAME, pluginRoots, projectPluginRoots, settingsPath } from "./paths.ts";
@@ -88,23 +88,48 @@ export interface LoadPluginsOptions {
   /** Workspace used to locate project plugins. */
   cwd?: string;
   /** Explicit trust list; defaults to the user-level settings file. */
-  trusted?: readonly string[];
+  trusted?: readonly PluginTrust[];
+}
+
+interface TrustSet {
+  /** Legacy bare ids: authorise user-level roots only. */
+  legacy: Set<string>;
+  /** Canonical plugin path -> plugin id. */
+  paths: Map<string, string>;
+}
+
+function pathKey(path: string): string {
+  const absolute = resolve(path);
+  let canonical = absolute;
+  try { canonical = realpathSync(absolute); } catch { /* keep the lexical path */ }
+  return process.platform === "win32" ? canonical.toLowerCase() : canonical;
 }
 
 function fail(message: string): never {
   throw new TypeError(message);
 }
 
-function readTrusted(options: LoadPluginsOptions): string[] {
+function readTrusted(options: LoadPluginsOptions): TrustSet {
   let raw: unknown;
   if (options.trusted !== undefined) raw = options.trusted;
   else {
     const config: RingkoConfig = loadConfig({ ...(options.env ? { env: options.env } : {}) });
     raw = config.plugins?.trusted;
   }
-  if (raw === undefined) return [];
-  if (!Array.isArray(raw)) fail("Plugin trust must be an array of plugin names.");
-  return raw.filter((name): name is string => typeof name === "string" && PLUGIN_ID.test(name));
+  const trust: TrustSet = { legacy: new Set(), paths: new Map() };
+  if (raw === undefined) return trust;
+  if (!Array.isArray(raw)) fail("Plugin trust must be an array of plugin names or path entries.");
+  for (const entry of raw) {
+    if (typeof entry === "string") {
+      if (PLUGIN_ID.test(entry)) trust.legacy.add(entry);
+      continue;
+    }
+    if (!isRecord(entry) || typeof entry.id !== "string" || !PLUGIN_ID.test(entry.id) || typeof entry.path !== "string" || entry.path.length === 0 || entry.path.includes("\0")) {
+      fail("Each plugin trust entry must be a plugin name or an { id, path } object.");
+    }
+    trust.paths.set(pathKey(entry.path), entry.id);
+  }
+  return trust;
 }
 
 function parseManifest(id: string, raw: unknown): PluginManifest {
@@ -223,7 +248,7 @@ function resolveSkillDirs(dir: string, manifest: PluginManifest): string[] {
   return out;
 }
 
-function collectCandidates(env: NodeJS.ProcessEnv, cwd: string, trusted: ReadonlySet<string>): PluginCandidate[] {
+function collectCandidates(env: NodeJS.ProcessEnv, cwd: string, trusted: TrustSet): PluginCandidate[] {
   const roots: { dir: string; source: PluginSource; scope: PluginScope }[] = [
     ...projectPluginRoots(cwd, env).map(dir => ({ dir, source: "project" as const, scope: "project" as const })),
     ...pluginRoots(env).map((dir, index) => ({ dir, source: index === 0 ? "ringko" as const : "agents" as const, scope: "global" as const })),
@@ -237,10 +262,18 @@ function collectCandidates(env: NodeJS.ProcessEnv, cwd: string, trusted: Readonl
       continue;
     }
     for (const id of entries) {
-      if (!PLUGIN_ID.test(id) || found.has(id)) continue;
+      if (!PLUGIN_ID.test(id)) continue;
       const dir = join(root.dir, id);
       try { if (!statSync(dir).isDirectory()) continue; } catch { continue; }
-      found.set(id, { id, dir, source: root.source, scope: root.scope, trusted: trusted.has(id) });
+      // Legacy bare ids never authorise a project directory: a cloned repo must
+      // not inherit approval granted to a user-level plugin with the same id.
+      const legacy = root.source !== "project" && trusted.legacy.has(id);
+      const pathBound = trusted.paths.get(pathKey(dir)) === id;
+      const candidate: PluginCandidate = { id, dir, source: root.source, scope: root.scope, trusted: legacy || pathBound };
+      const existing = found.get(id);
+      // An untrusted project shadow must not hide a trusted user-level plugin.
+      if (existing && (existing.trusted || !candidate.trusted)) continue;
+      found.set(id, candidate);
     }
   }
   return [...found.values()];
@@ -250,8 +283,8 @@ function collectCandidates(env: NodeJS.ProcessEnv, cwd: string, trusted: Readonl
 export function discoverPluginCandidates(options: LoadPluginsOptions = {}): { candidates: PluginCandidate[]; errors: PluginLoadError[] } {
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
-  let trusted: Set<string>;
-  try { trusted = new Set(readTrusted(options)); }
+  let trusted: TrustSet;
+  try { trusted = readTrusted(options); }
   catch (error) {
     return { candidates: [], errors: [{ source: "plugins", message: error instanceof Error ? error.message : "Invalid plugin trust configuration." }] };
   }
@@ -266,13 +299,13 @@ export function loadPlugins(options: LoadPluginsOptions = {}): LoadPluginsResult
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
   const errors: PluginLoadError[] = [];
-  let trusted: Set<string>;
-  try { trusted = new Set(readTrusted(options)); }
+  let trusted: TrustSet;
+  try { trusted = readTrusted(options); }
   catch (error) {
     errors.push({ source: "plugins", message: error instanceof Error ? error.message : "Invalid plugin trust configuration." });
     return { plugins: [], errors };
   }
-  if (trusted.size === 0) return { plugins: [], errors };
+  if (trusted.legacy.size === 0 && trusted.paths.size === 0) return { plugins: [], errors };
 
   const found = new Map<string, LoadedPlugin>();
   let seen = 0;
@@ -303,11 +336,34 @@ export function loadPlugins(options: LoadPluginsOptions = {}): LoadPluginsResult
 
 /**
  * Persist the user-level trust list while preserving every other settings key.
- * Callers must validate the plugin before adding it.
+ * New callers should pass path-bound `{ id, path }` entries; legacy strings are
+ * kept only for user-level roots. Callers must validate the plugin first.
  */
-export function savePluginTrust(names: readonly string[], env: NodeJS.ProcessEnv = process.env): string {
-  const unique = [...new Set(names)];
-  for (const name of unique) if (!PLUGIN_ID.test(name)) throw new TypeError(`Invalid plugin name "${name}".`);
+export function savePluginTrust(entries: readonly PluginTrust[], env: NodeJS.ProcessEnv = process.env): string {
+  if (entries.length > MAX_PLUGINS) throw new TypeError(`Plugin trust may contain at most ${String(MAX_PLUGINS)} entries.`);
+  const unique: PluginTrust[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (typeof entry === "string") {
+      if (!PLUGIN_ID.test(entry)) throw new TypeError(`Invalid plugin name "${entry}".`);
+      const key = `legacy\0${entry}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(entry);
+      continue;
+    }
+    if (!isRecord(entry) || typeof entry.id !== "string" || !PLUGIN_ID.test(entry.id) || typeof entry.path !== "string" || !isAbsolute(entry.path) || entry.path.includes("\0")) {
+      throw new TypeError("Plugin trust entries must be a plugin name or an { id, path } object with an absolute path.");
+    }
+    let canonical: string;
+    try { canonical = realpathSync(entry.path); }
+    catch { throw new TypeError(`Plugin path "${entry.path}" does not exist.`); }
+    if (!statSync(canonical).isDirectory()) throw new TypeError(`Plugin path "${entry.path}" is not a directory.`);
+    const key = `path\0${pathKey(canonical)}\0${entry.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push({ id: entry.id, path: canonical } satisfies PluginTrustEntry);
+  }
   const path = settingsPath(env);
   let settings: Record<string, unknown> = {};
   try {

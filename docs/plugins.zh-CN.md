@@ -23,13 +23,17 @@ contribution API。
 ```json
 {
   "plugins": {
-    "trusted": ["reviewer"]
+    "trusted": [
+      { "id": "reviewer", "path": "C:\\Users\\me\\.ringko\\plugins\\reviewer" }
+    ]
   }
 }
 ```
 
-信任列表刻意不从项目文件读取，因此克隆的仓库无法自行启用插件。删除名称即可
-停用插件。未受信任的目录在解析清单之前就被忽略。
+信任绑定到解析后的插件目录，而不只是名称。信任列表刻意不从项目文件读取，因此
+克隆的仓库无法自行启用插件。旧式裸名称条目只对用户级目录（`~/.ringko`、
+`~/.agents`）有效；项目目录必须使用路径绑定条目。删除条目即可停用插件。未受
+信任的目录在解析清单之前就被忽略。
 
 `GET /api/plugins`、`RuntimeManager.plugins()` 与 `RuntimeContext.plugins()` 可以
 在不启动插件的情况下查看受信任插件清单和清单错误。`POST /api/plugins/trust` 与
@@ -37,8 +41,8 @@ contribution API。
 工具与 MCP 注册路径看到插件技能和 MCP server。
 
 使用 `ringko plugins` 查看发现的插件目录与信任状态，`ringko plugins trust <id>`
-校验并信任插件，`ringko plugins untrust <id>` 停用插件。该命令只更新用户级设置
-文件，并保留其他所有键。
+校验并信任所选目录，`ringko plugins untrust <id>` 停用插件。该命令在用户级设置
+文件中记录路径绑定条目，并保留其他所有键。
 
 ## 清单格式
 

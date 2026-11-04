@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadMcpServers } from "../src/mcp.ts";
 import { discoverSkills } from "../src/skills.ts";
-import { expandCommandPrompt, loadPlugins, savePluginTrust } from "../src/plugins.ts";
+import { discoverPluginCandidates, expandCommandPrompt, loadPlugins, savePluginTrust } from "../src/plugins.ts";
 
 let home: string;
 let env: NodeJS.ProcessEnv;
@@ -66,17 +66,38 @@ describe("loadPlugins", () => {
     expect(plugin.skillDirs[0].endsWith(join("skills"))).toBe(true);
   });
 
-  it("reads trust from user settings and gives project plugins precedence", () => {
+  it("never lets a legacy bare-id trust entry authorise a project plugin", () => {
     writeSettings({ plugins: { trusted: ["shared"] } });
     writePlugin(join(home, ".ringko"), "shared", { name: "shared", description: "user" });
     const project = mkdtempSync(join(tmpdir(), "ringko-plugin-proj-"));
     mkdirSync(join(project, ".git"));
-    writePlugin(join(project, ".ringko"), "shared", { name: "shared", description: "project" });
+    const projectDir = writePlugin(join(project, ".ringko"), "shared", { name: "shared", description: "project" });
+    try {
+      const result = loadPlugins({ env, cwd: project });
+      expect(result.plugins.map(plugin => plugin.id)).toEqual(["shared"]);
+      expect(result.plugins[0].source).toBe("ringko");
+      expect(result.plugins[0].manifest.description).toBe("user");
+      const candidates = discoverPluginCandidates({ env, cwd: project });
+      expect(candidates.candidates.find(candidate => candidate.id === "shared")).toMatchObject({
+        dir: join(home, ".ringko", "plugins", "shared"),
+        trusted: true,
+      });
+      expect(candidates.candidates.some(candidate => candidate.dir === projectDir)).toBe(false);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("loads a project plugin when trust is bound to its path", () => {
+    const project = mkdtempSync(join(tmpdir(), "ringko-plugin-proj-"));
+    mkdirSync(join(project, ".git"));
+    const projectDir = writePlugin(join(project, ".ringko"), "shared", { name: "shared", description: "project" });
+    writeSettings({ plugins: { trusted: [{ id: "shared", path: projectDir }] } });
     try {
       const result = loadPlugins({ env, cwd: project });
       expect(result.plugins.map(plugin => plugin.id)).toEqual(["shared"]);
       expect(result.plugins[0].source).toBe("project");
-      expect(result.plugins[0].manifest.description).toBe("project");
+      expect(result.plugins[0].dir).toBe(projectDir);
     } finally {
       rmSync(project, { recursive: true, force: true });
     }
@@ -160,8 +181,18 @@ describe("savePluginTrust", () => {
     expect(settings.plugins).toEqual({ trusted: ["new"], enabled: true });
   });
 
+  it("binds new trust entries to the plugin path", () => {
+    const dir = writePlugin(join(home, ".ringko"), "bound", { name: "bound" });
+    savePluginTrust([{ id: "bound", path: dir }], env);
+    const settings = JSON.parse(readFileSync(join(home, ".ringko", "settings.local.json"), "utf8")) as { plugins: { trusted: Array<{ id: string; path: string }> } };
+    expect(settings.plugins.trusted).toHaveLength(1);
+    expect(settings.plugins.trusted[0]?.id).toBe("bound");
+    expect(settings.plugins.trusted[0]?.path.endsWith("bound")).toBe(true);
+  });
+
   it("rejects invalid names and malformed settings", () => {
     expect(() => savePluginTrust(["../escape"], env)).toThrow("Invalid plugin name");
+    expect(() => savePluginTrust([{ id: "ok", path: "relative" }], env)).toThrow("absolute path");
     writeSettings({ plugins: "invalid" });
     expect(() => savePluginTrust(["ok"], env)).toThrow("must be an object");
   });

@@ -1,11 +1,15 @@
-import { discoverPluginCandidates, loadConfig, loadPlugins, savePluginTrust } from "@ringko-ai/config";
+import { discoverPluginCandidates, isRecord, loadConfig, loadPlugins, savePluginTrust, type PluginTrust } from "@ringko-ai/config";
 import { readConfig } from "../shared.ts";
 import type { CliIo, ParsedArgs } from "../types.ts";
 
-function trustedNames(): string[] {
+function trustedEntries(): PluginTrust[] {
   const trusted = loadConfig().plugins?.trusted;
   if (trusted === undefined) return [];
-  if (!Array.isArray(trusted) || trusted.some(name => typeof name !== "string")) throw new TypeError("Plugin trust must be an array of plugin names.");
+  if (!Array.isArray(trusted)) throw new TypeError("Plugin trust must be an array of plugin entries.");
+  for (const entry of trusted) {
+    const valid = typeof entry === "string" || (isRecord(entry) && typeof entry.id === "string" && typeof entry.path === "string");
+    if (!valid) throw new TypeError("Plugin trust must contain plugin names or { id, path } entries.");
+  }
   return trusted;
 }
 
@@ -38,27 +42,29 @@ export function pluginsCommand(parsed: ParsedArgs, io: CliIo): number {
 
   try {
     if (sub === "untrust") {
-      const current = trustedNames();
-      savePluginTrust(current.filter(name => name !== id));
+      const current = trustedEntries();
+      savePluginTrust(current.filter(entry => (typeof entry === "string" ? entry : entry.id) !== id));
       io.out(`Plugin ${id} is no longer trusted.`);
       return 0;
     }
     const result = discoverPluginCandidates({ cwd: workspace });
     for (const error of result.errors) io.err(`${error.source}: ${error.message}`);
-    if (!result.candidates.some(candidate => candidate.id === id)) {
+    const candidate = result.candidates.find(entry => entry.id === id);
+    if (!candidate) {
       io.err(`Unknown plugin "${id}".`);
       return 1;
     }
-    const current = trustedNames();
-    if (current.includes(id)) { io.out(`Plugin ${id} is already trusted.`); return 0; }
-    const loaded = loadPlugins({ cwd: workspace, trusted: [...current, id] });
+    if (candidate.trusted) { io.out(`Plugin ${id} is already trusted.`); return 0; }
+    const current = trustedEntries();
+    const bound: PluginTrust = { id, path: candidate.dir };
+    const loaded = loadPlugins({ cwd: workspace, trusted: [...current, bound] });
     const plugin = loaded.plugins.find(entry => entry.id === id);
     if (!plugin) {
       const error = loaded.errors.find(entry => entry.source.includes(id));
       io.err(error?.message ?? `Plugin "${id}" has no valid manifest.`);
       return 1;
     }
-    savePluginTrust([...current, id]);
+    savePluginTrust([...current, bound]);
     io.out(`Trusted plugin ${plugin.id} (${plugin.commands.length} command${plugin.commands.length === 1 ? "" : "s"}, ${String(Object.keys(plugin.mcpServers).length)} MCP server${Object.keys(plugin.mcpServers).length === 1 ? "" : "s"}, ${String(plugin.skillDirs.length)} skill director${plugin.skillDirs.length === 1 ? "y" : "ies"}).`);
     return 0;
   } catch (error) {

@@ -25,14 +25,19 @@ Nothing is loaded unless its directory name is listed in the **user-level**
 ```json
 {
   "plugins": {
-    "trusted": ["reviewer"]
+    "trusted": [
+      { "id": "reviewer", "path": "C:\\Users\\me\\.ringko\\plugins\\reviewer" }
+    ]
   }
 }
 ```
 
-Trust is deliberately not read from a project file, so a cloned repository
-cannot enable its own plugin. Remove a name to disable the plugin. Untrusted
-directories are ignored before their manifests are parsed.
+Trust is bound to the resolved plugin directory, not just its name. Trust is
+deliberately not read from a project file, so a cloned repository cannot enable
+its own plugin. Legacy bare-id entries are accepted only for user-level roots
+(`~/.ringko`, `~/.agents`); a project directory always requires a path-bound
+entry. Remove an entry to disable the plugin. Untrusted directories are ignored
+before their manifests are parsed.
 
 `GET /api/plugins`, `RuntimeManager.plugins()` and `RuntimeContext.plugins()`
 expose trusted plugin inventories and manifest errors without starting the
@@ -41,9 +46,9 @@ user-level trust list as the CLI. Runtime agents see plugin skills and MCP
 servers through the normal tool and MCP registration paths.
 
 Use `ringko plugins` to list discovered directories and their trust state,
-`ringko plugins trust <id>` to validate and trust one, and
-`ringko plugins untrust <id>` to disable it. The command updates the user-level
-settings file and preserves every other key.
+`ringko plugins trust <id>` to validate and trust the selected directory, and
+`ringko plugins untrust <id>` to disable it. The command records a path-bound
+entry in the user-level settings file and preserves every other key.
 
 ## Manifest
 

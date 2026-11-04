@@ -49,6 +49,10 @@ export interface ProviderDefinition {
   models?: ModelDefinition[];
 }
 
+/** A path-bound plugin trust record; legacy bare ids remain in the union. */
+export interface PluginTrustEntry { id: string; path: string }
+export type PluginTrust = string | PluginTrustEntry;
+
 export interface RingkoConfig {
   workspace?: string;
   capabilities?: {
@@ -88,10 +92,14 @@ export interface RingkoConfig {
     keepRecent?: number;
     margin?: number;
   };
-  /** Declarative plugin trust. Only names listed here may contribute. */
+  /** Declarative plugin trust. Only entries listed here may contribute. */
   plugins?: {
-    /** Plugin ids (directory names) explicitly trusted by the user. */
-    trusted?: string[];
+    /**
+     * Trusted plugins. New entries are `{ id, path }` path-bound records.
+     * Legacy bare ids are accepted only for user-level plugin roots, never for
+     * a project directory.
+     */
+    trusted?: PluginTrust[];
   };
   /** Currently selected model, `"<providerName>/<modelId>"`. */
   model?: string;

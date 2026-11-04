@@ -62,6 +62,7 @@ import {
   removeOAuthAccount,
   removeSkill,
   saveMcpServers,
+  isRecord,
   savePluginTrust,
   saveProjectMcpServers,
   saveProviders,
@@ -76,6 +77,7 @@ import {
   type McpServerConfig,
   type ModelDefinition,
   type OAuthAccount,
+  type PluginTrust,
   type ProviderDefinition,
   type RingkoConfig,
 } from "@ringko-ai/config";
@@ -667,10 +669,14 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     });
   }
 
-  function trustedPlugins(): string[] {
+  function trustedPlugins(): PluginTrust[] {
     const trusted = loadConfig().plugins?.trusted;
     if (trusted === undefined) return [];
-    if (!Array.isArray(trusted) || trusted.some(name => typeof name !== "string")) throw new Error("Plugin trust must be an array of plugin names.");
+    if (!Array.isArray(trusted)) throw new Error("Plugin trust must be an array of plugin entries.");
+    for (const entry of trusted) {
+      const valid = typeof entry === "string" || (isRecord(entry) && typeof entry.id === "string" && typeof entry.path === "string");
+      if (!valid) throw new Error("Plugin trust must contain plugin names or { id, path } entries.");
+    }
     return trusted;
   }
 
@@ -681,18 +687,20 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     try {
       const current = trustedPlugins();
       if (trusted) {
-        if (!current.includes(name)) {
-          const candidates = discoverPluginCandidates({ cwd: workspace });
-          if (candidates.errors.length > 0) return json({ error: candidates.errors[0]!.message }, 400);
-          if (!candidates.candidates.some(candidate => candidate.id === name)) return json({ error: `Unknown plugin "${name}".` }, 404);
-          const loaded = loadPlugins({ cwd: workspace, trusted: [...current, name] });
+        const candidates = discoverPluginCandidates({ cwd: workspace });
+        if (candidates.errors.length > 0) return json({ error: candidates.errors[0]!.message }, 400);
+        const candidate = candidates.candidates.find(entry => entry.id === name);
+        if (!candidate) return json({ error: `Unknown plugin "${name}".` }, 404);
+        if (!candidate.trusted) {
+          const bound: PluginTrust = { id: name, path: candidate.dir };
+          const loaded = loadPlugins({ cwd: workspace, trusted: [...current, bound] });
           if (!loaded.plugins.some(plugin => plugin.id === name)) {
             return json({ error: loaded.errors.find(entry => entry.source.includes(name))?.message ?? `Plugin "${name}" has no valid manifest.` }, 400);
           }
-          savePluginTrust([...current, name]);
+          savePluginTrust([...current, bound]);
         }
       } else {
-        savePluginTrust(current.filter(entry => entry !== name));
+        savePluginTrust(current.filter(entry => (typeof entry === "string" ? entry : entry.id) !== name));
       }
       runtimeFor(workspace).reloadCapabilities();
       void runtimeFor(workspace).resetMcp().catch(error => writeDiagnostic("mcp.reset", String(error)));
