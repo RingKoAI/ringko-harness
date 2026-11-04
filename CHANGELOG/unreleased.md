@@ -1,5 +1,8 @@
 # Unreleased
 
+- Use ASCII status markers in the TUI task and todo panels instead of
+  emoji-rendered symbols.
+
 - Show a spinner next to a running session in the WebUI sidebar instead of a
   text suffix, including when the sidebar is collapsed.
 
