@@ -18,8 +18,9 @@ export type { RuntimeEvents } from "./runtime-events.ts";
 export { ToolManager } from "./tool-manager.ts";
 export { ExtensionRegistry } from "./extension-registry.ts";
 export { AgentFactory } from "./agent-factory.ts";
-export type { RuntimeAgent } from "./agent-factory.ts";
+export type { AgentFactoryDeps, RuntimeAgent } from "./agent-factory.ts";
 export { RuntimeSupervisor } from "./runtime-supervisor.ts";
+export type { RuntimeSupervisorOptions } from "./runtime-supervisor.ts";
 export type { AgentContribution, AgentContributionContext, Disposable, RuntimeContext, RuntimeContribution, RuntimeHost } from "./runtime-contribution.ts";
 export type { PermissionRule } from "./permissions.ts";
 
