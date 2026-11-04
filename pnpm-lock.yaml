@@ -160,9 +160,6 @@ importers:
       ink:
         specifier: ^7.1.1
         version: 7.1.1(@types/react@19.3.0)(react-devtools-core@8.0.0)(react@19.3.0)
-      ink-text-input:
-        specifier: ^6.0.0
-        version: 6.0.0(ink@7.1.1(@types/react@19.3.0)(react-devtools-core@8.0.0)(react@19.3.0))(react@19.3.0)
       marked:
         specifier: ^16.4.2
         version: 16.4.2
@@ -273,9 +270,6 @@ importers:
       '@ringko-ai/session':
         specifier: workspace:*
         version: link:../session
-      '@ringko-ai/tools':
-        specifier: workspace:*
-        version: link:../tools
 
   packages/webui:
     dependencies:
@@ -285,9 +279,6 @@ importers:
       '@ringko-ai/client':
         specifier: workspace:*
         version: link:../client
-      '@ringko-ai/harness':
-        specifier: workspace:*
-        version: link:../harness
       '@xterm/addon-fit':
         specifier: ^0.11.0
         version: 0.11.0
@@ -2725,13 +2716,6 @@ packages:
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
 
-  ink-text-input@6.0.0:
-    resolution: {integrity: sha512-Fw64n7Yha5deb1rHY137zHTAbSTNelUKuB5Kkk2HACXEtwIHBCf9OH2tP/LQ9fRYTl1F0dZgbW0zPnZk6FA9Lw==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      ink: '>=5'
-      react: '>=18'
-
   ink@7.1.1:
     resolution: {integrity: sha512-Y43xxa1ZSPvpmfLHcN5o+OdP8Rf8ykkNJEuKYOUNZKT8wXVNLFTtEm1nSDMQkfBH+YANF4Xuu0hhZ4ejqAtN2w==}
     engines: {node: '>=22'}
@@ -3935,10 +3919,6 @@ packages:
 
   tw-animate-css@1.4.0:
     resolution: {integrity: sha512-7bziOlRqH0hJx80h/3mbicLW7o8qLsH5+RaLR2t+OHM3D0JlWGODQKQ4cxbK7WlvmUxpcj6Kgu6EKqjrGFe3QQ==}
-
-  type-fest@4.41.0:
-    resolution: {integrity: sha512-TeTSQ6H5YHvpqVwBRcnLDCBnDOHWYu7IvGbHT6N8AOymcr9PJGjc1GTtiWZTYg0NCgYwvnYWEkVChQAr9bjfwA==}
-    engines: {node: '>=16'}
 
   type-fest@5.10.0:
     resolution: {integrity: sha512-NoSdpq/WEiAg5sjmBkmV/hfxv6HJH4NqPNrqjtSO5CwRmpsDfaf4begxW34KdJykH/l1yHtwBWQkCRdoXO8mPA==}
@@ -6571,13 +6551,6 @@ snapshots:
 
   inherits@2.0.4: {}
 
-  ink-text-input@6.0.0(ink@7.1.1(@types/react@19.3.0)(react-devtools-core@8.0.0)(react@19.3.0))(react@19.3.0):
-    dependencies:
-      chalk: 5.6.2
-      ink: 7.1.1(@types/react@19.3.0)(react-devtools-core@8.0.0)(react@19.3.0)
-      react: 19.3.0
-      type-fest: 4.41.0
-
   ink@7.1.1(@types/react@19.3.0)(react-devtools-core@8.0.0)(react@19.3.0):
     dependencies:
       '@alcalzone/ansi-tokenize': 0.3.1
@@ -8037,8 +8010,6 @@ snapshots:
       '@mixmark-io/domino': 2.2.0
 
   tw-animate-css@1.4.0: {}
-
-  type-fest@4.41.0: {}
 
   type-fest@5.10.0:
     dependencies:

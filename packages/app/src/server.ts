@@ -3,9 +3,8 @@
 // approval endpoint. Static assets from @ringko-ai/webui are served as well.
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import {
   loginAnthropic,
   loginGitHubCopilot,
@@ -120,6 +119,7 @@ import {
 } from "@ringko-ai/session";
 import { loadModel as resolveLoadedModel } from "./model.ts";
 import { json, readJson, sse } from "./server/http.ts";
+import { proxyDev, serveStatic } from "./server/static.ts";
 import { sessionTitleView, stripEventParts, stripMessageParts } from "./server/views.ts";
 import { WorkspaceReview } from "./workspace-review.ts";
 import { RuntimeManager, registerRuntimeTools, type RuntimeAgent } from "@ringko-ai/sdk/runtime";
@@ -187,18 +187,6 @@ interface InteractiveTerminal {
   onExit(handler: (event: { exitCode: number; signal?: number }) => void): void;
 }
 
-const MIME: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".ico": "image/x-icon",
-  ".woff2": "font/woff2",
-  ".map": "application/json; charset=utf-8",
-};
 
 function registerTools(
   ringko: RingKo,
@@ -1538,54 +1526,6 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     });
   }
 
-  async function proxyDev(request: Request, url: URL): Promise<Response> {
-    const target = new URL(url.pathname + url.search, options.devServerUrl);
-    const headers = new Headers(request.headers);
-    headers.delete("host");
-    const init: RequestInit = { method: request.method, headers, redirect: "manual" };
-    if (request.method !== "GET" && request.method !== "HEAD") {
-      init.body = await request.arrayBuffer();
-    }
-    try {
-      return await fetch(target, init);
-    } catch {
-      return new Response(
-        `Dev server unreachable at ${options.devServerUrl}. Start \`pnpm --filter @ringko-ai/webui dev\`.`,
-        { status: 502, headers: { "content-type": "text/plain; charset=utf-8" } },
-      );
-    }
-  }
-
-  async function serveStatic(pathname: string): Promise<Response> {
-    const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
-    const target = resolve(join(webuiDir, rel));
-    const withinRoot = relative(webuiDir, target);
-    if (withinRoot.startsWith("..") || withinRoot.includes("..")) return json({ error: "not found" }, 404);
-    let file = target;
-    try {
-      if (statSync(file).isDirectory()) file = join(file, "index.html");
-    } catch {
-      file = join(webuiDir, "index.html");
-    }
-    try {
-      const bytes = await readFile(file);
-      // Content-hashed bundles can be cached forever; HTML must revalidate so a
-      // rebuilt WebUI is picked up instead of pinning the previous asset names.
-      const hashedAsset = relative(webuiDir, file).split(sep)[0] === "assets";
-      return new Response(bytes, {
-        headers: {
-          "content-type": MIME[extname(file)] ?? "application/octet-stream",
-          "cache-control": hashedAsset ? "public, max-age=31536000, immutable" : "no-cache",
-        },
-      });
-    } catch {
-      return new Response("RingKo WebUI is not built yet. Run `pnpm --filter @ringko-ai/webui build`.", {
-        status: 404,
-        headers: { "content-type": "text/plain; charset=utf-8" },
-      });
-    }
-  }
-
   function terminalOriginAllowed(request: Request): boolean {
     const origin = request.headers.get("origin");
     if (!origin) return true;
@@ -2045,8 +1985,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         catch (error) { return json({ error: error instanceof Error ? error.message : "Invalid answer." }, 400); }
       }
       if (url.pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
-      if (options.devServerUrl) return await proxyDev(request, url);
-      return await serveStatic(url.pathname);
+      if (options.devServerUrl) return await proxyDev(options.devServerUrl, request, url);
+      return await serveStatic(webuiDir, url.pathname);
       };
       try {
         const response = await handleRequest();
