@@ -44,9 +44,9 @@ describe("TodoPanel", () => {
       { content: "Ship changes", activeForm: "Shipping changes", status: "pending" },
     ]);
     expect(text).toContain("3 steps (1 done, 1 in progress, 1 open)");
-    expect(text).toContain("✔ Write code");
-    expect(text).toContain("▪ Running tests");
-    expect(text).toContain("▫ Ship changes");
+    expect(text).toContain("[x] Write code");
+    expect(text).toContain("[>] Running tests");
+    expect(text).toContain("[ ] Ship changes");
     expect(text).not.toContain("Writing code");
     expect(text).not.toContain("Shipping changes");
     expect(await display([{ content: "Finished", status: "completed" }])).toContain("1 step (1 done, 0 open)");
@@ -57,7 +57,7 @@ describe("TodoPanel", () => {
       { content: "汉字汉字汉字汉字汉字\nNEXT\x1b[31mRED\x1b]0;malicious\x07", status: "in_progress", activeForm: "🔧汉字汉字汉字汉字汉字\nNEXT\x1b[31mRED\x1b]0;malicious\x07" },
     ], 18);
     expect(text).toContain("1 step (0 done");
-    expect(text).toContain("▪ 🔧汉字");
+    expect(text).toContain("[>] 🔧汉字");
     expect(text).toContain("…");
     expect(text).not.toContain("NEXT");
     expect(text).not.toContain("malicious");
