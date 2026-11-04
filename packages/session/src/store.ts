@@ -192,7 +192,6 @@ export class SessionHandle {
   readonly id: string;
   readonly header: SessionHeader;
 
-  private readonly store: SessionStore;
   private readonly mode: SessionOpenMode;
   private readonly events: SessionEvent[];
   private readonly buffer: string[] = [];
@@ -206,7 +205,7 @@ export class SessionHandle {
   private writeFailure: unknown;
 
   private constructor(
-    store: SessionStore,
+    _store: SessionStore,
     header: SessionHeader,
     dir: string,
     path: string,
@@ -214,7 +213,6 @@ export class SessionHandle {
     mode: SessionOpenMode,
     materialized: boolean,
   ) {
-    this.store = store;
     this.header = header;
     this.id = header.id;
     this.dir = dir;

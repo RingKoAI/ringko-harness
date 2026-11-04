@@ -353,14 +353,14 @@ export function createRingKo(config: RingKoConfig): RingKo {
     const keep = Math.max(0, compaction.keepRecent);
     let transcript: string;
     let shadowedSeqs: number[] | undefined;
-    const sourceMessages = messages ?? (session ? toChatSurface(session.all()) : history);
     if (session) {
       const selected = selectCompactionTail(toChatSurface(session.all()), keep);
       if (!selected) return { compacted: false };
       transcript = summaryTranscript(selected.shadowed.map(({ message }) => message));
       shadowedSeqs = selected.shadowed.map(node => node.seq);
     } else {
-      const rest = history.filter((message) => message.role !== "system");
+      const source = messages ?? history;
+      const rest = source.filter((message) => message.role !== "system");
       if (rest.length <= keep + 1) return { compacted: false };
       const middle = rest.slice(0, rest.length - keep);
       transcript = summaryTranscript(middle);
@@ -389,7 +389,7 @@ export function createRingKo(config: RingKoConfig): RingKo {
       session.flush();
       history = toChatMessages(session.all());
     } else {
-      history = compactMessages(history, summary, keep);
+      history = compactMessages(messages ?? history, summary, keep);
     }
     lastInputTokens = undefined;
     return { compacted: true, summary };

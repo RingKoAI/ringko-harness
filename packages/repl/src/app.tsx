@@ -23,10 +23,8 @@ import {
   type SessionHandle,
 } from "@ringko-ai/session";
 import {
-  discoverSkills,
   installSkill,
   skillInstallTargets,
-  loadMcpServers,
   modelLabel,
   configuredModelIds,
   PROVIDER_PRESETS,
@@ -50,7 +48,7 @@ import { ApprovalDialog } from "./components/ApprovalDialog.tsx";
 import { AskDialog } from "./components/AskDialog.tsx";
 import { AuthDialog, type AuthBox } from "./components/AuthDialog.tsx";
 import { RenameInput } from "./components/RenameInput.tsx";
-import { Selector, type SelectorAction, type SelectorItem } from "./components/Selector.tsx";
+import { Selector, type SelectorItem } from "./components/Selector.tsx";
 import { findCommand, parseInput, type SlashContext } from "./commands.ts";
 import { showMcpPicker, showSkillPicker, showTaskPicker, type PickerState } from "./pickers.ts";
 import { applyAgentEvent, finishPendingTools, nextId, noticeItem, userItem, type ReplItem } from "./state.ts";

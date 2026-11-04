@@ -4,7 +4,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import {
   loginAnthropic,
   loginGitHubCopilot,
@@ -34,7 +34,6 @@ import {
   Sandbox,
   createShellTool,
   interactiveShell,
-  type AskHandler,
 } from "@ringko-ai/tools";
 import {
   backendKey,
@@ -55,7 +54,6 @@ import {
   loadMcpServers,
   loadProjects,
   loadProviders,
-  knownModels,
   modelLabel,
   resolveContextLimits,
   ModelCatalogCache,

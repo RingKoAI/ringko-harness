@@ -250,9 +250,6 @@ export function repairInterruptedToolCalls(handle: HandleLike & { all(): readonl
     }
   }
   for (const [id, call] of pending) {
-    const message = call.started
-      ? "Tool outcome unknown after interruption. Check the external state before retrying an operation with side effects."
-      : "Tool was not started before the run was interrupted.";
     recordToolResult(
       handle,
       call.turn,

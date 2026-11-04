@@ -6,7 +6,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { writeDiagnostic } from "./diagnostics.ts";
-import { agentsRoot, findProjectRoot, mcpPaths, projectMcpPaths, ringkoRoot } from "./paths.ts";
+import { findProjectRoot, mcpPaths, projectMcpPaths } from "./paths.ts";
 import { loadPlugins, type LoadedPlugin } from "./plugins.ts";
 import { isRecord } from "./util.ts";
 
