@@ -11,7 +11,7 @@ export interface Conversation {
   usage: SessionUsage | null; model: string | null
 }
 export const emptyConversation = (): Conversation => ({ messages: [], busy: false, approval: null, question: null, tasks: [], jobs: [], todos: [], queue: [], partial: null, draft: '', error: null, loop: null, usage: null, model: null })
-type Transport = (input: { sessionId: string; prompt: string; attachments: string[]; loop?: { args: string } }, handlers: ChatHandlers) => { abort(): void }
+type Transport = (input: { sessionId?: string; prompt: string; attachments: string[]; loop?: { args: string } }, handlers: ChatHandlers) => { abort(): void }
 
 /** Owns each stream independently of the currently visible route. Late callbacks are discarded. */
 export class Conversations {
@@ -74,6 +74,20 @@ export class Conversations {
       if (!state.busy) this.resume(id)
     } else this.start(id, prompt, attachments, loop)
   }
+  /**
+   * Seed a brand-new conversation without creating a session first. The
+   * backend creates the session and reports its id on the first stream event;
+   * local state then migrates to that id.
+   */
+  sendNew(prompt: string, attachments: string[] = [], loop?: { args: string }, onCreated?: (id: string) => void): string {
+    if (this.disposed) throw new Error('Conversation manager is closed.')
+    prompt = prompt.trim()
+    if (!prompt || prompt.length > CONVERSATION_LIMITS.prompt || attachments.length > 16) throw new Error('Invalid message size.')
+    const pending = `pending:${crypto.randomUUID()}`
+    this.states.set(pending, emptyConversation())
+    this.start(pending, prompt, attachments, loop, { create: true, ...(onCreated ? { onCreated } : {}) })
+    return pending
+  }
   editQueued(id: string, messageId: string, prompt: string) {
     if (!prompt.trim() || prompt.length > CONVERSATION_LIMITS.prompt) throw new Error('Invalid queued message.')
     this.patch(id, { queue: this.get(id).queue.map(item => item.id === messageId ? { ...item, prompt: prompt.trim() } : item) })
@@ -94,23 +108,30 @@ export class Conversations {
       jobs: state.jobs.map(job => job.status === 'running' ? { ...job, status: 'unknown' } : job) })
   }
   dispose() { this.disposed = true; for (const id of [...this.runs.keys()]) this.stop(id); this.listeners.clear() }
-  private start(id: string, prompt: string, attachments: string[], loop?: { args: string }) {
+  private start(
+    id: string,
+    prompt: string,
+    attachments: string[],
+    loop?: { args: string },
+    options: { create?: boolean; onCreated?: (id: string) => void } = {},
+  ) {
     const token = Symbol(id); this.runs.set(id, { token, abort() {} })
-    this.patch(id, { busy: true, error: null, loop: null, messages: [...this.get(id).messages, { role: 'user', content: prompt }] })
+    let key = id
+    this.patch(key, { busy: true, error: null, loop: null, messages: [...this.get(key).messages, { role: 'user', content: prompt }] })
     const update = (change: (state: Conversation) => Partial<Conversation>) => {
-      if (this.runs.get(id)?.token === token) this.patch(id, change(this.get(id)))
+      if (this.runs.get(key)?.token === token) this.patch(key, change(this.get(key)))
     }
     const finish = (error?: string) => {
-      if (this.runs.get(id)?.token !== token) return
-      this.runs.delete(id)
-      const state = this.get(id)
-      this.patch(id, { busy: false, partial: null, approval: null, question: null, error: error ?? null, loop: null,
+      if (this.runs.get(key)?.token !== token) return
+      this.runs.delete(key)
+      const state = this.get(key)
+      this.patch(key, { busy: false, partial: null, approval: null, question: null, error: error ?? null, loop: null,
         ...(error ? { tasks: state.tasks.map(task => task.status === 'running' ? { ...task, status: 'unknown' as const } : task), jobs: state.jobs.map(job => job.status === 'running' ? { ...job, status: 'unknown' as const } : job) } : {}) })
-      this.report(error, id)
-      if (!error) queueMicrotask(() => this.resume(id))
+      this.report(error, key)
+      if (!error) queueMicrotask(() => this.resume(key))
     }
     try {
-      const handle = this.transport({ sessionId: id, prompt, attachments, ...(loop ? { loop } : {}) }, {
+      const handle = this.transport({ ...(options.create ? {} : { sessionId: key }), prompt, attachments, ...(loop ? { loop } : {}) }, {
         onDelta: delta => update(state => {
           const partial = state.partial ?? { content: '', reasoning: '' }
           const key = delta.kind === 'reasoning' ? 'reasoning' : 'content'
@@ -142,9 +163,19 @@ export class Conversations {
           const output = event.type === 'stdout' || event.type === 'stderr' ? `${job.output ?? ''}${data.content ?? '[truncated event]'}`.slice(-32768) : job.output
           return { jobs: [...state.jobs.filter(item => item.jobId !== event.jobId), { ...job, status, output, background: event.type === 'background' || job.background, lastSeq: event.seq, result: data.result ?? job.result }] }
         }),
-        onSessionMeta: () => this.report(undefined, id), onDone: () => finish(), onError: finish, onUnauthorized: () => finish('Unauthorized'),
+        onSession: sessionId => {
+          if (options.create !== true || !sessionId || sessionId === key) return
+          const state = this.states.get(key)
+          const run = this.runs.get(key)
+          this.states.delete(key); this.paused.delete(key); this.revisions.delete(key)
+          if (state) this.states.set(sessionId, state)
+          if (run) { this.runs.delete(key); this.runs.set(sessionId, run) }
+          key = sessionId
+          options.onCreated?.(sessionId)
+        },
+        onSessionMeta: () => this.report(undefined, key), onDone: () => finish(), onError: finish, onUnauthorized: () => finish('Unauthorized'),
       })
-      if (this.runs.get(id)?.token === token) this.runs.set(id, { token, ...handle })
+      if (this.runs.get(key)?.token === token) this.runs.set(key, { token, ...handle })
     } catch (error) { finish(error instanceof Error ? error.message : 'Request failed.') }
   }
 }

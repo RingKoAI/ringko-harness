@@ -80,7 +80,7 @@ export interface ReplProps {
   /** Optional cheaper model used to generate the session title. */
   smallModel?: ModelClient;
   /** Notified with the active session id (create, resume, switch). */
-  onSession?: (id: string) => void;
+  onSession?: (id: string | undefined) => void;
 }
 
 interface PendingApproval {
@@ -410,11 +410,10 @@ export function Repl(props: ReplProps) {
 
   useEffect(() => {
     if (backend) {
-      let cancelled = false;
       if (props.resumeSessionId) { setSessionId(props.resumeSessionId); onSession?.(props.resumeSessionId); }
       else if (props.pickSession) openSessionPicker();
-      else void backend.createSession().then(session => { if (!cancelled) { setSessionId(session.id); onSession?.(session.id); } }).catch(reportRemote);
-      return () => { cancelled = true; };
+      else onSession?.(undefined);
+      return;
     }
     const store = new SessionStore({ cwd: workspace });
     const activate = (session: SessionHandle, history: ChatMessage[], level: string) => {
@@ -905,13 +904,22 @@ export function Repl(props: ReplProps) {
     let id = sessionId;
     remoteSendingRef.current = true; busyRef.current = true; setRunning(true);
     try {
-      if (!id) { const session = await backend.createSession(); id = session.id; setSessionId(id); onSession?.(id); }
-      if (kind === "shell") await backend.request(`/api/sessions/${encodeURIComponent(id)}/shell`, { command: text });
-      else if (kind === "loop") {
-        const parsed = parseLoopArgs(text);
-        if (!parsed.ok) throw new Error(parsed.error);
-        await backend.run({ sessionId: id, prompt: parsed.options.prompt, loop: { args: text } });
-      } else await backend.run({ sessionId: id, prompt: text });
+      if (kind === "shell") {
+        if (!id) { const session = await backend.createSession(); id = session.id; setSessionId(id); onSession?.(id); }
+        await backend.request(`/api/sessions/${encodeURIComponent(id)}/shell`, { command: text });
+      } else {
+        const run = kind === "loop"
+          ? (() => {
+              const parsed = parseLoopArgs(text);
+              if (!parsed.ok) throw new Error(parsed.error);
+              return { prompt: parsed.options.prompt, loop: { args: text } };
+            })()
+          : { prompt: text };
+        // Seed the backend with the first prompt; it creates the session and
+        // returns its id, so no empty session exists before this message.
+        const started = await backend.run({ ...run, ...(id ? { sessionId: id } : {}) });
+        if (!id) { id = started.sessionId; setSessionId(id); onSession?.(id); }
+      }
     } catch (error) { reportRemote(error); }
     finally {
       remoteSendingRef.current = false;
@@ -943,7 +951,12 @@ export function Repl(props: ReplProps) {
       sendPrompt: text => { void submit(text); },
       clear: () => { setItems([]); setScrollOffset(0); },
       newSession: () => {
-        if (backend) { void backend.createSession().then(session => { setItems([]); setTaskViews([]); setViewedTaskId(undefined); setSessionId(session.id); onSession?.(session.id); }).catch(reportRemote); return; }
+        if (backend) {
+          setItems([]); setTaskViews([]); setViewedTaskId(undefined); setHistory([]);
+          setTodos([]); setTitle(undefined); setScrollOffset(0); setSessionId(undefined);
+          onSession?.(undefined);
+          return;
+        }
         const session = new SessionStore({ cwd: workspace }).create();
         try {
           recordSessionModel(session, modelLabelText);

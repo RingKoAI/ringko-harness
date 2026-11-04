@@ -36,7 +36,7 @@ it("keeps the session picker open after deleting a session", async () => {
     }
     return Response.json({ error: `Unexpected request ${path}` }, { status: 400 });
   } });
-  const app = render(<Repl backend={backend} workspace={root} model={async () => ({ content: "", toolCalls: [] })} modelLabel="Remote model" config={{}} />, { stdin: input as unknown as NodeJS.ReadStream, stdout: output as unknown as NodeJS.WriteStream, stderr: output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
+  const app = render(<Repl backend={backend} resumeSessionId="active" workspace={root} model={async () => ({ content: "", toolCalls: [] })} modelLabel="Remote model" config={{}} />, { stdin: input as unknown as NodeJS.ReadStream, stdout: output as unknown as NodeJS.WriteStream, stderr: output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
   try {
     await Bun.sleep(250);
     input.write("\x12"); await Bun.sleep(150);
@@ -51,6 +51,47 @@ it("keeps the session picker open after deleting a session", async () => {
     input.write("\x04"); await Bun.sleep(150);
     expect(text).toContain("cannot delete the active session.");
     expect(deleted).toEqual(["extra1", "extra2"]);
+  } finally {
+    app.unmount(); input.destroy(); output.destroy();
+    if (previous === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("creates the backend session from the first prompt instead of on mount", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rkh-lazy-session-"));
+  const previous = process.env.RINGKO_HOME; process.env.RINGKO_HOME = root;
+  const input = new PassThrough(), output = new PassThrough();
+  Object.assign(input, { isTTY: true, setRawMode: () => input, ref: () => input, unref: () => input });
+  Object.assign(output, { columns: 100, rows: 30, isTTY: true });
+  let creates = 0;
+  const runs: Array<{ sessionId?: string; prompt: string }> = [];
+  const selected: Array<string | undefined> = [];
+  const snapshot: SessionSnapshot = { id: "seeded", instance: "fixture", revision: 0, title: null, summary: null, archived: false, messages: [], events: [], busy: false, approvals: [], questions: [], tasks: [], todos: [], jobs: [], partial: null, loop: null, error: null };
+  const backend = new BackendClient({ fetch: async (url, init) => {
+    const path = String(url);
+    if (path === "/api/sessions" && init?.method === "POST") { creates += 1; return Response.json({ id: "empty" }); }
+    if (path === "/api/sessions") return Response.json([]);
+    if (path === "/api/info") return Response.json({ model: "Remote model", modelId: "Remote/model", thinking: "high", expandThinking: false, expandTools: false, tools: ["read"], providers: [] });
+    if (path === "/api/sync") return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('event: sync\ndata: {"instance":"fixture","revision":0,"kind":"reset"}\n\n')); } }));
+    if (path === "/api/runs" && init?.method === "POST") {
+      runs.push(JSON.parse(String(init.body)) as { sessionId?: string; prompt: string });
+      return Response.json({ sessionId: "seeded" }, { status: 202 });
+    }
+    if (path === "/api/sessions/seeded/snapshot") return Response.json(snapshot);
+    return Response.json({ error: `Unexpected request ${path}` }, { status: 400 });
+  } });
+  const app = render(<Repl backend={backend} onSession={id => selected.push(id)} workspace={root} model={async () => ({ content: "", toolCalls: [] })} modelLabel="Remote model" config={{}} />, { stdin: input as unknown as NodeJS.ReadStream, stdout: output as unknown as NodeJS.WriteStream, stderr: output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
+  try {
+    await Bun.sleep(250);
+    expect(creates).toBe(0);
+    input.write("hello"); await Bun.sleep(50); input.write("\r");
+    await Bun.sleep(350);
+    expect(creates).toBe(0);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.sessionId).toBeUndefined();
+    expect(runs[0]?.prompt).toBe("hello");
+    expect(selected).toContain("seeded");
   } finally {
     app.unmount(); input.destroy(); output.destroy();
     if (previous === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previous;

@@ -4,7 +4,7 @@ import type { ChatHandlers } from '../src/api'
 import type { SessionSnapshot } from '@ringko-ai/client'
 
 function fixture() {
-  const calls: { input: { sessionId: string; prompt: string }; handlers: ChatHandlers; aborted: boolean }[] = []
+  const calls: { input: { sessionId?: string; prompt: string }; handlers: ChatHandlers; aborted: boolean }[] = []
   const errors: (string | undefined)[] = []
   const manager = new Conversations((input, handlers) => { const call = { input, handlers, aborted: false }; calls.push(call); return { abort() { call.aborted = true } } }, error => errors.push(error))
   return { manager, calls, errors }
@@ -47,6 +47,22 @@ it('stops only the selected run, ignores late callbacks and pauses its queue', a
   expect(calls[0].aborted).toBe(true); expect(calls[1].aborted).toBe(false)
   manager.resume('a'); expect(calls).toHaveLength(3)
 })
+it('seeds a new conversation and migrates to the backend-created session', () => {
+  const { manager, calls, errors } = fixture()
+  let created: string | undefined
+  const pending = manager.sendNew('hello', [], undefined, id => { created = id })
+  expect(calls[0].input.sessionId).toBeUndefined()
+  expect(manager.get(pending).messages[0]).toMatchObject({ role: 'user', content: 'hello' })
+  calls[0].handlers.onSession?.('real-session')
+  expect(created).toBe('real-session')
+  expect(manager.peek(pending)).toBeUndefined()
+  expect(manager.get('real-session').messages[0]).toMatchObject({ role: 'user', content: 'hello' })
+  calls[0].handlers.onAssistant({ content: 'answer', reasoning: null, toolCalls: [], turn: 1 })
+  calls[0].handlers.onDone({ sessionId: 'real-session', content: 'answer', turns: 1 })
+  expect(manager.get('real-session').messages.at(-1)?.content).toBe('answer')
+  expect(errors).toEqual([undefined])
+})
+
 it('rejects stale history loads, oversized input and excessive queued work', () => {
   const { manager } = fixture(); const old = manager.get('a')
   manager.patch('a', { draft: 'keep this' }); manager.load('a', { messages: [{ role: 'user', content: 'old' }] }, old)

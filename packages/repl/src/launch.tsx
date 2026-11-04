@@ -35,7 +35,7 @@ export async function launchRepl(options: LaunchReplOptions): Promise<string | u
     const app = render(
       createElement(Repl, {
         ...options,
-        onSession: (id: string) => {
+        onSession: (id: string | undefined) => {
           lastSessionId = id;
         },
       }),

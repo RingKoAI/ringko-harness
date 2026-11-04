@@ -28,6 +28,7 @@ export class BackendClient {
   sessions(): Promise<SessionMeta[]> { return this.request("/api/sessions"); }
   createSession(): Promise<SessionMeta> { return this.request("/api/sessions", {}, "POST"); }
   snapshot(id: string, signal?: AbortSignal): Promise<SessionSnapshot> { return this.request(`/api/sessions/${encodeURIComponent(id)}/snapshot`, undefined, "GET", signal); }
+  /** Omit `sessionId` to let the backend create the session from the prompt. */
   run(input: RunInput): Promise<{ sessionId: string }> { return this.request("/api/runs", input); }
   stop(id: string): Promise<unknown> { return this.request(`/api/sessions/${encodeURIComponent(id)}/stop`, {}); }
   skills(signal?: AbortSignal): Promise<SkillEntry[]> { return this.request("/api/skills", undefined, "GET", signal); }

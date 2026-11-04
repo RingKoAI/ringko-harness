@@ -54,7 +54,8 @@ export interface SessionSnapshot {
   usage?: SessionUsage | null;
 }
 export interface SyncNotice { instance: string; revision: number; sessionId?: string; kind: "session" | "activity" | "config" | "workspace" | "reset" }
-export interface RunInput { sessionId: string; prompt: string; attachments?: string[]; loop?: { args: string } }
+/** Omit `sessionId` to have the backend seed and create the session. */
+export interface RunInput { sessionId?: string; prompt: string; attachments?: string[]; loop?: { args: string } }
 
 export interface SkillEntry {
   name: string;

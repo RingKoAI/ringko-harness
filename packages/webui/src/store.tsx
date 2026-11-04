@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { UnauthorizedError, backendClient, createSession, fetchInfo, fetchSnapshot, fetchSessions, respondApproval, streamChat, stopSession, answerQuestion, jobAction, type QuestionOutput, type Info, type SessionMeta } from '@/api'
+import { UnauthorizedError, backendClient, fetchInfo, fetchSnapshot, fetchSessions, respondApproval, streamChat, stopSession, answerQuestion, jobAction, type QuestionOutput, type Info, type SessionMeta } from '@/api'
 import { BackendError } from '@ringko-ai/client'
 import { Conversations, emptyConversation, type Conversation } from '@/lib/conversations'
 
@@ -49,7 +49,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => { clearTimeout(timer); watch.close() }
   }, [refreshSessions, refreshInfo, unauthorized])
   useEffect(() => {
-    if (!sessionId) return
+    if (!sessionId || sessionId.startsWith('pending:')) return
     const subscription = backendClient.watchSession(sessionId, snapshot => conversations.synchronize(snapshot), error => {
       if (error instanceof BackendError && error.status === 401) setUnauthorized(true)
       else if (error instanceof BackendError && error.status === 404) { conversations.patch(sessionId, { busy: false, error: 'Session was deleted in another client.' }); refreshSessions() }
@@ -64,18 +64,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (expected.busy) return
     fetchSnapshot(id).then(data => { if (conversations.get(id) === expected) conversations.synchronize(data) }).catch(reportError)
   }, [conversations, select])
-  const creating = useRef<Promise<string> | null>(null)
-  const ensureSession = useCallback(() => {
-    if (selected.current) return Promise.resolve(selected.current)
-    if (!creating.current) {
-      const version = selectionVersion.current
-      creating.current = createSession().then(meta => { conversations.get(meta.id); if (selectionVersion.current === version) { conversations.patch(meta.id, { draft: newDraftRef.current }); newDraftRef.current = ''; setNewDraft(''); select(meta.id) }; refreshSessions(); return meta.id }).finally(() => { creating.current = null })
-    }
-    return creating.current
-  }, [conversations, select, refreshSessions])
   const send = useCallback((prompt: string, attachments?: string[], loop?: { args: string }) => {
-    void ensureSession().then(id => conversations.send(id, prompt, attachments, loop)).catch(reportError)
-  }, [conversations, ensureSession])
+    try {
+      const id = selected.current
+      if (id) {
+        conversations.send(id, prompt, attachments, loop)
+        return
+      }
+      newDraftRef.current = ''; setNewDraft('')
+      const pending = conversations.sendNew(prompt, attachments, loop, created => {
+        select(created)
+        refreshSessions()
+      })
+      select(pending)
+    } catch (error) { reportError(error) }
+  }, [conversations, select, refreshSessions])
   /** Select a session and start a run without fetching its snapshot first. */
   const sendTo = useCallback((id: string, prompt: string) => {
     select(id)
@@ -83,9 +86,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [conversations, select])
   const newChat = useCallback(() => {
     newDraftRef.current = ''; setNewDraft(''); select()
-    const version = selectionVersion.current
-    void createSession().then(meta => { conversations.get(meta.id); if (selectionVersion.current === version) select(meta.id); refreshSessions() }).catch(reportError)
-  }, [select, conversations, refreshSessions])
+  }, [select])
   const stop = useCallback(() => {
     const id = selected.current; if (!id) return
     conversations.stop(id); void stopSession(id).catch(reportError)
