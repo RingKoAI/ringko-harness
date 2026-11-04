@@ -303,3 +303,34 @@ it("includes contribution tools in runtime previews", async () => isolated(async
     await runtime.close();
   }
 }));
+
+it("runs tool hooks and blocks execution when a pre-execute hook fails", async () => isolated(async directory => {
+  const runtime = new RuntimeManager(directory);
+  const events: string[] = [];
+  let executions = 0;
+  runtime.events.on("tool/pre-execute", event => {
+    events.push(`pre:${event.toolName}`);
+    throw new Error("blocked by policy");
+  });
+  runtime.events.on("tool/post-execute", event => {
+    events.push(`post:${event.toolName}:${event.failed}`);
+  });
+  const managed = runtime.createAgent({}, {
+    model: async request => request.messages.some(message => message.role === "tool")
+      ? { content: "done", toolCalls: [] }
+      : { content: "", toolCalls: [{ id: "call-hook", name: "hook_fixture", arguments: {} }] },
+  });
+  managed.agent.register(defineTool({
+    name: "hook_fixture",
+    description: "Hook fixture",
+    inputSchema: { type: "object", properties: {} },
+    parseInput: () => ({}),
+    assessRisk: () => ({ kind: "safe", reason: "Fixture" }),
+    execute: () => { executions += 1; return "ok"; },
+  }));
+  try {
+    expect((await managed.agent.run("use the hook")).content).toBe("done");
+    expect(executions).toBe(0);
+    expect(events).toEqual(["pre:hook_fixture", "post:hook_fixture:true"]);
+  } finally { managed.close(); await runtime.close(); }
+}));

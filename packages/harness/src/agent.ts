@@ -98,6 +98,18 @@ export interface AgentRunResult {
   usage?: ModelUsage;
 }
 
+export interface ToolExecutionEvent {
+  toolName: string;
+  input: unknown;
+  turn: number;
+  callId?: string;
+}
+
+export interface ToolExecutionResult extends ToolExecutionEvent {
+  output: unknown;
+  failed: boolean;
+}
+
 export interface AgentOptions {
   onDelta?: (delta: ModelDelta) => void;
   jobs?: JobManager;
@@ -117,6 +129,10 @@ export interface AgentOptions {
   accessMode?: AccessMode;
   /** Max parallel (non-exclusive) tool calls per turn (default: 10). */
   maxParallelTools?: number;
+  /** Runs before a tool call; throwing blocks execution. */
+  beforeTool?: (event: ToolExecutionEvent) => void | Promise<void>;
+  /** Runs after a tool call settles; hook failures are reported as tool failures. */
+  afterTool?: (event: ToolExecutionResult) => void | Promise<void>;
 }
 
 const DEFAULT_MAX_PARALLEL_TOOLS = 10;
@@ -153,6 +169,8 @@ export class Agent {
   private readonly signal?: AbortSignal;
   private readonly accessMode: AccessMode;
   private readonly maxParallelTools: number;
+  private readonly beforeTool?: AgentOptions["beforeTool"];
+  private readonly afterTool?: AgentOptions["afterTool"];
   /** Serializes approval prompts so a host sees at most one at a time. */
   private approvalChain: Promise<unknown> = Promise.resolve();
 
@@ -185,6 +203,8 @@ export class Agent {
       throw new TypeError("maxParallelTools must be a positive integer.");
     }
     this.maxParallelTools = options.maxParallelTools ?? DEFAULT_MAX_PARALLEL_TOOLS;
+    this.beforeTool = options.beforeTool;
+    this.afterTool = options.afterTool;
   }
 
   async run(prompt?: string): Promise<AgentRunResult> {
@@ -334,12 +354,27 @@ export class Agent {
       message: { role: "assistant", content: "", toolCalls: [call] },
       toolName: call.name,
     });
+    const event: ToolExecutionEvent = {
+      toolName: call.name,
+      input: call.arguments,
+      turn,
+      ...(call.id ? { callId: call.id } : {}),
+    };
+    let output: unknown;
+    let failed = false;
     try {
-      const output = await this.tools.call(call.name, call.arguments, this.approvalHandler(), this.accessMode, { signal: this.signal, callId: call.id, jobs: this.jobs });
-      return { output, failed: false };
+      await this.beforeTool?.(event);
+      output = await this.tools.call(call.name, call.arguments, this.approvalHandler(), this.accessMode, { signal: this.signal, callId: call.id, jobs: this.jobs });
     } catch (error) {
-      return { output: error instanceof Error ? error.message : "Tool execution failed.", failed: true };
+      failed = true;
+      output = error instanceof Error ? error.message : "Tool execution failed.";
     }
+    try {
+      await this.afterTool?.({ ...event, output, failed });
+    } catch (error) {
+      return { output: error instanceof Error ? error.message : "Tool post-execution hook failed.", failed: true };
+    }
+    return { output, failed };
   }
 
   /** Wrap the approval handler so concurrent calls prompt one at a time. */

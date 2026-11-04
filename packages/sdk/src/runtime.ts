@@ -5,7 +5,7 @@ import { EventBus, EventLog, Scheduler, createTimeSource } from "@ringko-ai/runt
 import { sessionTodos } from "@ringko-ai/session";
 import { Sandbox, createTodoStore, registerNetworkTools, registerSessionQueryTools, registerSessionTools, registerShellTools, registerWorkspaceTools, type AskHandler, type TodoItem } from "@ringko-ai/tools";
 import { resolveWorkflow, workflowAllowsTool, workflowInstructions, type Workflow } from "@ringko-ai/workflow";
-import { abortable } from "@ringko-ai/harness";
+import { abortable, type ToolExecutionEvent, type ToolExecutionResult } from "@ringko-ai/harness";
 import { createRingKo, isAccessMode, type AgentEvent, type RingKo, type RingKoConfig as AgentConfig } from "./index.ts";
 import { registerRuntimeSkills } from "./skills.ts";
 import { PermissionManager } from "./permissions.ts";
@@ -25,6 +25,8 @@ export interface RuntimeEvents extends Record<string, unknown> {
   "run/after": { content: string };
   "run/error": { error: unknown };
   "agent/event": AgentEvent;
+  "tool/pre-execute": ToolExecutionEvent;
+  "tool/post-execute": ToolExecutionResult;
   "tool/permission": { toolName: string; target?: string; decision: "allow" | "deny" | "ask" | "default" };
 }
 
@@ -202,6 +204,12 @@ export class RuntimeManager {
         this.log.append("session", { type: event.type, turn: event.turn, toolName: event.toolName ?? null });
         void this.events.parallel("agent/event", event).catch(error => writeDiagnostic("runtime.event", String(error)));
         options.onEvent?.(event);
+      },
+      onToolBefore: async event => {
+        await this.events.serial("tool/pre-execute", event);
+      },
+      onToolAfter: async event => {
+        await this.events.parallel("tool/post-execute", event).catch(error => writeDiagnostic("runtime.tool.post", String(error)));
       },
     });
     const toolSandbox = registerRuntimeTools(agent, config, this.workspace, host, options.session);

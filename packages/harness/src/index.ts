@@ -41,6 +41,8 @@ export type {
   ModelTurn,
   ModelUsage,
   ReasoningDetail,
+  ToolExecutionEvent,
+  ToolExecutionResult,
   ToolMessageContent,
 } from "./agent.ts";
 export { estimateMessagesTokens, estimateTokens, estimateToolsTokens } from "./tokens.ts";
