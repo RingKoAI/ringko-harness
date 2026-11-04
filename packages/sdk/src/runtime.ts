@@ -15,6 +15,7 @@ import type { AgentContribution, AgentContributionContext, Disposable, RuntimeCo
 export { registerRuntimeTools } from "./runtime-tools.ts";
 export type { CapabilitySnapshot } from "./capabilities.ts";
 export { ToolManager } from "./tool-manager.ts";
+export { RuntimeSupervisor } from "./runtime-supervisor.ts";
 export type { AgentContribution, AgentContributionContext, Disposable, RuntimeContext, RuntimeContribution, RuntimeHost } from "./runtime-contribution.ts";
 export type { PermissionRule } from "./permissions.ts";
 

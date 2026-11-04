@@ -1,4 +1,5 @@
 import { applyProxyEnv, defaultProjectWorkspace } from "@ringko-ai/config";
+import { RuntimeSupervisor } from "@ringko-ai/sdk/runtime";
 import { startServer } from "./server.ts";
 import { canonicalWorkspace, sharedPort } from "@ringko-ai/client/local";
 
@@ -16,9 +17,11 @@ const workspace = canonicalWorkspace(explicitWorkspace ?? defaultProjectWorkspac
 const configPath = option("--config");
 const shared = args.includes("--shared");
 
+const runtimeHost = new RuntimeSupervisor();
 const server = startServer({
   workspace,
   shared,
+  runtimeHost,
   ...(configPath ? { configPath } : {}),
   ...(portArg ? { port: Number(portArg) } : shared ? { port: sharedPort(workspace, configPath) } : {}),
   ...(dev ? { devServerUrl } : {}),
@@ -29,7 +32,11 @@ process.stdout.write(`RingKo WebUI (${dev ? `dev -> ${devServerUrl}` : "static"}
 
 const shutdown = (): void => {
   server.stop();
-  process.exit(0);
+  const bounded = Promise.race([
+    runtimeHost.close(),
+    new Promise<void>(resolve => setTimeout(resolve, 2_000)),
+  ]);
+  void bounded.finally(() => process.exit(0));
 };
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

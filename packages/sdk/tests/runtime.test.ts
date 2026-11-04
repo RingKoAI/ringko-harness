@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { defineTool } from "@ringko-ai/harness";
 import { saveWorkflowFile } from "@ringko-ai/workflow";
 import { SessionStore, sessionTodos } from "@ringko-ai/session";
-import { RuntimeManager } from "../src/runtime.ts";
+import { RuntimeManager, RuntimeSupervisor } from "../src/runtime.ts";
 
 async function isolated(test: (directory: string) => Promise<void>) {
   const directory = mkdtempSync(join(tmpdir(), "ringko-runtime-"));
@@ -19,6 +19,20 @@ async function isolated(test: (directory: string) => Promise<void>) {
     rmSync(directory, { recursive: true, force: true });
   }
 }
+
+it("supervises one runtime per workspace and closes idempotently", async () => isolated(async directory => {
+  const supervisor = new RuntimeSupervisor();
+  const workspace = join(directory, "workspace");
+  const first = supervisor.get(workspace);
+  expect(supervisor.get(workspace)).toBe(first);
+  const second = supervisor.get(join(directory, "other"));
+  expect(second).not.toBe(first);
+  expect(supervisor.list()).toHaveLength(2);
+  expect(first.log).toBe(supervisor.log);
+  await Promise.all([supervisor.close(), supervisor.close()]);
+  expect(supervisor.list()).toEqual([]);
+  expect(() => supervisor.get(workspace)).toThrow("closed");
+}));
 
 it("restores historical task snapshots through plan and persists update_plan changes", async () => isolated(async directory => {
   const store = new SessionStore({ root: join(directory, "sessions") });

@@ -90,7 +90,7 @@ import {
 } from "@ringko-ai/mcp";
 import { discoverModels } from "@ringko-ai/providers";
 import { listWorkflows, resolveWorkflow } from "@ringko-ai/workflow";
-import { EventLog, createTimeSource } from "@ringko-ai/runtime";
+import { createTimeSource } from "@ringko-ai/runtime";
 import {
   SessionStore,
   forkSession,
@@ -126,7 +126,7 @@ import { proxyDev, serveStatic } from "./server/static.ts";
 import { startInteractiveTerminal, type InteractiveTerminal } from "./server/terminal.ts";
 import { sessionTitleView, stripEventParts, stripMessageParts } from "./server/views.ts";
 import { WorkspaceReview } from "./workspace-review.ts";
-import { RuntimeManager, type RuntimeAgent } from "@ringko-ai/sdk/runtime";
+import { RuntimeManager, RuntimeSupervisor, type RuntimeAgent } from "@ringko-ai/sdk/runtime";
 import { PROTOCOL_VERSION } from "@ringko-ai/protocol";
 import { SyncManager } from "./services/sync.ts";
 import { RunStateManager } from "./services/runs.ts";
@@ -152,6 +152,8 @@ export interface ServerOptions {
   authToken?: string;
   /** Auto-shared services stay pinned to one workspace; clients never silently switch tools' cwd. */
   shared?: boolean;
+  /** Process-level runtime owner; the server creates one when omitted. */
+  runtimeHost?: RuntimeSupervisor;
 }
 
 export interface RingkoServer {
@@ -280,21 +282,18 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     sync.publish("workspace");
   }
 
-  // Connected MCP servers for the active workspace (lazily established, cached).
-  const runtimes = new Map<string, RuntimeManager>();
+  // The main entry owns the runtimes; the server only resolves them by workspace.
+  const runtimeHost = options.runtimeHost ?? new RuntimeSupervisor();
   function runtimeFor(cwd: string): RuntimeManager {
-    const path = resolve(cwd);
-    let runtime = runtimes.get(path);
-    if (!runtime) { runtime = new RuntimeManager(path, eventLog); runtimes.set(path, runtime); }
-    return runtime;
+    return runtimeHost.get(cwd);
   }
 
   function resetMcp(): void {
-    for (const runtime of runtimes.values()) void runtime.resetMcp().catch(() => {});
+    for (const runtime of runtimeHost.list()) void runtime.resetMcp().catch(() => {});
   }
 
   // Runtime event log + a time source; the model watches them via `subscribe`.
-  const eventLog = new EventLog();
+  const eventLog = runtimeHost.log;
   const stopTimeSource = createTimeSource(eventLog, { intervalMs: 60_000 });
   const startupConfig = readConfig();
   const startupSandbox = typeof startupConfig === "string" ? undefined : new Sandbox({ workspace, mode: startupConfig.sandbox?.mode ?? "workspace-write", additionalWritableRoots: startupConfig.sandbox?.additionalWritableRoots });
@@ -1752,7 +1751,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname === "/api/backend" && request.method === "GET") return json({ protocol: PROTOCOL_VERSION, instance: sync.instance, workspace, configPath: options.configPath ? resolve(options.configPath) : null });
       if (url.pathname === "/api/backend/stop" && request.method === "POST") {
         if (activeRuns.size) return json({ error: "Stop active sessions before stopping the backend." }, 409);
-        setTimeout(() => { releaseOwnership(); modelCatalog.dispose(); sync.close(); stopTimeSource(); for (const id of terminalSessions.keys()) removeTerminal(id, true); for (const runtime of runtimes.values()) void runtime.close().catch(error => writeDiagnostic("runtime.close", String(error))); server.stop(true); }, 50);
+        setTimeout(() => { releaseOwnership(); modelCatalog.dispose(); sync.close(); stopTimeSource(); for (const id of terminalSessions.keys()) removeTerminal(id, true); void runtimeHost.close().catch(error => writeDiagnostic("runtime.close", String(error))); server.stop(true); }, 50);
         return json({ ok: true });
       }
       if (url.pathname === "/api/sync" && request.method === "GET") return sync.stream(request.signal);
@@ -1950,7 +1949,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       modelCatalog.dispose(); sync.close(); stopTimeSource();
       for (const run of activeRuns.values()) run.abort();
       for (const id of terminalSessions.keys()) removeTerminal(id, true);
-      for (const runtime of runtimes.values()) void runtime.close().catch(() => {});
+      void runtimeHost.close().catch(() => {});
       server.stop(true);
     },
   };

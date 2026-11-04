@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { defaultProjectWorkspace } from "@ringko-ai/config";
+import { RuntimeSupervisor } from "@ringko-ai/sdk/runtime";
 import { findLiveBackend } from "../../backend.ts";
 import type { CliIo, ParsedArgs } from "../types.ts";
 
@@ -15,9 +16,11 @@ export async function serveCommand(parsed: ParsedArgs, io: CliIo): Promise<numbe
     return 0;
   }
   let server;
+  const runtimeHost = new RuntimeSupervisor();
   try {
-    server = startServer({ workspace, port: parsed.port, configPath, shared: parsed.shared, authToken: process.env.RINGKO_WEB_TOKEN?.trim() });
+    server = startServer({ workspace, port: parsed.port, configPath, shared: parsed.shared, authToken: process.env.RINGKO_WEB_TOKEN?.trim(), runtimeHost });
   } catch (error) {
+    void runtimeHost.close();
     const running = await findLiveBackend({ workspace, configPath });
     if (running) {
       io.out(`RingKo backend / WebUI: ${running.url}`);
@@ -29,7 +32,11 @@ export async function serveCommand(parsed: ParsedArgs, io: CliIo): Promise<numbe
   }
   io.out(`RingKo backend / WebUI: ${server.url}`);
   await new Promise<void>(finish => {
-    const shutdown = () => { process.off("SIGINT", shutdown); process.off("SIGTERM", shutdown); server.stop(); finish(); };
+    const shutdown = () => {
+      process.off("SIGINT", shutdown); process.off("SIGTERM", shutdown); server.stop();
+      const bounded = Promise.race([runtimeHost.close(), new Promise<void>(resolve => setTimeout(resolve, 2_000))]);
+      void bounded.finally(finish);
+    };
     process.once("SIGINT", shutdown); process.once("SIGTERM", shutdown);
   });
   return 0;
