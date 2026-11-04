@@ -1,4 +1,4 @@
-import { Plus, Trash2 } from 'lucide-react'
+import { LoaderCircle, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { createSkill, fetchSkills, removeSkill, type SkillEntry } from '@/api'
@@ -16,14 +16,24 @@ export function SkillsPage() {
   const [description, setDescription] = useState('')
   const [body, setBody] = useState('')
   const [busy, setBusy] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
-  const load = useCallback(() => {
-    fetchSkills()
-      .then(setSkills)
-      .catch((cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)))
+  const load = useCallback(async (): Promise<void> => {
+    setLoading(true)
+    setLoadError(null)
+    try {
+      setSkills(await fetchSkills())
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      setLoadError(message)
+      toast.error(message)
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
-  useEffect(load, [load])
+  useEffect(() => { void load() }, [load])
 
   async function create(): Promise<void> {
     const value = name.trim()
@@ -48,11 +58,14 @@ export function SkillsPage() {
   }
 
   async function remove(dir: string): Promise<void> {
+    setBusy(true)
     try {
       setSkills(await removeSkill(dir))
       toast.success(t('skills.removed'))
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -65,7 +78,14 @@ export function SkillsPage() {
           <Badge variant="outline">{list.length}</Badge>
         </CardHeader>
         <CardContent className="space-y-2">
-          {list.length === 0 ? (
+          {loading && skills.length === 0 ? (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+              {t('skills.loading')}
+            </p>
+          ) : loadError && skills.length === 0 ? (
+            <p className="text-xs text-destructive">{t('skills.loadFailed')}</p>
+          ) : list.length === 0 ? (
             <p className="text-xs text-muted-foreground">{t('skills.empty')}</p>
           ) : (
             list.map((skill) => (
@@ -80,7 +100,7 @@ export function SkillsPage() {
                   ) : null}
                   <p className="truncate font-mono text-[10px] text-muted-foreground">{skill.dir}</p>
                 </div>
-                <Button size="icon" variant="ghost" onClick={() => void remove(skill.dir)}>
+                <Button size="icon" variant="ghost" onClick={() => void remove(skill.dir)} disabled={busy}>
                   <Trash2 />
                 </Button>
               </div>
@@ -93,9 +113,15 @@ export function SkillsPage() {
 
   return (
     <div className="space-y-3">
-      <div>
-        <p className="text-sm font-medium">{t('settings.skills')}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{t('skills.hint')}</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium">{t('settings.skills')}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{t('skills.hint')}</p>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}>
+          <RefreshCw className={loading ? 'animate-spin' : undefined} data-icon="inline-start" />
+          {t('workspace.refresh')}
+        </Button>
       </div>
 
       <Card>

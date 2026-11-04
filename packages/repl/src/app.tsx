@@ -22,6 +22,8 @@ import {
   type SessionHandle,
 } from "@ringko-ai/session";
 import {
+  discoverSkills,
+  loadMcpServers,
   modelLabel,
   configuredModelIds,
   PROVIDER_PRESETS,
@@ -88,6 +90,11 @@ interface PickerState {
   items: SelectorItem[];
   onSelect: (value: string) => void;
   actions?: SelectorAction[];
+}
+
+interface McpStatus {
+  servers: Array<{ name: string; tools: Array<{ name: string; description?: string | null }> }>;
+  errors: Array<{ name: string; message: string }>;
 }
 
 function sessionItems(store: SessionStore, limit = 20): SelectorItem[] {
@@ -342,6 +349,72 @@ export function Repl(props: ReplProps) {
     };
     show();
   }, [backend, sessionId, reportRemote, workspace, resumeSession, print]);
+
+  const openSkillPicker = useCallback((): void => {
+    const skills = discoverSkills({ cwd: workspace });
+    if (skills.length === 0) { print("(no skills)"); return; }
+    setPicker({
+      title: "Skills",
+      items: skills.map(skill => ({
+        value: skill.dir,
+        label: skill.name,
+        description: `${skill.source} · ${skill.scope}${skill.description ? ` · ${skill.description}` : ""}`,
+        group: skill.scope,
+      })),
+      onSelect: dir => {
+        const skill = skills.find(entry => entry.dir === dir);
+        if (skill) {
+          print([skill.name, `${skill.source} · ${skill.scope}`, skill.dir, ...(skill.description ? [skill.description] : [])].join("\n"));
+        }
+        setPicker(null);
+      },
+    });
+  }, [workspace, print]);
+
+  const openMcpPicker = useCallback((): void => {
+    let configured;
+    try { configured = loadMcpServers({ cwd: workspace }); }
+    catch (error) { print(error instanceof Error ? error.message : "Cannot load MCP configuration."); return; }
+    const show = (status?: McpStatus): void => {
+      const names = [...new Set([
+        ...configured.map(server => server.name),
+        ...(status?.servers ?? []).map(server => server.name),
+        ...(status?.errors ?? []).map(entry => entry.name),
+      ])].sort();
+      if (names.length === 0) { print("(no MCP servers)"); return; }
+      setPicker({
+        title: "MCP servers",
+        items: names.map(name => {
+          const config = configured.find(server => server.name === name);
+          const connection = status?.servers.find(server => server.name === name);
+          const failure = status?.errors.find(entry => entry.name === name);
+          return {
+            value: name,
+            label: name,
+            description: connection ? `${connection.tools.length} tools` : failure ? failure.message : config ? (config.config.url ? "http" : "stdio") : "unknown",
+            group: connection ? "Connected" : failure ? "Failed" : config ? "Configured" : "Other",
+          };
+        }),
+        onSelect: name => {
+          const config = configured.find(server => server.name === name);
+          const connection = status?.servers.find(server => server.name === name);
+          const failure = status?.errors.find(entry => entry.name === name);
+          const lines = [`${name}: ${connection ? `connected (${connection.tools.length} tools)` : failure ? "connection failed" : config ? "configured, not connected" : "unknown"}`];
+          if (failure) lines.push(failure.message);
+          if (connection?.tools.length) lines.push(connection.tools.map(tool => tool.name).join(", "));
+          if (config) lines.push(`${config.source} · ${config.config.url ? "http" : "stdio"}`);
+          print(lines.join("\n"));
+          setPicker(null);
+        },
+      });
+    };
+    if (!backend) { show(); return; }
+    print("loading MCP status...");
+    void backend.request<McpStatus>("/api/mcp/connected").then(show).catch(error => {
+      print(`cannot load MCP status: ${error instanceof Error ? error.message : String(error)}`);
+      show();
+    });
+  }, [backend, workspace, print]);
 
   const applyRename = useCallback((value: string): void => {
     const target = renameTarget;
@@ -978,6 +1051,8 @@ export function Repl(props: ReplProps) {
       pickModel,
       pickSession: openSessionPicker,
       pickAgent: openTaskPicker,
+      pickSkills: openSkillPicker,
+      pickMcp: openMcpPicker,
       pickThinking,
       toggleThinking,
       compact,
@@ -993,6 +1068,8 @@ export function Repl(props: ReplProps) {
       pickModel,
       openSessionPicker,
       openTaskPicker,
+      openSkillPicker,
+      openMcpPicker,
       startLoop,
       cancelLoop,
       pickThinking,

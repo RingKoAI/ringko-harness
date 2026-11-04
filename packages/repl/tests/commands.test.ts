@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { filterCommands, findCommand, parseInput } from "../src/commands.ts";
+import { filterCommands, findCommand, parseInput, type SlashContext } from "../src/commands.ts";
 
 describe("parseInput", () => {
   it("routes leading bang commands without changing interior exclamation marks", () => {
@@ -41,5 +41,15 @@ describe("registry", () => {
 
   it("lists everything for an empty query", () => {
     expect(filterCommands("").length).toBeGreaterThan(5);
+  });
+
+  it("routes skills and MCP to their pickers when a host provides them", () => {
+    let skills = 0;
+    let mcp = 0;
+    const ctx = { pickSkills: () => { skills += 1; }, pickMcp: () => { mcp += 1; }, print: () => {}, workspace: "/work" } as unknown as SlashContext;
+    findCommand("skills")!.run(ctx, "");
+    findCommand("mcp")!.run(ctx, "");
+    expect(skills).toBe(1);
+    expect(mcp).toBe(1);
   });
 });

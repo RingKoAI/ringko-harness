@@ -30,6 +30,10 @@ export interface SlashContext {
   pickSession(): void | Promise<void>;
   /** Open the main/subagent task view picker. */
   pickAgent?(): void;
+  /** Browse installed skills (metadata and paths). */
+  pickSkills?(): void;
+  /** Browse MCP servers with their live connection status. */
+  pickMcp?(): void | Promise<void>;
   /** Start a self-referential loop: `<prompt> [--max-iterations N] [--completion-promise TEXT]`. */
   startLoop?(arg: string): void;
   /** Stop the active loop. */
@@ -123,16 +127,18 @@ export function buildCommands(): SlashCommand[] {
     },
     {
       name: "skills",
-      description: "list installed skills",
+      description: "browse installed skills",
       run: (ctx) => {
+        if (ctx.pickSkills) { ctx.pickSkills(); return; }
         const skills = discoverSkills({ cwd: ctx.workspace });
         ctx.print(skills.length ? skills.map((skill) => `${skill.name} (${skill.source})`).join(", ") : "(no skills)");
       },
     },
     {
       name: "mcp",
-      description: "list configured MCP servers",
+      description: "browse MCP servers and connection status",
       run: (ctx) => {
+        if (ctx.pickMcp) { void ctx.pickMcp(); return; }
         try {
           const servers = loadMcpServers({ cwd: ctx.workspace });
           ctx.print(servers.length ? servers.map((server) => server.name).join(", ") : "(no MCP servers)");

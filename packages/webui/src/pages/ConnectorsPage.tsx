@@ -1,4 +1,4 @@
-import { FlaskConical, KeyRound, Plus, Trash2 } from 'lucide-react'
+import { FlaskConical, KeyRound, LoaderCircle, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { fetchMcp, fetchMcpConnected, fetchOAuthStatus, saveMcp, startMcpOAuth, testMcp, type McpConnected } from '@/api'
@@ -82,21 +82,36 @@ export function ConnectorsPage() {
   const [authMap, setAuthMap] = useState<Record<string, boolean>>({})
   const [flow, setFlow] = useState<{ name: string; flowId: string } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [configuredNames, setConfiguredNames] = useState<Set<string>>(new Set())
 
   const load = useCallback(() => {
-    fetchMcp()
-      .then((payload) => {
-        setProjectRows(payload.servers.filter((entry) => entry.scope === 'project').map((entry) => configToRow(entry.name, entry.config)))
-        setGlobalRows(Object.entries(payload.map).map(([name, config]) => configToRow(name, config)))
-        setAuthMap(Object.fromEntries(payload.servers.map((entry) => [entry.name, entry.authenticated])))
-      })
-      .catch((cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)))
-    fetchMcpConnected()
-      .then(setConnected)
-      .catch(() => setConnected(null))
+    setLoading(true)
+    void Promise.all([
+      fetchMcp()
+        .then((payload) => {
+          setProjectRows(payload.servers.filter((entry) => entry.scope === 'project').map((entry) => configToRow(entry.name, entry.config)))
+          setGlobalRows(Object.entries(payload.map).map(([name, config]) => configToRow(name, config)))
+          setAuthMap(Object.fromEntries(payload.servers.map((entry) => [entry.name, entry.authenticated])))
+          setConfiguredNames(new Set([...payload.servers.map((entry) => entry.name), ...Object.keys(payload.map)]))
+        })
+        .catch((cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause))),
+      fetchMcpConnected()
+        .then(setConnected)
+        .catch(() => setConnected(null)),
+    ]).finally(() => setLoading(false))
   }, [])
 
   useEffect(load, [load])
+
+  // MCP connections start asynchronously after the backend starts. Retry the
+  // status once so a page opened immediately does not keep "none connected".
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void fetchMcpConnected().then(setConnected).catch(() => {})
+    }, 2000)
+    return () => clearTimeout(timer)
+  }, [])
 
   // Poll an active MCP OAuth flow.
   useEffect(() => {
@@ -207,59 +222,77 @@ export function ConnectorsPage() {
           </Button>
         </CardHeader>
         <CardContent className="space-y-3">
-          {rows.length === 0 ? (
+          {loading && rows.length === 0 ? (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+              {t('connectors.loading')}
+            </p>
+          ) : rows.length === 0 ? (
             <p className="text-xs text-muted-foreground">{t('connectors.empty')}</p>
           ) : (
-            rows.map((row, index) => (
-              <div key={index} className="space-y-2 rounded-lg border p-3">
-                <div className="flex items-center gap-2">
-                  <Input value={row.name} onChange={(e) => update(scope, index, { name: e.target.value })} placeholder={t('connectors.name')} className="font-medium" />
-                  <select
-                    value={row.transport}
-                    onChange={(e) => update(scope, index, { transport: e.target.value as Transport })}
-                    className="h-9 rounded-md border bg-transparent px-2 text-sm"
-                  >
-                    {TRANSPORTS.map((value) => (
-                      <option key={value} value={value}>
-                        {value}
-                      </option>
-                    ))}
-                  </select>
-                  {row.transport !== 'stdio' && authMap[row.name] ? (
-                    <Badge variant="default">{t('connectors.authenticated')}</Badge>
-                  ) : null}
-                  {row.transport !== 'stdio' ? (
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      title={t('connectors.login')}
-                      onClick={() => void login(row)}
-                      disabled={flow?.name === row.name.trim() || row.url.trim().length === 0}
+            rows.map((row, index) => {
+              const name = row.name.trim()
+              const server = connected?.servers.find((entry) => entry.name === name)
+              const connectionError = connected?.errors.find((entry) => entry.name === name)
+              const saved = configuredNames.has(name)
+              return (
+                <div key={index} className="space-y-2 rounded-lg border p-3">
+                  <div className="flex items-center gap-2">
+                    <Input value={row.name} onChange={(e) => update(scope, index, { name: e.target.value })} placeholder={t('connectors.name')} className="font-medium" />
+                    <select
+                      value={row.transport}
+                      onChange={(e) => update(scope, index, { transport: e.target.value as Transport })}
+                      className="h-9 rounded-md border bg-transparent px-2 text-sm"
                     >
-                      <KeyRound />
+                      {TRANSPORTS.map((value) => (
+                        <option key={value} value={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                    {server ? (
+                      <Badge variant="default">{t('connectors.toolCount', { count: server.tools.length })}</Badge>
+                    ) : connectionError ? (
+                      <Badge variant="destructive" title={connectionError.message}>{t('connectors.error')}</Badge>
+                    ) : saved && !loading ? (
+                      <Badge variant="outline">{t('connectors.notConnected')}</Badge>
+                    ) : null}
+                    {row.transport !== 'stdio' && authMap[row.name] ? (
+                      <Badge variant="default">{t('connectors.authenticated')}</Badge>
+                    ) : null}
+                    {row.transport !== 'stdio' ? (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        title={t('connectors.login')}
+                        onClick={() => void login(row)}
+                        disabled={flow?.name === row.name.trim() || row.url.trim().length === 0}
+                      >
+                        <KeyRound />
+                      </Button>
+                    ) : null}
+                    <Button size="icon" variant="ghost" title={t('connectors.test')} onClick={() => void test(row)}>
+                      <FlaskConical />
                     </Button>
-                  ) : null}
-                  <Button size="icon" variant="ghost" title={t('connectors.test')} onClick={() => void test(row)}>
-                    <FlaskConical />
-                  </Button>
-                  <Button size="icon" variant="ghost" onClick={() => remove(scope, index)}>
-                    <Trash2 />
-                  </Button>
+                    <Button size="icon" variant="ghost" onClick={() => remove(scope, index)}>
+                      <Trash2 />
+                    </Button>
+                  </div>
+                  {row.transport === 'stdio' ? (
+                    <div className="space-y-2">
+                      <Input value={row.command} onChange={(e) => update(scope, index, { command: e.target.value })} placeholder={t('connectors.command')} className="font-mono text-xs" />
+                      <Input value={row.args} onChange={(e) => update(scope, index, { args: e.target.value })} placeholder={t('connectors.args')} className="font-mono text-xs" />
+                      <Textarea value={row.env} onChange={(e) => update(scope, index, { env: e.target.value })} spellCheck={false} className="min-h-16 font-mono text-xs" placeholder={t('connectors.env')} />
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <Input value={row.url} onChange={(e) => update(scope, index, { url: e.target.value })} placeholder={t('connectors.url')} className="font-mono text-xs" />
+                      <Textarea value={row.headers} onChange={(e) => update(scope, index, { headers: e.target.value })} spellCheck={false} className="min-h-16 font-mono text-xs" placeholder={t('connectors.headers')} />
+                    </div>
+                  )}
                 </div>
-                {row.transport === 'stdio' ? (
-                  <div className="space-y-2">
-                    <Input value={row.command} onChange={(e) => update(scope, index, { command: e.target.value })} placeholder={t('connectors.command')} className="font-mono text-xs" />
-                    <Input value={row.args} onChange={(e) => update(scope, index, { args: e.target.value })} placeholder={t('connectors.args')} className="font-mono text-xs" />
-                    <Textarea value={row.env} onChange={(e) => update(scope, index, { env: e.target.value })} spellCheck={false} className="min-h-16 font-mono text-xs" placeholder={t('connectors.env')} />
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <Input value={row.url} onChange={(e) => update(scope, index, { url: e.target.value })} placeholder={t('connectors.url')} className="font-mono text-xs" />
-                    <Textarea value={row.headers} onChange={(e) => update(scope, index, { headers: e.target.value })} spellCheck={false} className="min-h-16 font-mono text-xs" placeholder={t('connectors.headers')} />
-                  </div>
-                )}
-              </div>
-            ))
+              )
+            })
           )}
           <Button variant="outline" size="sm" onClick={() => add(scope)}>
             <Plus data-icon="inline-start" />
@@ -272,12 +305,23 @@ export function ConnectorsPage() {
 
   return (
     <div className="space-y-3">
-      <div>
-        <p className="text-sm font-medium">{t('settings.connectors')}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{t('connectors.hint')}</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium">{t('settings.connectors')}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{t('connectors.hint')}</p>
+        </div>
+        <Button size="sm" variant="outline" onClick={load} disabled={loading}>
+          <RefreshCw className={loading ? 'animate-spin' : undefined} data-icon="inline-start" />
+          {t('workspace.refresh')}
+        </Button>
       </div>
 
-      {connected ? (
+      {loading && !connected ? (
+        <div className="flex items-center gap-2 rounded-lg border p-3 text-xs text-muted-foreground">
+          <LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+          {t('connectors.loading')}
+        </div>
+      ) : connected ? (
         <div className="rounded-lg border p-3">
           <p className="mb-2 text-xs font-medium">{t('connectors.connected')}</p>
           {connected.servers.length === 0 ? (
