@@ -1,41 +1,27 @@
 import { resolve } from "node:path";
-import { instructionsText, loadInstructions, writeDiagnostic, type LoadedPlugin, type PluginLoadError, type RingkoConfig, type Skill, type SkillInstallScope } from "@ringko-ai/config";
-import { registerMcpTools } from "@ringko-ai/mcp";
+import { writeDiagnostic, type LoadedPlugin, type PluginLoadError, type RingkoConfig, type Skill, type SkillInstallScope } from "@ringko-ai/config";
 import { EventBus, EventLog, Scheduler, createTimeSource } from "@ringko-ai/runtime";
 import { Sandbox } from "@ringko-ai/tools";
-import { resolveWorkflow, workflowInstructions } from "@ringko-ai/workflow";
-import { abortable, type ToolExecutionEvent, type ToolExecutionResult } from "@ringko-ai/harness";
-import { createRingKo, isAccessMode, type AgentEvent, type ModelExecutionEvent, type ModelExecutionResult, type RingKo, type RingKoConfig as AgentConfig } from "./index.ts";
+import { AgentFactory, type RuntimeAgent } from "./agent-factory.ts";
+import type { RingKoConfig as AgentConfig } from "./index.ts";
+import type { RuntimeEvents } from "./runtime-events.ts";
 import { CapabilityManager, type CapabilitySnapshot } from "./capabilities.ts";
 import { ExtensionRegistry } from "./extension-registry.ts";
 import { PermissionManager } from "./permissions.ts";
 import { McpManager } from "./mcp-manager.ts";
 import { ToolManager } from "./tool-manager.ts";
-import { applyToolPolicy } from "./runtime-tools.ts";
-import type { AgentContribution, AgentContributionContext, Disposable, RuntimeContext, RuntimeContribution, RuntimeHost } from "./runtime-contribution.ts";
+import type { AgentContribution, Disposable, RuntimeContext, RuntimeContribution, RuntimeHost } from "./runtime-contribution.ts";
 export { registerRuntimeTools } from "./runtime-tools.ts";
+export { CapabilityManager } from "./capabilities.ts";
 export type { CapabilitySnapshot } from "./capabilities.ts";
+export type { RuntimeEvents } from "./runtime-events.ts";
 export { ToolManager } from "./tool-manager.ts";
 export { ExtensionRegistry } from "./extension-registry.ts";
+export { AgentFactory } from "./agent-factory.ts";
+export type { RuntimeAgent } from "./agent-factory.ts";
 export { RuntimeSupervisor } from "./runtime-supervisor.ts";
 export type { AgentContribution, AgentContributionContext, Disposable, RuntimeContext, RuntimeContribution, RuntimeHost } from "./runtime-contribution.ts";
 export type { PermissionRule } from "./permissions.ts";
-
-export interface RuntimeEvents extends Record<string, unknown> {
-  "run/before": { prompt: string; signal: AbortSignal };
-  "run/after": { content: string };
-  "run/error": { error: unknown };
-  "agent/event": AgentEvent;
-  "tool/pre-execute": ToolExecutionEvent;
-  "tool/post-execute": ToolExecutionResult;
-  "model/before-request": ModelExecutionEvent;
-  "model/after-response": ModelExecutionResult;
-  "skill/installed": Skill;
-  "capabilities/changed": CapabilitySnapshot;
-  "tool/permission": { toolName: string; target?: string; decision: "allow" | "deny" | "ask" | "default" };
-}
-
-export interface RuntimeAgent { agent: RingKo; close(): void }
 
 /** Workspace resources outlive individual agents, models and sessions. */
 export class RuntimeManager {
@@ -49,8 +35,8 @@ export class RuntimeManager {
   private readonly stopTime: () => void;
   private readonly capabilityManager: CapabilityManager;
   private readonly extensions: ExtensionRegistry;
+  private readonly agentFactory: AgentFactory;
   private readonly mcp: McpManager;
-  private readonly agents = new Set<() => void>();
   private closed = false;
   private closing?: Promise<void>;
 
@@ -70,6 +56,17 @@ export class RuntimeManager {
     this.stopTime = log ? () => {} : createTimeSource(this.log);
     this.extensions = new ExtensionRegistry(handlers => this.context(handlers));
     this.extensions.install(this.toolManager.contribution());
+    this.agentFactory = new AgentFactory({
+      workspace: this.workspace,
+      events: this.events,
+      log: this.log,
+      scheduler: this.scheduler,
+      sandbox: this.sandbox,
+      permissions: this.permissions,
+      toolManager: this.toolManager,
+      extensions: this.extensions,
+      startMcp: (sandbox, permissions) => this.mcp.start(sandbox, permissions),
+    });
   }
 
   /** Register a contribution and return an idempotent disposer. */
@@ -159,122 +156,14 @@ export class RuntimeManager {
   }
 
   /** Build a tool-only agent for capability discovery without starting MCP. */
-  previewTools(config: RingkoConfig, host: RuntimeHost = {}): { agent: RingKo; sandbox: Sandbox } {
+  previewTools(config: RingkoConfig, host: RuntimeHost = {}): ReturnType<AgentFactory["preview"]> {
     if (this.closed) throw new Error("Runtime is closed.");
-    const agent = createRingKo({ task: true, model: async () => ({ content: "", toolCalls: [] }) });
-    this.extensions.apply(agent, config, { host });
-    return { agent, sandbox: this.toolManager.sandboxFor(agent) ?? this.sandbox };
+    return this.agentFactory.preview(config, host);
   }
 
   createAgent(config: RingkoConfig, options: AgentConfig, host: RuntimeHost = {}): RuntimeAgent {
     if (this.closed) throw new Error("Runtime is closed.");
-    if (config.permission !== undefined && !isAccessMode(config.permission)) throw new TypeError("Invalid runtime permission mode.");
-    if (config.maxTurns !== undefined && (!Number.isInteger(config.maxTurns) || config.maxTurns < 1)) throw new TypeError("Invalid maxTurns; expected a positive integer.");
-    const workflow = resolveWorkflow(config.workflow);
-    for (const names of [workflow.tools?.allow, workflow.tools?.deny]) {
-      if (names !== undefined && (!Array.isArray(names) || names.some(name => typeof name !== "string" || !name))) throw new TypeError("Workflow tool policy must contain tool names.");
-    }
-    const permission = config.permission ?? config.mode;
-    const controller = new AbortController();
-    const permissionSession = options.session?.id ?? crypto.randomUUID();
-    let running = false;
-    let mcpToolNames: string[] = [];
-    const reportedErrors = new Map<string, string>();
-    let workflowModel: Promise<Awaited<ReturnType<NonNullable<AgentConfig["resolveTaskModel"]>>>> | undefined;
-    const agent = createRingKo({
-      ...options, log: this.log, scheduler: this.scheduler,
-      resolveInstructions: async () => [
-        instructionsText(loadInstructions({ cwd: this.workspace })),
-        workflowInstructions(workflow),
-        options.resolveInstructions ? await options.resolveInstructions() : undefined,
-      ].filter(Boolean).join("\n\n"),
-      requestApproval: this.permissions.approval(permissionSession, options.requestApproval),
-      model: workflow.model ? async request => {
-        if (!options.resolveTaskModel || !options.taskModels?.includes(workflow.model!)) throw new Error(`Workflow model "${workflow.model}" is not available in this host.`);
-        workflowModel ??= options.resolveTaskModel(workflow.model!);
-        return await (await workflowModel)(request);
-      } : options.model,
-      modelId: workflow.model ?? options.modelId,
-      compaction: options.compaction ?? config.compaction,
-      ...((options.maxTurns ?? config.maxTurns) !== undefined ? { maxTurns: options.maxTurns ?? config.maxTurns } : {}),
-      ...(isAccessMode(permission) ? { accessMode: permission } : {}),
-      onEvent: event => {
-        this.log.append("session", { type: event.type, turn: event.turn, toolName: event.toolName ?? null });
-        void this.events.parallel("agent/event", event).catch(error => writeDiagnostic("runtime.event", String(error)));
-        options.onEvent?.(event);
-      },
-      onToolBefore: async event => {
-        await this.events.serial("tool/pre-execute", event);
-      },
-      onToolAfter: async event => {
-        await this.events.parallel("tool/post-execute", event).catch(error => writeDiagnostic("runtime.tool.post", String(error)));
-      },
-      onModelBefore: async event => {
-        await this.events.serial("model/before-request", event);
-      },
-      onModelAfter: async event => {
-        await this.events.parallel("model/after-response", event).catch(error => writeDiagnostic("runtime.model.post", String(error)));
-      },
-    });
-    const agentContext: AgentContributionContext = { host, ...(options.session ? { session: options.session } : {}) };
-    let agentDisposers: Disposable[];
-    try {
-      agentDisposers = this.extensions.apply(agent, config, agentContext);
-    } catch (error) {
-      controller.abort();
-      throw error;
-    }
-    const toolSandbox = this.toolManager.sandboxFor(agent) ?? this.sandbox;
-    agent.tools.setPermissionCheck(async request => {
-      const rule = this.permissions.decide(permissionSession, request.toolName, request.target);
-      const decision = rule === "deny" || rule === "ask" ? rule : (await abortable(this.events.waterfall("tool/permission", { toolName: request.toolName, target: request.target, decision: rule }), request.signal)).decision;
-      writeDiagnostic("permission.decision", JSON.stringify({ tool: request.toolName, decision }));
-      return decision;
-    });
-    const run = agent.run.bind(agent);
-    agent.run = async (prompt, runOptions) => {
-      if (running) throw new Error("Agent is already running.");
-      const signal = runOptions?.signal ? AbortSignal.any([controller.signal, runOptions.signal]) : controller.signal;
-      signal.throwIfAborted();
-      running = true;
-      try {
-        const opened = await abortable(this.connections(toolSandbox, config.sandbox?.mcp), signal);
-        signal.throwIfAborted();
-        for (const name of mcpToolNames) agent.tools.unregister(name);
-        mcpToolNames = registerMcpTools(agent.tools, opened.connections, { mode: config.sandbox?.mode ?? "workspace-write", permissions: config.sandbox?.mcp });
-        for (const error of opened.errors) {
-          if (reportedErrors.get(error.name) !== error.message) {
-            host.report?.(`MCP ${error.name}: connection failed: ${error.message}`);
-            reportedErrors.set(error.name, error.message);
-          }
-        }
-        for (const name of reportedErrors.keys()) if (!opened.errors.some(error => error.name === name)) reportedErrors.delete(name);
-        applyToolPolicy(agent, workflow);
-        await abortable(this.events.serial("run/before", { prompt, signal }), signal);
-        applyToolPolicy(agent, workflow);
-        const result = await run(prompt, { signal });
-        await abortable(this.events.serial("run/after", { content: result.content }), signal);
-        return result;
-      } catch (error) {
-        await this.events.parallel("run/error", { error }).catch(hookError => writeDiagnostic("runtime.hook", String(hookError)));
-        throw error;
-      } finally { running = false; }
-    };
-    const close = (): void => {
-      for (const dispose of agentDisposers.reverse()) {
-        try {
-          const pending = dispose();
-          if (pending) void Promise.resolve(pending).catch(error => writeDiagnostic("runtime.contribution", String(error)));
-        } catch (error) {
-          writeDiagnostic("runtime.contribution", String(error));
-        }
-      }
-      controller.abort();
-      agent.jobs.cancelAll();
-      this.agents.delete(close);
-    };
-    this.agents.add(close);
-    return { agent, close };
+    return this.agentFactory.create(config, options, host);
   }
 
   close(): Promise<void> {
@@ -282,7 +171,7 @@ export class RuntimeManager {
     this.closed = true;
     this.stopTime();
     for (const task of this.scheduler.list()) this.scheduler.remove(task.id);
-    for (const close of [...this.agents]) close();
+    this.agentFactory.closeAll();
     this.permissions.clearSessions();
     this.closing = (async () => {
       await this.extensions.dispose();

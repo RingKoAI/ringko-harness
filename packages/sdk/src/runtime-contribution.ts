@@ -10,7 +10,7 @@ import type { RingKo } from "./index.ts";
 import type { McpManager } from "./mcp-manager.ts";
 import type { ToolManager } from "./tool-manager.ts";
 import type { PermissionManager } from "./permissions.ts";
-import type { RuntimeEvents } from "./runtime.ts";
+import type { RuntimeEvents } from "./runtime-events.ts";
 
 /** A disposer may release resources asynchronously. */
 export type Disposable = () => void | Promise<void>;
