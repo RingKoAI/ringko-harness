@@ -133,8 +133,20 @@ describe("loadPlugins", () => {
       focus: "---\nname: plugin-focus\ndescription: From a plugin\n---\nBody",
     });
     const skills = discoverSkills({ env, cwd: home });
-    expect(skills.find(skill => skill.name === "plugin-focus")?.source).toBe("ringko");
-    expect(skills.find(skill => skill.name === "plugin-focus")?.scope).toBe("global");
+    expect(skills.find(skill => skill.name === "reviewer:plugin-focus")?.source).toBe("ringko");
+    expect(skills.find(skill => skill.name === "reviewer:plugin-focus")?.scope).toBe("global");
+    expect(skills.find(skill => skill.name === "reviewer:plugin-focus")?.plugin).toBe("reviewer");
+    expect(skills.some(skill => skill.name === "plugin-focus")).toBe(false);
+  });
+
+  it("loads an explicitly declared plugin skill directory as one namespaced skill", () => {
+    writeSettings({ plugins: { trusted: ["reviewer"] } });
+    writePlugin(join(home, ".ringko"), "reviewer", { name: "reviewer", skills: ["review"] });
+    const dir = join(home, ".ringko", "plugins", "reviewer", "review");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: review\ndescription: Review\n---\nBody");
+    const skills = discoverSkills({ env, cwd: home });
+    expect(skills.find(skill => skill.name === "reviewer:review")?.dir).toBe(dir);
   });
 });
 

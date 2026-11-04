@@ -67,7 +67,10 @@ settings file and preserves every other key.
 - `hooks` is not supported; use a runtime contribution instead.
 - `skills` lists directories relative to the plugin root. Absolute paths,
   `..` segments and symlinks escaping the plugin directory are rejected. The
-  default is `skills` when that directory exists.
+  default is `skills` when that directory exists. Each entry may be one skill
+  directory (containing `SKILL.md`) or a collection of skill directories.
+  Plugin skills are namespaced as `<plugin-id>:<skill-name>`, so they cannot
+  shadow an installed skill.
 - `commands` are prompt templates shown in the REPL. `$ARGUMENTS` or
   `{{args}}` is replaced with the text after the command; without a
   placeholder the argument is appended. Plugin commands cannot shadow

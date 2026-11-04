@@ -22,8 +22,8 @@ Review the change, then report findings by severity.
 | 用户 | `~/.ringko/skills`、`~/.agents/skills` |
 | 插件 | 受信任插件声明的技能目录 |
 
-同名时项目技能优先于用户技能；`~/.ringko` 优先于 `~/.agents`。插件技能优先级
-最低。
+同名时项目技能优先于用户技能；`~/.ringko` 优先于 `~/.agents`。插件技能使用
+`<plugin-id>:<skill-name>` 命名空间，并排在已安装技能之后。
 
 ## 从 REPL 安装
 

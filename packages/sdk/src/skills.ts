@@ -1,10 +1,27 @@
 import { open } from "node:fs/promises";
 import { join } from "node:path";
-import { discoverSkills, SKILL_FILE_NAME } from "@ringko-ai/config";
+import { discoverSkills, SKILL_FILE_NAME, type Skill } from "@ringko-ai/config";
 import { defineTool, type ToolRegistry } from "@ringko-ai/harness";
 
 const MAX_SKILLS = 256;
 const MAX_SKILL_BYTES = 64 * 1024;
+const MAX_LISTING_CHARS = 8_000;
+const MAX_LISTING_DESCRIPTION = 160;
+
+function skillListing(skills: readonly Skill[]): string {
+  const lines: string[] = [];
+  let used = 0;
+  let omitted = 0;
+  for (const skill of skills) {
+    const description = (skill.description ?? "").trim().slice(0, MAX_LISTING_DESCRIPTION);
+    const line = description.length > 0 ? `${skill.name}: ${description}` : skill.name;
+    if (used + line.length + 2 > MAX_LISTING_CHARS) { omitted += 1; continue; }
+    used += line.length + 2;
+    lines.push(line);
+  }
+  const suffix = omitted > 0 ? `; ${String(omitted)} more installed skills are available by name.` : "";
+  return `Load an installed skill's instructions before applying it. Available skills: ${lines.join("; ")}${suffix}`;
+}
 
 /** Only discovered skill names can select a file; callers supply no paths. */
 export function registerRuntimeSkills(registry: ToolRegistry, workspace: string): void {
@@ -12,7 +29,7 @@ export function registerRuntimeSkills(registry: ToolRegistry, workspace: string)
   if (skills.length === 0) return;
   registry.register(defineTool<{ name: string }, string>({
     name: "skill",
-    description: "Load an installed skill's instructions before applying it. Available skills: " + skills.map(skill => `${skill.name}: ${(skill.description ?? "").slice(0, 200)}`).join("; "),
+    description: skillListing(skills),
     inputSchema: { type: "object", properties: { name: { type: "string", enum: skills.map(skill => skill.name) } }, required: ["name"], additionalProperties: false },
     parseInput(value) {
       if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Skill input must be an object.");

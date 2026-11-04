@@ -125,9 +125,28 @@ it("loads trusted plugin skills and MCP servers", async () => isolated(async dir
     },
   });
   try {
-    expect(await managed.agent.tools.call("skill", { name: "plugin-focus" })).toContain("Plugin guidance");
+    expect(await managed.agent.tools.call("skill", { name: "helper:plugin-focus" })).toContain("Plugin guidance");
+    await expect(managed.agent.tools.call("skill", { name: "plugin-focus" })).rejects.toThrow("Unknown skill");
     expect((await managed.agent.run("plugin")).content).toBe("done");
   } finally { await runtime.close(); server.stop(true); }
+}));
+
+it("budgets the skill listing while keeping every name selectable", async () => isolated(async directory => {
+  const root = join(directory, "home", ".ringko", "skills");
+  for (let index = 0; index < 80; index += 1) {
+    const dir = join(root, `skill-${String(index).padStart(2, "0")}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), `---\nname: skill-${String(index).padStart(2, "0")}\ndescription: ${"x".repeat(300)}\n---\nBody`);
+  }
+  const runtime = new RuntimeManager(directory);
+  const managed = runtime.createAgent({}, { model: async () => ({ content: "done", toolCalls: [] }) });
+  try {
+    const tool = managed.agent.tools.list().find(entry => entry.name === "skill");
+    expect(tool).toBeDefined();
+    expect(tool!.description.length).toBeLessThan(8_200);
+    expect(tool!.description).toContain("more installed skills are available by name");
+    expect((tool!.inputSchema as { properties?: { name?: { enum?: string[] } } }).properties?.name?.enum).toContain("skill-79");
+  } finally { managed.close(); await runtime.close(); }
 }));
 
 it("blocks execution on a rejected hook and closes agents and scheduled resources", async () => isolated(async directory => {

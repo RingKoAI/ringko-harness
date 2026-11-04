@@ -25,7 +25,8 @@ task matches.
 | Plugin | a trusted plugin's declared skill directories |
 
 Project skills win over user skills with the same name; `~/.ringko` wins over
-`~/.agents`. Plugin skills are lowest precedence.
+`~/.agents`. Plugin skills are namespaced as `<plugin-id>:<skill-name>` and
+listed after installed skills.
 
 ## Installing from the REPL
 

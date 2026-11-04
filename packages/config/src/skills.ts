@@ -26,6 +26,8 @@ export interface Skill extends SkillMetadata {
   source: SkillSource;
   /** Project-level vs user-level. */
   scope: SkillScope;
+  /** Plugin id when the skill came from a trusted plugin (`<plugin>:<name>`). */
+  plugin?: string;
 }
 
 /** Parse the leading `---` YAML frontmatter for `name` and `description`. */
@@ -69,11 +71,48 @@ export interface DiscoverSkillsOptions {
   cwd?: string;
 }
 
+interface SkillRoot {
+  dir: string;
+  source: SkillSource;
+  scope: SkillScope;
+  plugin?: string;
+}
+
+function readSkillFile(skillFile: string): SkillMetadata | undefined {
+  let text: string;
+  try {
+    const descriptor = openSync(skillFile, "r");
+    try {
+      const buffer = Buffer.alloc(SKILL_METADATA_BYTES);
+      const bytes = readSync(descriptor, buffer, 0, buffer.length, 0);
+      text = buffer.subarray(0, bytes).toString("utf8");
+    } finally { closeSync(descriptor); }
+  } catch {
+    return undefined;
+  }
+  return parseSkillFrontmatter(text);
+}
+
+function loadSkill(root: SkillRoot, dir: string, fallbackName: string): Skill | undefined {
+  const skillFile = join(dir, SKILL_FILE_NAME);
+  try {
+    if (!statSync(skillFile).isFile()) return undefined;
+  } catch {
+    return undefined;
+  }
+  const metadata = readSkillFile(skillFile) ?? { name: fallbackName };
+  if (root.plugin) {
+    const name = `${root.plugin}:${metadata.name.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+    return { ...metadata, name, dir, source: root.source, scope: root.scope, plugin: root.plugin };
+  }
+  return { ...metadata, dir, source: root.source, scope: root.scope };
+}
+
 /** Discover skills across project-level dirs (win) then the user-level roots. */
 export function discoverSkills(options: DiscoverSkillsOptions = {}): Skill[] {
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
-  const roots: ReadonlyArray<{ dir: string; source: SkillSource; scope: SkillScope }> = [
+  const roots: SkillRoot[] = [
     ...projectSkillsDirs(cwd, env).map((dir) => ({ dir, source: "project" as const, scope: "project" as const })),
     // Shared skills above a nested repository are workspace-level, not owned
     // by the inner project. Project-root skills still take precedence.
@@ -86,17 +125,18 @@ export function discoverSkills(options: DiscoverSkillsOptions = {}): Skill[] {
       { dir: join(ringkoRoot(env), name), source: "ringko" as const, scope: "global" as const },
       { dir: join(agentsRoot(env), name), source: "agents" as const, scope: "global" as const },
     ]),
-    // Plugin skill directories are lowest precedence: an explicitly installed
-    // skill with the same name always wins.
+    // Plugin skill directories are lowest precedence. Their names are
+    // namespaced (`<plugin>:<skill>`) so they cannot shadow installed skills.
     ...loadPlugins({ env, cwd }).plugins.flatMap(plugin => plugin.skillDirs.map(dir => ({
       dir,
       source: plugin.source,
       scope: plugin.scope,
+      plugin: plugin.id,
     }))),
   ];
   const seenRoots = new Set<string>();
   const uniqueRoots = roots.filter((root) => {
-    const key = resolve(root.dir);
+    const key = `${root.plugin ?? ""}\0${resolve(root.dir)}`;
     if (seenRoots.has(key)) return false;
     seenRoots.add(key);
     return true;
@@ -104,30 +144,15 @@ export function discoverSkills(options: DiscoverSkillsOptions = {}): Skill[] {
 
   const found = new Map<string, Skill>();
   for (const root of uniqueRoots) {
-    for (const entry of listDirectories(root.dir)) {
-      const dir = join(root.dir, entry);
-      const skillFile = join(dir, SKILL_FILE_NAME);
-      try {
-        if (!statSync(skillFile).isFile()) continue;
-      } catch {
-        continue;
-      }
-      let text: string;
-      try {
-        const descriptor = openSync(skillFile, "r");
-        try {
-          const buffer = Buffer.alloc(SKILL_METADATA_BYTES);
-          const bytes = readSync(descriptor, buffer, 0, buffer.length, 0);
-          text = buffer.subarray(0, bytes).toString("utf8");
-        } finally { closeSync(descriptor); }
-      } catch {
-        continue;
-      }
-      const metadata = parseSkillFrontmatter(text) ?? { name: entry };
-      if (!found.has(metadata.name)) {
-        found.set(metadata.name, { ...metadata, dir, source: root.source, scope: root.scope });
-      }
+    const add = (skill: Skill | undefined): void => {
+      if (skill && !found.has(skill.name)) found.set(skill.name, skill);
+    };
+    // A plugin's declared skill path may be one skill directory or a collection.
+    if (root.plugin) {
+      const direct = loadSkill(root, root.dir, basename(root.dir));
+      if (direct) { add(direct); continue; }
     }
+    for (const entry of listDirectories(root.dir)) add(loadSkill(root, join(root.dir, entry), entry));
   }
   return [...found.values()];
 }
