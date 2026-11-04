@@ -1,5 +1,7 @@
 // Typed client for the RingKo local server (see @ringko-ai/app).
 import { BackendClient, consumeSse, type SessionSnapshot, type TodoItem, type SessionUsage } from '@ringko-ai/client';
+import { BASE, UnauthorizedError, authHeaders, errorFrom, getJson, getToken } from './api/http';
+export { UnauthorizedError, clearToken, getToken, setToken } from './api/http';
 export type { SessionSnapshot, TodoItem, SessionUsage } from '@ringko-ai/client';
 import type { UsageStatistics, UsageStatisticsQuery } from '@ringko-ai/client';
 export type { UsageStatistics, UsageStatisticsQuery, UsageStatisticsBucket, UsageRequest, UsageCallKind } from '@ringko-ai/client';
@@ -287,7 +289,6 @@ export async function stopSession(id: string): Promise<void> {
   if (!response.ok && response.status !== 404) throw new Error(`Stop failed (${response.status}).`);
 }
 
-const BASE = "";
 export const backendClient = new BackendClient({ token: () => getToken() });
 export interface QuestionRequest { id: string; input: { questions: Array<{ id: string; question: string; header?: string; detail?: string; multiSelect?: boolean; options?: Array<{ label: string; description?: string }> }> } }
 export interface QuestionOutput { answers: Array<{ id: string; selected: string[]; custom?: string }> }
@@ -302,53 +303,6 @@ export async function jobAction(sessionId: string, jobId: string, action: 'statu
   if (!response.ok) throw new Error(`Job action failed (${response.status}).`);
   return await response.json() as JobSummary;
 }
-const TOKEN_KEY = "ringko.token";
-
-export class UnauthorizedError extends Error {
-  constructor() {
-    super("unauthorized");
-    this.name = "UnauthorizedError";
-  }
-}
-
-export function getToken(): string | null {
-  try {
-    return localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function setToken(token: string): void {
-  try {
-    localStorage.setItem(TOKEN_KEY, token);
-  } catch {
-    // Storage unavailable; the token stays in memory only via the caller.
-  }
-}
-
-export function clearToken(): void {
-  try {
-    localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    // Ignore.
-  }
-}
-
-function authHeaders(extra?: HeadersInit): Headers {
-  const headers = new Headers(extra);
-  const token = getToken();
-  if (token) headers.set("authorization", `Bearer ${token}`);
-  return headers;
-}
-
-async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${BASE}${path}`, { headers: authHeaders() });
-  if (response.status === 401) throw new UnauthorizedError();
-  if (!response.ok) throw new Error(`${path}: ${response.status}`);
-  return (await response.json()) as T;
-}
-
 export function fetchInfo(): Promise<Info> {
   // `/api/info` is unauthenticated so the client can learn whether auth is on.
   return getJson<Info>("/api/info");
@@ -716,19 +670,6 @@ export interface OAuthStart {
 }
 
 export type OAuthFlowStatus = 'pending' | 'success' | 'error';
-
-async function errorFrom(response: Response, fallback: string): Promise<Error> {
-  const body = await response.text().catch(() => '');
-  if (body.length > 0) {
-    try {
-      const parsed = JSON.parse(body) as { error?: unknown };
-      if (typeof parsed.error === 'string') return new Error(parsed.error);
-    } catch {
-      return new Error(body);
-    }
-  }
-  return new Error(fallback);
-}
 
 async function postAuth(path: string, body: unknown, fallback: string): Promise<AuthStatus> {
   const response = await fetch(`${BASE}${path}`, {

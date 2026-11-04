@@ -119,6 +119,8 @@ import {
   type SessionHandle,
 } from "@ringko-ai/session";
 import { loadModel as resolveLoadedModel } from "./model.ts";
+import { json, readJson, sse } from "./server/http.ts";
+import { sessionTitleView, stripEventParts, stripMessageParts } from "./server/views.ts";
 import { WorkspaceReview } from "./workspace-review.ts";
 import { RuntimeManager, registerRuntimeTools, type RuntimeAgent } from "@ringko-ai/sdk/runtime";
 import { PROTOCOL_VERSION } from "@ringko-ai/protocol";
@@ -158,7 +160,6 @@ const DEFAULT_PORT = DEFAULT_BACKEND_PORT;
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_WEBUI_DIR = resolve(import.meta.dir, "../../webui/dist");
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
-const MAX_JSON_BYTES = 1_048_576;
 const MAX_ACTIVE_RUNS = 8;
 const META_TIMEOUT_MS = 30_000;
 const MAX_TERMINAL_SESSIONS = 4;
@@ -199,58 +200,12 @@ const MIME: Record<string, string> = {
   ".map": "application/json; charset=utf-8",
 };
 
-/**
- * Session logs keep inline image parts so a resumed run can replay them to the
- * model. HTTP clients only receive the text summary: a single screenshot would
- * otherwise add megabytes to every snapshot and trajectory response.
- */
-function stripMessageParts(message: ChatMessage): ChatMessage {
-  if (!message.parts) return message;
-  const { parts: _parts, ...rest } = message;
-  return rest as ChatMessage;
-}
-
-function stripEventParts(event: SessionEvent): SessionEvent {
-  const data = event.data;
-  if (typeof data !== "object" || data === null || Array.isArray(data) || !("parts" in data)) return event;
-  const { parts: _parts, ...rest } = data as Record<string, unknown>;
-  return { ...event, data: rest };
-}
-
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
-}
-
-function sse(event: string, data: unknown): string {
-  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-}
-
 function registerTools(
   ringko: RingKo,
   config: RingkoConfig,
   workspace: string,
 ): void {
   registerRuntimeTools(ringko, config, workspace);
-}
-
-async function readJson<T>(request: Request): Promise<T | undefined> {
-  const reader = request.body?.getReader();
-  if (!reader) return undefined;
-  try {
-    const chunks: Uint8Array[] = []; let bytes = 0;
-    for (;;) {
-      const { done, value } = await reader.read(); if (done) break;
-      bytes += value.byteLength;
-      if (bytes > MAX_JSON_BYTES) { await reader.cancel(); return undefined; }
-      chunks.push(value);
-    }
-    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
-  } catch {
-    return undefined;
-  } finally { reader.releaseLock(); }
 }
 
 /** Start the local server. Throws if the port is unavailable. */
@@ -1115,15 +1070,6 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     if (options.configPath) saveConfigFile({ ...config, model: target }, options.configPath);
     else saveProviders({ ...loadProviders(), model: target });
     return await handleInfo();
-  }
-
-  /** A session's title, or its first user message truncated as a fallback. */
-  function sessionTitleView(events: readonly SessionEvent[]): string | null {
-    const recorded = sessionTitle(events);
-    if (recorded && recorded.trim().length > 0) return recorded;
-    const firstUser = toChatMessages(events).find((message) => message.role === "user");
-    const text = firstUser?.content.trim();
-    return text && text.length > 0 ? text.slice(0, 60) : null;
   }
 
   function handleSessions(): Response {
