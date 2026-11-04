@@ -6,12 +6,12 @@
 // `settings.local.json` under `plugins.trusted`, so a cloned repository cannot
 // enable its own plugin. Invalid manifests are rejected whole (fail closed) and
 // reported through the result instead of partially applied.
-import { closeSync, existsSync, fstatSync, openSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { RingkoConfig } from "./config.ts";
-import { loadConfig } from "./config.ts";
+import { loadConfig, saveConfigFile } from "./config.ts";
 import type { McpServerConfig } from "./mcp.ts";
-import { PLUGIN_FILE_NAME, pluginRoots, projectPluginRoots } from "./paths.ts";
+import { PLUGIN_FILE_NAME, pluginRoots, projectPluginRoots, settingsPath } from "./paths.ts";
 import { isPathInside, isRecord } from "./util.ts";
 
 const MAX_PLUGINS = 128;
@@ -47,6 +47,15 @@ export interface PluginManifest {
   commands?: PluginCommand[];
   /** MCP servers contributed by the plugin; explicit host config wins. */
   mcpServers?: Record<string, McpServerConfig>;
+}
+
+/** A plugin directory found on disk, before its manifest is parsed. */
+export interface PluginCandidate {
+  id: string;
+  dir: string;
+  source: PluginSource;
+  scope: PluginScope;
+  trusted: boolean;
 }
 
 export interface LoadedPlugin {
@@ -214,6 +223,41 @@ function resolveSkillDirs(dir: string, manifest: PluginManifest): string[] {
   return out;
 }
 
+function collectCandidates(env: NodeJS.ProcessEnv, cwd: string, trusted: ReadonlySet<string>): PluginCandidate[] {
+  const roots: { dir: string; source: PluginSource; scope: PluginScope }[] = [
+    ...projectPluginRoots(cwd, env).map(dir => ({ dir, source: "project" as const, scope: "project" as const })),
+    ...pluginRoots(env).map((dir, index) => ({ dir, source: index === 0 ? "ringko" as const : "agents" as const, scope: "global" as const })),
+  ];
+  const found = new Map<string, PluginCandidate>();
+  for (const root of roots) {
+    let entries: string[];
+    try {
+      entries = readdirSync(root.dir).sort();
+    } catch {
+      continue;
+    }
+    for (const id of entries) {
+      if (!PLUGIN_ID.test(id) || found.has(id)) continue;
+      const dir = join(root.dir, id);
+      try { if (!statSync(dir).isDirectory()) continue; } catch { continue; }
+      found.set(id, { id, dir, source: root.source, scope: root.scope, trusted: trusted.has(id) });
+    }
+  }
+  return [...found.values()];
+}
+
+/** List plugin directories (trusted and untrusted) without parsing manifests. */
+export function discoverPluginCandidates(options: LoadPluginsOptions = {}): { candidates: PluginCandidate[]; errors: PluginLoadError[] } {
+  const env = options.env ?? process.env;
+  const cwd = options.cwd ?? process.cwd();
+  let trusted: Set<string>;
+  try { trusted = new Set(readTrusted(options)); }
+  catch (error) {
+    return { candidates: [], errors: [{ source: "plugins", message: error instanceof Error ? error.message : "Invalid plugin trust configuration." }] };
+  }
+  return { candidates: collectCandidates(env, cwd, trusted), errors: [] };
+}
+
 /**
  * Discover trusted plugins. Untrusted directories are ignored; a trusted
  * plugin with an invalid manifest contributes nothing and yields one error.
@@ -230,46 +274,55 @@ export function loadPlugins(options: LoadPluginsOptions = {}): LoadPluginsResult
   }
   if (trusted.size === 0) return { plugins: [], errors };
 
-  const roots: { dir: string; source: PluginSource; scope: PluginScope }[] = [
-    ...projectPluginRoots(cwd, env).map(dir => ({ dir, source: "project" as const, scope: "project" as const })),
-    ...pluginRoots(env).map((dir, index) => ({ dir, source: index === 0 ? "ringko" as const : "agents" as const, scope: "global" as const })),
-  ];
-
   const found = new Map<string, LoadedPlugin>();
   let seen = 0;
-  for (const root of roots) {
-    let entries: string[];
-    try {
-      entries = readdirSync(root.dir).sort();
-    } catch {
-      continue;
+  for (const candidate of collectCandidates(env, cwd, trusted)) {
+    if (!candidate.trusted) continue;
+    if (++seen > MAX_PLUGINS) {
+      errors.push({ source: candidate.dir, message: `Plugin limit of ${String(MAX_PLUGINS)} reached.` });
+      return { plugins: [...found.values()], errors };
     }
-    for (const id of entries) {
-      if (!PLUGIN_ID.test(id) || !trusted.has(id) || found.has(id)) continue;
-      if (++seen > MAX_PLUGINS) {
-        errors.push({ source: root.dir, message: `Plugin limit of ${String(MAX_PLUGINS)} reached.` });
-        return { plugins: [...found.values()], errors };
-      }
-      const dir = join(root.dir, id);
-      try {
-        if (!statSync(dir).isDirectory()) continue;
-        const manifest = readManifest(id, dir);
-        found.set(id, {
-          id,
-          dir: realpathSync(dir),
-          manifest,
-          commands: manifest.commands ?? [],
-          mcpServers: manifest.mcpServers ?? {},
-          skillDirs: resolveSkillDirs(dir, manifest),
-          source: root.source,
-          scope: root.scope,
-        });
-      } catch (error) {
-        errors.push({ source: join(dir, PLUGIN_FILE_NAME), message: error instanceof Error ? error.message : "Invalid plugin." });
-      }
+    try {
+      const manifest = readManifest(candidate.id, candidate.dir);
+      found.set(candidate.id, {
+        id: candidate.id,
+        dir: realpathSync(candidate.dir),
+        manifest,
+        commands: manifest.commands ?? [],
+        mcpServers: manifest.mcpServers ?? {},
+        skillDirs: resolveSkillDirs(candidate.dir, manifest),
+        source: candidate.source,
+        scope: candidate.scope,
+      });
+    } catch (error) {
+      errors.push({ source: join(candidate.dir, PLUGIN_FILE_NAME), message: error instanceof Error ? error.message : "Invalid plugin." });
     }
   }
   return { plugins: [...found.values()], errors };
+}
+
+/**
+ * Persist the user-level trust list while preserving every other settings key.
+ * Callers must validate the plugin before adding it.
+ */
+export function savePluginTrust(names: readonly string[], env: NodeJS.ProcessEnv = process.env): string {
+  const unique = [...new Set(names)];
+  for (const name of unique) if (!PLUGIN_ID.test(name)) throw new TypeError(`Invalid plugin name "${name}".`);
+  const path = settingsPath(env);
+  let settings: Record<string, unknown> = {};
+  try {
+    const text = readFileSync(path, "utf8");
+    if (text.trim().length > 0) {
+      const parsed: unknown = JSON.parse(text);
+      if (!isRecord(parsed)) throw new TypeError(`Settings "${path}" must be a JSON object.`);
+      settings = parsed;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  if (settings.plugins !== undefined && !isRecord(settings.plugins)) throw new TypeError('Settings field "plugins" must be an object.');
+  const plugins = settings.plugins ?? {};
+  return saveConfigFile({ ...settings, plugins: { ...plugins, trusted: unique } } as RingkoConfig, path);
 }
 
 /** Expand a plugin command prompt. Arguments are appended when no slot exists. */

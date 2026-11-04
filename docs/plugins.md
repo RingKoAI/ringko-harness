@@ -34,6 +34,11 @@ Trust is deliberately not read from a project file, so a cloned repository
 cannot enable its own plugin. Remove a name to disable the plugin. Untrusted
 directories are ignored before their manifests are parsed.
 
+Use `ringko plugins` to list discovered directories and their trust state,
+`ringko plugins trust <id>` to validate and trust one, and
+`ringko plugins untrust <id>` to disable it. The command updates the user-level
+settings file and preserves every other key.
+
 ## Manifest
 
 ```json

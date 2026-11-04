@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadMcpServers } from "../src/mcp.ts";
 import { discoverSkills } from "../src/skills.ts";
-import { expandCommandPrompt, loadPlugins } from "../src/plugins.ts";
+import { expandCommandPrompt, loadPlugins, savePluginTrust } from "../src/plugins.ts";
 
 let home: string;
 let env: NodeJS.ProcessEnv;
@@ -135,6 +135,23 @@ describe("loadPlugins", () => {
     const skills = discoverSkills({ env, cwd: home });
     expect(skills.find(skill => skill.name === "plugin-focus")?.source).toBe("ringko");
     expect(skills.find(skill => skill.name === "plugin-focus")?.scope).toBe("global");
+  });
+});
+
+describe("savePluginTrust", () => {
+  it("replaces the trust list while preserving other settings", () => {
+    writeSettings({ workspace: "/work", custom: true, plugins: { trusted: ["old"], enabled: true } });
+    savePluginTrust(["new", "new"], env);
+    const settings = JSON.parse(readFileSync(join(home, ".ringko", "settings.local.json"), "utf8")) as Record<string, unknown>;
+    expect(settings.workspace).toBe("/work");
+    expect(settings.custom).toBe(true);
+    expect(settings.plugins).toEqual({ trusted: ["new"], enabled: true });
+  });
+
+  it("rejects invalid names and malformed settings", () => {
+    expect(() => savePluginTrust(["../escape"], env)).toThrow("Invalid plugin name");
+    writeSettings({ plugins: "invalid" });
+    expect(() => savePluginTrust(["ok"], env)).toThrow("must be an object");
   });
 });
 

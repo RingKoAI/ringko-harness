@@ -23,6 +23,7 @@ import { loadProviderModel } from "./provider.ts";
 import { authCommand } from "./cli/commands/auth.ts";
 import { configCommand } from "./cli/commands/config.ts";
 import { mcpCommand } from "./cli/commands/mcp.ts";
+import { pluginsCommand } from "./cli/commands/plugins.ts";
 import { modelsCommand } from "./cli/commands/models.ts";
 import { serveCommand } from "./cli/commands/serve.ts";
 import { sessionCommand } from "./cli/commands/session.ts";
@@ -54,6 +55,9 @@ Commands:
   mcp                  List configured MCP servers (~/.ringko/.mcp.json)
   mcp set <name> <json>  Set an MCP server from a JSON config
   mcp remove <name>    Remove an MCP server
+  plugins              List plugin directories and trust state
+  plugins trust <name> Trust a plugin (from user settings)
+  plugins untrust <name> Stop trusting a plugin
   session list         List stored sessions (~/.ringko/sessions)
   models [provider]    Discover a provider's models and save them
   auth login [provider]  Sign in via OAuth (openai | github-copilot; --device for headless)
@@ -341,6 +345,8 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       return skillsCommand(parsed, io);
     case "mcp":
       return mcpCommand(parsed, io);
+    case "plugins":
+      return pluginsCommand(parsed, io);
     case "session":
       return sessionCommand(io);
     case "models":

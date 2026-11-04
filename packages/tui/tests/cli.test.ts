@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { VERSION, runCli, type CliIo } from "../src/cli.ts";
@@ -74,6 +74,36 @@ describe("ringko cli", () => {
     const { io, out } = collect();
     expect(await runCli(["info"], io)).toBe(0);
     expect(out[0]).toContain("approval");
+  });
+
+  it("lists and trusts plugins without touching other settings", async () => {
+    const previousAgents = process.env.AGENTS_HOME;
+    process.env.AGENTS_HOME = home;
+    const plugin = join(home, ".ringko", "plugins", "demo");
+    mkdirSync(plugin, { recursive: true });
+    writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "demo" }));
+    try {
+      let result = collect();
+      expect(await runCli(["plugins", "--workspace", home], result.io)).toBe(0);
+      expect(result.out).toEqual(["demo\tringko\tglobal\tuntrusted"]);
+
+      result = collect();
+      expect(await runCli(["plugins", "trust", "demo", "--workspace", home], result.io)).toBe(0);
+      expect(result.out[0]).toContain("Trusted plugin demo");
+
+      result = collect();
+      expect(await runCli(["plugins", "--workspace", home], result.io)).toBe(0);
+      expect(result.out).toEqual(["demo\tringko\tglobal\ttrusted"]);
+
+      result = collect();
+      expect(await runCli(["plugins", "untrust", "demo", "--workspace", home], result.io)).toBe(0);
+      result = collect();
+      expect(await runCli(["plugins", "--workspace", home], result.io)).toBe(0);
+      expect(result.out).toEqual(["demo\tringko\tglobal\tuntrusted"]);
+    } finally {
+      if (previousAgents === undefined) delete process.env.AGENTS_HOME;
+      else process.env.AGENTS_HOME = previousAgents;
+    }
   });
 
   it("lists the registered workspace tools", async () => {

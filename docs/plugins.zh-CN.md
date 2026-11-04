@@ -31,6 +31,10 @@ contribution API。
 信任列表刻意不从项目文件读取，因此克隆的仓库无法自行启用插件。删除名称即可
 停用插件。未受信任的目录在解析清单之前就被忽略。
 
+使用 `ringko plugins` 查看发现的插件目录与信任状态，`ringko plugins trust <id>`
+校验并信任插件，`ringko plugins untrust <id>` 停用插件。该命令只更新用户级设置
+文件，并保留其他所有键。
+
 ## 清单格式
 
 ```json
