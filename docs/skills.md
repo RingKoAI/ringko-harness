@@ -49,4 +49,7 @@ install leaves nothing behind.
 
 `/skills` browses installed skills. The Web UI settings panel can create and
 remove global skills. Programmatic installation uses `installSkill` from
-`@ringko-ai/config`.
+`@ringko-ai/config`, `RuntimeManager.installSkill` (which also emits the
+`skill/installed` event), or `POST /api/skills/install` with
+`{ "source": "...", "scope": "global" | "project" }`. `GET /api/skills`
+returns the current inventory.

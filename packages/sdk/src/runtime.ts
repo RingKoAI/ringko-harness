@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { instructionsText, loadInstructions, writeDiagnostic, type RingkoConfig } from "@ringko-ai/config";
+import { discoverSkills, installSkill as installSkillDirectory, instructionsText, loadInstructions, loadPlugins, writeDiagnostic, type LoadedPlugin, type PluginLoadError, type RingkoConfig, type Skill, type SkillInstallScope } from "@ringko-ai/config";
 import { registerMcpTools } from "@ringko-ai/mcp";
 import { EventBus, EventLog, Scheduler, createTimeSource } from "@ringko-ai/runtime";
 import { Sandbox } from "@ringko-ai/tools";
@@ -23,6 +23,7 @@ export interface RuntimeEvents extends Record<string, unknown> {
   "tool/post-execute": ToolExecutionResult;
   "model/before-request": ModelExecutionEvent;
   "model/after-response": ModelExecutionResult;
+  "skill/installed": Skill;
   "tool/permission": { toolName: string; target?: string; decision: "allow" | "deny" | "ask" | "default" };
 }
 
@@ -127,6 +128,26 @@ export class RuntimeManager {
 
   async resetMcp(): Promise<void> {
     await this.mcp.reset();
+  }
+
+  /** Installed skills visible to this workspace, including trusted plugin skills. */
+  skills(): Skill[] {
+    if (this.closed) throw new Error("Runtime is closed.");
+    return discoverSkills({ cwd: this.workspace });
+  }
+
+  /** Install a local skill directory and report the result to runtime observers. */
+  async installSkill(options: { source: string; scope: SkillInstallScope }): Promise<Skill> {
+    if (this.closed) throw new Error("Runtime is closed.");
+    const skill = installSkillDirectory({ ...options, cwd: this.workspace });
+    await this.events.parallel("skill/installed", skill).catch(error => writeDiagnostic("runtime.skill.installed", String(error)));
+    return skill;
+  }
+
+  /** Trusted plugins and manifest errors for this workspace. */
+  plugins(): { plugins: LoadedPlugin[]; errors: PluginLoadError[] } {
+    if (this.closed) throw new Error("Runtime is closed.");
+    return loadPlugins({ cwd: this.workspace });
   }
 
   /** Snapshot connected MCP servers for discovery/status without starting them. */

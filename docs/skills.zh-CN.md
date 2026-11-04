@@ -42,4 +42,7 @@ REPL 会询问安装到全局目录（`~/.ringko/skills`）还是当前项目目
 复制会先落到临时目录再重命名到目标位置，因此安装失败不会留下半成品。
 
 `/skills` 用于浏览已安装技能。Web UI 设置面板可以创建和删除全局技能。编程接口
-使用 `@ringko-ai/config` 的 `installSkill`。
+可使用 `@ringko-ai/config` 的 `installSkill`、`RuntimeManager.installSkill`
+（同时发出 `skill/installed` 事件），或 `POST /api/skills/install`，请求体为
+`{ "source": "...", "scope": "global" | "project" }`。`GET /api/skills` 返回
+当前技能清单。

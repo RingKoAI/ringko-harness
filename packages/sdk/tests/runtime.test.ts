@@ -127,8 +127,25 @@ it("loads trusted plugin skills and MCP servers", async () => isolated(async dir
   try {
     expect(await managed.agent.tools.call("skill", { name: "helper:plugin-focus" })).toContain("Plugin guidance");
     await expect(managed.agent.tools.call("skill", { name: "plugin-focus" })).rejects.toThrow("Unknown skill");
+    expect(runtime.skills().some(skill => skill.name === "helper:plugin-focus")).toBe(true);
+    expect(runtime.plugins().plugins.map(plugin => plugin.id)).toContain("helper");
     expect((await managed.agent.run("plugin")).content).toBe("done");
   } finally { await runtime.close(); server.stop(true); }
+}));
+
+it("installs skills through the runtime and reports them to observers", async () => isolated(async directory => {
+  const source = join(directory, "source-skill");
+  mkdirSync(source, { recursive: true });
+  writeFileSync(join(source, "SKILL.md"), "---\nname: runtime-skill\ndescription: Runtime installed\n---\nBody");
+  const runtime = new RuntimeManager(directory);
+  const events: string[] = [];
+  runtime.events.on("skill/installed", skill => { events.push(`${skill.name}:${skill.scope}`); });
+  try {
+    const skill = await runtime.installSkill({ source, scope: "global" });
+    expect(skill).toEqual(expect.objectContaining({ name: "runtime-skill", source: "ringko", scope: "global" }));
+    expect(events).toEqual(["runtime-skill:global"]);
+    expect(runtime.skills().some(entry => entry.name === "runtime-skill")).toBe(true);
+  } finally { await runtime.close(); }
 }));
 
 it("budgets the skill listing while keeping every name selectable", async () => isolated(async directory => {

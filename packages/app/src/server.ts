@@ -45,8 +45,10 @@ import {
   defaultProjectWorkspace,
   localBackendOrigin,
   removeBackendRegistration,
+  discoverPluginCandidates,
   discoverSkills,
   getOAuthAccount,
+  loadPlugins,
   getToolAuth,
   loadAuth,
   loadConfig,
@@ -628,6 +630,42 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       return json({ error: error instanceof Error ? error.message : "Cannot remove skill." }, 400);
     }
     return handleSkills();
+  }
+
+  async function handleInstallSkill(request: Request): Promise<Response> {
+    const body = await readJson<{ source?: unknown; scope?: unknown }>(request);
+    const source = typeof body?.source === "string" ? body.source.trim() : "";
+    const scope = body?.scope;
+    if (source.length === 0) return json({ error: "source is required." }, 400);
+    if (source.length > 4_096 || source.includes("\0")) return json({ error: "Invalid skill source." }, 400);
+    if (scope !== "global" && scope !== "project") return json({ error: 'scope must be "global" or "project".' }, 400);
+    try {
+      await runtimeFor(workspace).installSkill({ source, scope });
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Cannot install skill." }, 400);
+    }
+    return handleSkills();
+  }
+
+  /** Read-only plugin inventory: trusted plugins, candidates and manifest errors. */
+  function handlePlugins(): Response {
+    const loaded = loadPlugins({ cwd: workspace });
+    const candidates = discoverPluginCandidates({ cwd: workspace });
+    return json({
+      plugins: loaded.plugins.map(plugin => ({
+        id: plugin.id,
+        dir: plugin.dir,
+        source: plugin.source,
+        scope: plugin.scope,
+        version: plugin.manifest.version ?? null,
+        description: plugin.manifest.description ?? null,
+        commands: plugin.commands,
+        mcpServers: Object.keys(plugin.mcpServers),
+        skillDirs: plugin.skillDirs,
+      })),
+      candidates: candidates.candidates,
+      errors: [...candidates.errors, ...loaded.errors],
+    });
   }
 
   function handleProviders(): Response {
@@ -1737,7 +1775,9 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname === "/api/mcp/oauth" && request.method === "POST") return await handleMcpOAuth(request);
       if (url.pathname === "/api/skills" && request.method === "GET") return handleSkills();
       if (url.pathname === "/api/skills" && request.method === "POST") return await handleCreateSkill(request);
+      if (url.pathname === "/api/skills/install" && request.method === "POST") return await handleInstallSkill(request);
       if (url.pathname === "/api/skills/remove" && request.method === "POST") return await handleRemoveSkill(request);
+      if (url.pathname === "/api/plugins" && request.method === "GET") return handlePlugins();
       if (url.pathname === "/api/fs/list" && request.method === "GET") return handleListDirectory(url);
       if (url.pathname === "/api/fs/mkdir" && request.method === "POST") return await handleCreateDirectory(request);
       if (url.pathname.startsWith("/api/projects/")) {

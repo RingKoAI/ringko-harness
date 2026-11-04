@@ -119,3 +119,54 @@ export async function removeSkill(dir: string): Promise<SkillEntry[]> {
   if (!response.ok) throw new Error(`Remove failed (${response.status}).`);
   return (await response.json()) as SkillEntry[];
 }
+
+export async function installSkill(input: { source: string; scope: "global" | "project" }): Promise<SkillEntry[]> {
+  const response = await fetch(`${BASE}/api/skills/install`, {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(input),
+  });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Install failed (${response.status}).`);
+  }
+  return (await response.json()) as SkillEntry[];
+}
+
+export interface PluginCommandEntry {
+  name: string;
+  description?: string;
+  argumentHint?: string;
+  prompt: string;
+}
+
+export interface PluginEntry {
+  id: string;
+  dir: string;
+  source: string;
+  scope: string;
+  version: string | null;
+  description: string | null;
+  commands: PluginCommandEntry[];
+  mcpServers: string[];
+  skillDirs: string[];
+}
+
+export interface PluginCandidate {
+  id: string;
+  dir: string;
+  source: string;
+  scope: string;
+  trusted: boolean;
+}
+
+export interface PluginInventory {
+  plugins: PluginEntry[];
+  candidates: PluginCandidate[];
+  errors: Array<{ source: string; message: string }>;
+}
+
+export function fetchPlugins(): Promise<PluginInventory> {
+  return getJson<PluginInventory>("/api/plugins");
+}
