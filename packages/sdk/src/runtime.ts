@@ -7,6 +7,7 @@ import { resolveWorkflow, workflowInstructions } from "@ringko-ai/workflow";
 import { abortable, type ToolExecutionEvent, type ToolExecutionResult } from "@ringko-ai/harness";
 import { createRingKo, isAccessMode, type AgentEvent, type ModelExecutionEvent, type ModelExecutionResult, type RingKo, type RingKoConfig as AgentConfig } from "./index.ts";
 import { CapabilityManager, type CapabilitySnapshot } from "./capabilities.ts";
+import { ExtensionRegistry } from "./extension-registry.ts";
 import { PermissionManager } from "./permissions.ts";
 import { McpManager } from "./mcp-manager.ts";
 import { ToolManager } from "./tool-manager.ts";
@@ -15,6 +16,7 @@ import type { AgentContribution, AgentContributionContext, Disposable, RuntimeCo
 export { registerRuntimeTools } from "./runtime-tools.ts";
 export type { CapabilitySnapshot } from "./capabilities.ts";
 export { ToolManager } from "./tool-manager.ts";
+export { ExtensionRegistry } from "./extension-registry.ts";
 export { RuntimeSupervisor } from "./runtime-supervisor.ts";
 export type { AgentContribution, AgentContributionContext, Disposable, RuntimeContext, RuntimeContribution, RuntimeHost } from "./runtime-contribution.ts";
 export type { PermissionRule } from "./permissions.ts";
@@ -46,10 +48,9 @@ export class RuntimeManager {
   readonly toolManager: ToolManager;
   private readonly stopTime: () => void;
   private readonly capabilityManager: CapabilityManager;
+  private readonly extensions: ExtensionRegistry;
   private readonly mcp: McpManager;
   private readonly agents = new Set<() => void>();
-  private readonly contributions = new Map<string, { dispose?: Disposable; handlers: Set<AgentContribution> }>();
-  private readonly agentHandlers = new Set<AgentContribution>();
   private closed = false;
   private closing?: Promise<void>;
 
@@ -67,42 +68,14 @@ export class RuntimeManager {
     this.log = log ?? new EventLog();
     this.scheduler = new Scheduler(this.log);
     this.stopTime = log ? () => {} : createTimeSource(this.log);
-    const contribution = this.toolManager.contribution();
-    const { name, handlers, context } = this.begin(contribution);
-    const result = contribution.setup(context);
-    if (result instanceof Promise) throw new TypeError(`Runtime contribution "${name}" must be synchronous during construction.`);
-    this.contributions.set(name, { ...(typeof result === "function" ? { dispose: result } : {}), handlers });
-  }
-
-  private begin(contribution: RuntimeContribution): { name: string; handlers: Set<AgentContribution>; context: RuntimeContext } {
-    if (this.closed) throw new Error("Runtime is closed.");
-    const name = typeof contribution?.name === "string" ? contribution.name.trim() : "";
-    if (name.length === 0) throw new TypeError("Runtime contribution requires a name.");
-    if (this.contributions.has(name)) throw new Error(`Runtime contribution "${name}" is already registered.`);
-    const handlers = new Set<AgentContribution>();
-    return { name, handlers, context: this.context(handlers) };
+    this.extensions = new ExtensionRegistry(handlers => this.context(handlers));
+    this.extensions.install(this.toolManager.contribution());
   }
 
   /** Register a contribution and return an idempotent disposer. */
-  async use(contribution: RuntimeContribution): Promise<Disposable> {
-    const { name, handlers, context } = this.begin(contribution);
-    let dispose: Disposable | undefined;
-    try {
-      const result = await contribution.setup(context);
-      if (typeof result === "function") dispose = result;
-    } catch (error) {
-      for (const handler of handlers) this.agentHandlers.delete(handler);
-      throw error;
-    }
-    this.contributions.set(name, { ...(dispose ? { dispose } : {}), handlers });
-    let active = true;
-    return async () => {
-      if (!active) return;
-      active = false;
-      this.contributions.delete(name);
-      for (const handler of handlers) this.agentHandlers.delete(handler);
-      await dispose?.();
-    };
+  use(contribution: RuntimeContribution): Promise<Disposable> {
+    if (this.closed) return Promise.reject(new Error("Runtime is closed."));
+    return this.extensions.use(contribution);
   }
 
   private context(handlers: Set<AgentContribution>): RuntimeContext {
@@ -124,15 +97,7 @@ export class RuntimeManager {
       skills: () => this.skills(),
       plugins: () => this.plugins(),
       installSkill: options => this.installSkill(options),
-      onAgent: handler => {
-        if (this.closed) throw new Error("Runtime is closed.");
-        this.agentHandlers.add(handler);
-        handlers.add(handler);
-        return () => {
-          this.agentHandlers.delete(handler);
-          handlers.delete(handler);
-        };
-      },
+      onAgent: handler => this.extensions.add(handlers, handler),
     };
   }
 
@@ -197,7 +162,7 @@ export class RuntimeManager {
   previewTools(config: RingkoConfig, host: RuntimeHost = {}): { agent: RingKo; sandbox: Sandbox } {
     if (this.closed) throw new Error("Runtime is closed.");
     const agent = createRingKo({ task: true, model: async () => ({ content: "", toolCalls: [] }) });
-    for (const handler of this.agentHandlers) handler(agent, config, { host });
+    this.extensions.apply(agent, config, { host });
     return { agent, sandbox: this.toolManager.sandboxFor(agent) ?? this.sandbox };
   }
 
@@ -251,13 +216,10 @@ export class RuntimeManager {
         await this.events.parallel("model/after-response", event).catch(error => writeDiagnostic("runtime.model.post", String(error)));
       },
     });
-    const agentDisposers: Disposable[] = [];
     const agentContext: AgentContributionContext = { host, ...(options.session ? { session: options.session } : {}) };
+    let agentDisposers: Disposable[];
     try {
-      for (const handler of this.agentHandlers) {
-        const dispose = handler(agent, config, agentContext);
-        if (typeof dispose === "function") agentDisposers.push(dispose);
-      }
+      agentDisposers = this.extensions.apply(agent, config, agentContext);
     } catch (error) {
       controller.abort();
       throw error;
@@ -323,13 +285,7 @@ export class RuntimeManager {
     for (const close of [...this.agents]) close();
     this.permissions.clearSessions();
     this.closing = (async () => {
-      const contributions = [...this.contributions.values()].reverse();
-      this.contributions.clear();
-      for (const contribution of contributions) {
-        for (const handler of contribution.handlers) this.agentHandlers.delete(handler);
-        try { await contribution.dispose?.(); }
-        catch (error) { writeDiagnostic("runtime.contribution", String(error)); }
-      }
+      await this.extensions.dispose();
       this.capabilityManager.close();
       await this.mcp.close();
     })();
