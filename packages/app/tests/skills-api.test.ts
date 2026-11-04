@@ -24,6 +24,9 @@ it("installs skills and exposes the trusted plugin inventory over the API", asyn
   const plugin = join(root, ".ringko", "plugins", "demo");
   mkdirSync(plugin, { recursive: true });
   writeFileSync(join(plugin, "plugin.json"), JSON.stringify({ name: "demo", description: "Demo plugin", commands: [{ name: "demo-command", prompt: "Run $ARGUMENTS" }] }));
+  const second = join(root, ".ringko", "plugins", "second");
+  mkdirSync(second, { recursive: true });
+  writeFileSync(join(second, "plugin.json"), JSON.stringify({ name: "second" }));
 
   const app = startServer({ workspace: root, port: 0 });
   try {
@@ -58,7 +61,35 @@ it("installs skills and exposes the trusted plugin inventory over the API", asyn
     expect(inventory.plugins[0]?.id).toBe("demo");
     expect(inventory.plugins[0]?.commands.map(command => command.name)).toEqual(["demo-command"]);
     expect(inventory.candidates).toContainEqual(expect.objectContaining({ id: "demo", trusted: true }));
+    expect(inventory.candidates).toContainEqual(expect.objectContaining({ id: "second", trusted: false }));
     expect(inventory.errors).toEqual([]);
+
+    const trusted = await fetch(`${app.url}/api/plugins/trust`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ name: "second" }),
+    });
+    expect(trusted.status).toBe(200);
+    const trustedInventory = await trusted.json() as { plugins: Array<{ id: string }>; candidates: Array<{ id: string; trusted: boolean }> };
+    expect(trustedInventory.plugins.map(entry => entry.id)).toEqual(["demo", "second"]);
+    expect(trustedInventory.candidates).toContainEqual(expect.objectContaining({ id: "second", trusted: true }));
+
+    const unknown = await fetch(`${app.url}/api/plugins/trust`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ name: "missing" }),
+    });
+    expect(unknown.status).toBe(404);
+
+    const untrusted = await fetch(`${app.url}/api/plugins/untrust`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ name: "demo" }),
+    });
+    expect(untrusted.status).toBe(200);
+    const untrustedInventory = await untrusted.json() as { plugins: Array<{ id: string }>; candidates: Array<{ id: string; trusted: boolean }> };
+    expect(untrustedInventory.plugins.map(entry => entry.id)).toEqual(["second"]);
+    expect(untrustedInventory.candidates).toContainEqual(expect.objectContaining({ id: "demo", trusted: false }));
   } finally {
     app.stop();
     if (previousHome === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previousHome;

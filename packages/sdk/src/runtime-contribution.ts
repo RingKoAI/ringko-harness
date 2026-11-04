@@ -1,7 +1,7 @@
 // Runtime contribution contract. Contributions are the extension seam between
 // the host runtime and tools/providers/hooks supplied by plugins.
 
-import type { RingkoConfig } from "@ringko-ai/config";
+import type { LoadedPlugin, PluginLoadError, RingkoConfig, Skill, SkillInstallScope } from "@ringko-ai/config";
 import type { EventBus, EventLog, Scheduler } from "@ringko-ai/runtime";
 import type { SessionHandle } from "@ringko-ai/session";
 import type { AskHandler, Sandbox, TodoItem } from "@ringko-ai/tools";
@@ -38,6 +38,12 @@ export interface RuntimeContext {
   readonly permissions: PermissionManager;
   readonly sandbox: Sandbox;
   readonly mcp: Pick<McpManager, "start" | "current" | "ready" | "reset">;
+  /** Installed skills visible to this workspace, including plugin skills. */
+  skills(): Skill[];
+  /** Trusted plugins and manifest errors for this workspace. */
+  plugins(): { plugins: LoadedPlugin[]; errors: PluginLoadError[] };
+  /** Install a local skill directory and report it via `skill/installed`. */
+  installSkill(options: { source: string; scope: SkillInstallScope }): Promise<Skill>;
   /** Register an agent-scoped contribution; returns an idempotent disposer. */
   onAgent(handler: AgentContribution): Disposable;
 }

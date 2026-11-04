@@ -65,6 +65,7 @@ import {
   removeOAuthAccount,
   removeSkill,
   saveMcpServers,
+  savePluginTrust,
   saveProjectMcpServers,
   saveProviders,
   saveProjects,
@@ -666,6 +667,39 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       candidates: candidates.candidates,
       errors: [...candidates.errors, ...loaded.errors],
     });
+  }
+
+  function trustedPlugins(): string[] {
+    const trusted = loadConfig().plugins?.trusted;
+    if (trusted === undefined) return [];
+    if (!Array.isArray(trusted) || trusted.some(name => typeof name !== "string")) throw new Error("Plugin trust must be an array of plugin names.");
+    return trusted;
+  }
+
+  async function handlePluginTrust(request: Request, trusted: boolean): Promise<Response> {
+    const body = await readJson<{ name?: unknown }>(request);
+    const name = typeof body?.name === "string" ? body.name.trim() : "";
+    if (name.length === 0 || name.length > 128 || name.includes("\0")) return json({ error: "A valid plugin name is required." }, 400);
+    try {
+      const current = trustedPlugins();
+      if (trusted) {
+        if (!current.includes(name)) {
+          const candidates = discoverPluginCandidates({ cwd: workspace });
+          if (candidates.errors.length > 0) return json({ error: candidates.errors[0]!.message }, 400);
+          if (!candidates.candidates.some(candidate => candidate.id === name)) return json({ error: `Unknown plugin "${name}".` }, 404);
+          const loaded = loadPlugins({ cwd: workspace, trusted: [...current, name] });
+          if (!loaded.plugins.some(plugin => plugin.id === name)) {
+            return json({ error: loaded.errors.find(entry => entry.source.includes(name))?.message ?? `Plugin "${name}" has no valid manifest.` }, 400);
+          }
+          savePluginTrust([...current, name]);
+        }
+      } else {
+        savePluginTrust(current.filter(entry => entry !== name));
+      }
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Cannot update plugin trust." }, 400);
+    }
+    return handlePlugins();
   }
 
   function handleProviders(): Response {
@@ -1778,6 +1812,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname === "/api/skills/install" && request.method === "POST") return await handleInstallSkill(request);
       if (url.pathname === "/api/skills/remove" && request.method === "POST") return await handleRemoveSkill(request);
       if (url.pathname === "/api/plugins" && request.method === "GET") return handlePlugins();
+      if (url.pathname === "/api/plugins/trust" && request.method === "POST") return await handlePluginTrust(request, true);
+      if (url.pathname === "/api/plugins/untrust" && request.method === "POST") return await handlePluginTrust(request, false);
       if (url.pathname === "/api/fs/list" && request.method === "GET") return handleListDirectory(url);
       if (url.pathname === "/api/fs/mkdir" && request.method === "POST") return await handleCreateDirectory(request);
       if (url.pathname.startsWith("/api/projects/")) {

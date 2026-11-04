@@ -31,6 +31,30 @@ it("sends refreshed credentials and rejects unauthenticated requests without fol
   expect(headers).toEqual(["Bearer first", "Bearer second"]);
 });
 
+it("exposes typed skill and plugin endpoints", async () => {
+  const calls: Array<{ path: string; method?: string; body?: unknown }> = [];
+  const client = new BackendClient({ fetch: (async (url: unknown, init?: RequestInit) => {
+    calls.push({ path: String(url), method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    return Response.json(String(url).endsWith("/api/plugins") ? { plugins: [], candidates: [], errors: [] } : []);
+  }) });
+  await client.skills();
+  await client.createSkill({ name: "demo" });
+  await client.installSkill({ source: "/tmp/demo", scope: "project" });
+  await client.removeSkill("/tmp/demo");
+  await client.plugins();
+  await client.trustPlugin("demo");
+  await client.untrustPlugin("demo");
+  expect(calls).toEqual([
+    { path: "/api/skills", method: "GET", body: undefined },
+    { path: "/api/skills", method: "POST", body: { name: "demo" } },
+    { path: "/api/skills/install", method: "POST", body: { source: "/tmp/demo", scope: "project" } },
+    { path: "/api/skills/remove", method: "POST", body: { dir: "/tmp/demo" } },
+    { path: "/api/plugins", method: "GET", body: undefined },
+    { path: "/api/plugins/trust", method: "POST", body: { name: "demo" } },
+    { path: "/api/plugins/untrust", method: "POST", body: { name: "demo" } },
+  ]);
+});
+
 it("stops reconnecting and releases the stream after a watch is closed", async () => {
   let calls = 0; let cancelled = false;
   const client = new BackendClient({ fetch: (async () => {

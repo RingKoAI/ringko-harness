@@ -1,4 +1,4 @@
-import { SYNC_LIMITS, type BackendIdentity, type RunInput, type SessionMeta, type SessionSnapshot, type SyncNotice } from "@ringko-ai/protocol";
+import { SYNC_LIMITS, type BackendIdentity, type PluginInventory, type RunInput, type SessionMeta, type SessionSnapshot, type SkillEntry, type SkillInstallInput, type SyncNotice } from "@ringko-ai/protocol";
 export * from "@ringko-ai/protocol";
 
 export class BackendError extends Error {
@@ -30,6 +30,13 @@ export class BackendClient {
   snapshot(id: string, signal?: AbortSignal): Promise<SessionSnapshot> { return this.request(`/api/sessions/${encodeURIComponent(id)}/snapshot`, undefined, "GET", signal); }
   run(input: RunInput): Promise<{ sessionId: string }> { return this.request("/api/runs", input); }
   stop(id: string): Promise<unknown> { return this.request(`/api/sessions/${encodeURIComponent(id)}/stop`, {}); }
+  skills(signal?: AbortSignal): Promise<SkillEntry[]> { return this.request("/api/skills", undefined, "GET", signal); }
+  createSkill(input: { name: string; description?: string; body?: string }, signal?: AbortSignal): Promise<SkillEntry[]> { return this.request("/api/skills", input, "POST", signal); }
+  installSkill(input: SkillInstallInput, signal?: AbortSignal): Promise<SkillEntry[]> { return this.request("/api/skills/install", input, "POST", signal); }
+  removeSkill(dir: string, signal?: AbortSignal): Promise<SkillEntry[]> { return this.request("/api/skills/remove", { dir }, "POST", signal); }
+  plugins(signal?: AbortSignal): Promise<PluginInventory> { return this.request("/api/plugins", undefined, "GET", signal); }
+  trustPlugin(name: string, signal?: AbortSignal): Promise<PluginInventory> { return this.request("/api/plugins/trust", { name }, "POST", signal); }
+  untrustPlugin(name: string, signal?: AbortSignal): Promise<PluginInventory> { return this.request("/api/plugins/untrust", { name }, "POST", signal); }
   /** At most one snapshot request in flight. Invalidations received during it trigger another read. */
   watchSession(id: string, onSnapshot: (snapshot: SessionSnapshot) => void, onError?: (error: Error) => void, onNotice?: (notice: SyncNotice) => void): { close(): void } {
     const controller = new AbortController();

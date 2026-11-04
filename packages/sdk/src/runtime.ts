@@ -106,6 +106,9 @@ export class RuntimeManager {
         ready: () => this.mcp.ready(),
         reset: () => this.mcp.reset(),
       },
+      skills: () => this.skills(),
+      plugins: () => this.plugins(),
+      installSkill: options => this.installSkill(options),
       onAgent: handler => {
         if (this.closed) throw new Error("Runtime is closed.");
         this.agentHandlers.add(handler);

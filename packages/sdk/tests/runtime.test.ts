@@ -308,6 +308,9 @@ it("registers runtime contributions and releases agent-scoped handlers", async (
     name: "fixture-contribution",
     setup(context) {
       expect(context.workspace).toBe(directory);
+      expect(Array.isArray(context.skills())).toBe(true);
+      expect(Array.isArray(context.plugins().plugins)).toBe(true);
+      expect(typeof context.installSkill).toBe("function");
       context.onAgent((agent, _config, agentContext) => {
         expect(agentContext.host).toEqual({});
         agent.tools.register(defineTool({

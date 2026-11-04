@@ -1,7 +1,9 @@
 // MCP and skill management endpoints.
 
+import type { PluginCandidate, PluginCommandEntry, PluginEntry, PluginInventory, SkillEntry } from "@ringko-ai/client";
 import { BASE, UnauthorizedError, authHeaders, getJson } from "./http";
 import type { OAuthStart } from "../api";
+export type { PluginCandidate, PluginCommandEntry, PluginEntry, PluginInventory, SkillEntry };
 
 export interface McpServerEntry {
   name: string;
@@ -83,14 +85,6 @@ export async function saveMcp(
   return (await response.json()) as McpPayload;
 }
 
-export interface SkillEntry {
-  name: string;
-  description?: string;
-  source: string;
-  scope: string;
-  dir: string;
-}
-
 export function fetchSkills(): Promise<SkillEntry[]> {
   return getJson<SkillEntry[]>("/api/skills");
 }
@@ -134,39 +128,20 @@ export async function installSkill(input: { source: string; scope: "global" | "p
   return (await response.json()) as SkillEntry[];
 }
 
-export interface PluginCommandEntry {
-  name: string;
-  description?: string;
-  argumentHint?: string;
-  prompt: string;
-}
-
-export interface PluginEntry {
-  id: string;
-  dir: string;
-  source: string;
-  scope: string;
-  version: string | null;
-  description: string | null;
-  commands: PluginCommandEntry[];
-  mcpServers: string[];
-  skillDirs: string[];
-}
-
-export interface PluginCandidate {
-  id: string;
-  dir: string;
-  source: string;
-  scope: string;
-  trusted: boolean;
-}
-
-export interface PluginInventory {
-  plugins: PluginEntry[];
-  candidates: PluginCandidate[];
-  errors: Array<{ source: string; message: string }>;
-}
-
 export function fetchPlugins(): Promise<PluginInventory> {
   return getJson<PluginInventory>("/api/plugins");
+}
+
+export async function setPluginTrust(name: string, trusted: boolean): Promise<PluginInventory> {
+  const response = await fetch(`${BASE}/api/plugins/${trusted ? "trust" : "untrust"}`, {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ name }),
+  });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Plugin trust failed (${response.status}).`);
+  }
+  return (await response.json()) as PluginInventory;
 }

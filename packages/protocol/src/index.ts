@@ -55,3 +55,48 @@ export interface SessionSnapshot {
 }
 export interface SyncNotice { instance: string; revision: number; sessionId?: string; kind: "session" | "activity" | "config" | "workspace" | "reset" }
 export interface RunInput { sessionId: string; prompt: string; attachments?: string[]; loop?: { args: string } }
+
+export interface SkillEntry {
+  name: string;
+  description?: string;
+  source: string;
+  scope: string;
+  dir: string;
+  /** Set for namespaced plugin skills (`<plugin>:<skill>`). */
+  plugin?: string;
+}
+
+export interface SkillInstallInput { source: string; scope: "global" | "project" }
+
+export interface PluginCommandEntry {
+  name: string;
+  description?: string;
+  argumentHint?: string;
+  prompt: string;
+}
+
+export interface PluginEntry {
+  id: string;
+  dir: string;
+  source: string;
+  scope: string;
+  version: string | null;
+  description: string | null;
+  commands: PluginCommandEntry[];
+  mcpServers: string[];
+  skillDirs: string[];
+}
+
+export interface PluginCandidate {
+  id: string;
+  dir: string;
+  source: string;
+  scope: string;
+  trusted: boolean;
+}
+
+export interface PluginInventory {
+  plugins: PluginEntry[];
+  candidates: PluginCandidate[];
+  errors: Array<{ source: string; message: string }>;
+}
