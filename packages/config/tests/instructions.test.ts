@@ -24,6 +24,25 @@ it("loads global and project rules with existing precedence and observes edits o
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+it("recursively injects nested AGENTS.md files with stable ordering", () => {
+  const root = mkdtempSync(join(tmpdir(), "ringko-rule-recursive-"));
+  try {
+    const cwd = join(root, "project");
+    mkdirSync(join(cwd, ".git"), { recursive: true });
+    writeFileSync(join(cwd, "AGENTS.md"), "Root rules");
+    mkdirSync(join(cwd, "pkg", "deep"), { recursive: true });
+    writeFileSync(join(cwd, "pkg", "AGENTS.md"), "Package rules");
+    writeFileSync(join(cwd, "pkg", "deep", "AGENTS.md"), "Deep rules");
+    mkdirSync(join(cwd, "node_modules", "ignored"), { recursive: true });
+    writeFileSync(join(cwd, "node_modules", "ignored", "AGENTS.md"), "Ignored rules");
+    mkdirSync(join(cwd, ".hidden"), { recursive: true });
+    writeFileSync(join(cwd, ".hidden", "AGENTS.md"), "Hidden rules");
+    const names = loadInstructions({ cwd, env: { RINGKO_HOME: join(root, "home"), AGENTS_HOME: join(root, "agents") } }).map(file => file.content);
+    expect(names).toEqual(["Root rules", "Package rules", "Deep rules"]);
+    expect(loadInstructions({ cwd, recursive: false, env: { RINGKO_HOME: join(root, "home"), AGENTS_HOME: join(root, "agents") } }).map(file => file.content)).toEqual(["Root rules"]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 it("does not duplicate a file discovered in both global and project scopes", () => {
   const root = mkdtempSync(join(tmpdir(), "ringko-rule-dedupe-"));
   try {
