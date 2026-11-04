@@ -10,6 +10,8 @@ import { createRingKo, isAccessMode, type AgentEvent, type RingKo, type RingKoCo
 import { registerRuntimeSkills } from "./skills.ts";
 import { PermissionManager } from "./permissions.ts";
 import { McpManager } from "./mcp-manager.ts";
+import type { AgentContribution, Disposable, RuntimeContext, RuntimeContribution } from "./runtime-contribution.ts";
+export type { AgentContribution, Disposable, RuntimeContext, RuntimeContribution } from "./runtime-contribution.ts";
 export type { PermissionRule } from "./permissions.ts";
 
 export interface RuntimeHost {
@@ -64,6 +66,8 @@ export class RuntimeManager {
   private readonly stopTime: () => void;
   private readonly mcp: McpManager;
   private readonly agents = new Set<() => void>();
+  private readonly contributions = new Map<string, { dispose?: Disposable; handlers: Set<AgentContribution> }>();
+  private readonly agentHandlers = new Set<AgentContribution>();
   private closed = false;
   private closing?: Promise<void>;
 
@@ -76,6 +80,59 @@ export class RuntimeManager {
     this.log = log ?? new EventLog();
     this.scheduler = new Scheduler(this.log);
     this.stopTime = log ? () => {} : createTimeSource(this.log);
+  }
+
+  /** Register a contribution and return an idempotent disposer. */
+  async use(contribution: RuntimeContribution): Promise<Disposable> {
+    if (this.closed) throw new Error("Runtime is closed.");
+    const name = typeof contribution?.name === "string" ? contribution.name.trim() : "";
+    if (name.length === 0) throw new TypeError("Runtime contribution requires a name.");
+    if (this.contributions.has(name)) throw new Error(`Runtime contribution "${name}" is already registered.`);
+    const handlers = new Set<AgentContribution>();
+    const context = this.context(handlers);
+    let dispose: Disposable | undefined;
+    try {
+      const result = await contribution.setup(context);
+      if (typeof result === "function") dispose = result;
+    } catch (error) {
+      for (const handler of handlers) this.agentHandlers.delete(handler);
+      throw error;
+    }
+    this.contributions.set(name, { ...(dispose ? { dispose } : {}), handlers });
+    let active = true;
+    return async () => {
+      if (!active) return;
+      active = false;
+      this.contributions.delete(name);
+      for (const handler of handlers) this.agentHandlers.delete(handler);
+      await dispose?.();
+    };
+  }
+
+  private context(handlers: Set<AgentContribution>): RuntimeContext {
+    return {
+      workspace: this.workspace,
+      events: this.events,
+      log: this.log,
+      scheduler: this.scheduler,
+      permissions: this.permissions,
+      sandbox: this.sandbox,
+      mcp: {
+        start: (sandbox, permissions) => this.mcp.start(sandbox, permissions),
+        current: () => this.mcp.current(),
+        ready: () => this.mcp.ready(),
+        reset: () => this.mcp.reset(),
+      },
+      onAgent: handler => {
+        if (this.closed) throw new Error("Runtime is closed.");
+        this.agentHandlers.add(handler);
+        handlers.add(handler);
+        return () => {
+          this.agentHandlers.delete(handler);
+          handlers.delete(handler);
+        };
+      },
+    };
   }
 
   connections(sandbox: Sandbox = this.sandbox, permissions?: Readonly<Record<string, unknown>>): ReturnType<McpManager["start"]> {
@@ -98,6 +155,15 @@ export class RuntimeManager {
   /** Await the startup connection pass, then snapshot discovery. */
   readyConnections(): ReturnType<McpManager["ready"]> {
     return this.mcp.ready();
+  }
+
+  /** Build a tool-only agent for capability discovery without starting MCP. */
+  previewTools(config: RingkoConfig, host: RuntimeHost = {}): { agent: RingKo; sandbox: Sandbox } {
+    if (this.closed) throw new Error("Runtime is closed.");
+    const agent = createRingKo({ task: true, model: async () => ({ content: "", toolCalls: [] }) });
+    const sandbox = registerRuntimeTools(agent, config, this.workspace, host);
+    for (const handler of this.agentHandlers) handler(agent, config);
+    return { agent, sandbox };
   }
 
   createAgent(config: RingkoConfig, options: AgentConfig, host: RuntimeHost = {}): RuntimeAgent {
@@ -139,6 +205,16 @@ export class RuntimeManager {
       },
     });
     const toolSandbox = registerRuntimeTools(agent, config, this.workspace, host, options.session);
+    const agentDisposers: Disposable[] = [];
+    try {
+      for (const handler of this.agentHandlers) {
+        const dispose = handler(agent, config);
+        if (typeof dispose === "function") agentDisposers.push(dispose);
+      }
+    } catch (error) {
+      controller.abort();
+      throw error;
+    }
     agent.tools.setPermissionCheck(async request => {
       const rule = this.permissions.decide(permissionSession, request.toolName, request.target);
       const decision = rule === "deny" || rule === "ask" ? rule : (await abortable(this.events.waterfall("tool/permission", { toolName: request.toolName, target: request.target, decision: rule }), request.signal)).decision;
@@ -175,6 +251,14 @@ export class RuntimeManager {
       } finally { running = false; }
     };
     const close = (): void => {
+      for (const dispose of agentDisposers.reverse()) {
+        try {
+          const pending = dispose();
+          if (pending) void Promise.resolve(pending).catch(error => writeDiagnostic("runtime.contribution", String(error)));
+        } catch (error) {
+          writeDiagnostic("runtime.contribution", String(error));
+        }
+      }
       controller.abort();
       agent.jobs.cancelAll();
       this.agents.delete(close);
@@ -184,12 +268,23 @@ export class RuntimeManager {
   }
 
   close(): Promise<void> {
+    if (this.closing) return this.closing;
     this.closed = true;
     this.stopTime();
     for (const task of this.scheduler.list()) this.scheduler.remove(task.id);
     for (const close of [...this.agents]) close();
     this.permissions.clearSessions();
-    return this.closing ??= this.mcp.close();
+    this.closing = (async () => {
+      const contributions = [...this.contributions.values()].reverse();
+      this.contributions.clear();
+      for (const contribution of contributions) {
+        for (const handler of contribution.handlers) this.agentHandlers.delete(handler);
+        try { await contribution.dispose?.(); }
+        catch (error) { writeDiagnostic("runtime.contribution", String(error)); }
+      }
+      await this.mcp.close();
+    })();
+    return this.closing;
   }
 }
 

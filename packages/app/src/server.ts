@@ -124,7 +124,7 @@ import { proxyDev, serveStatic } from "./server/static.ts";
 import { startInteractiveTerminal, type InteractiveTerminal } from "./server/terminal.ts";
 import { sessionTitleView, stripEventParts, stripMessageParts } from "./server/views.ts";
 import { WorkspaceReview } from "./workspace-review.ts";
-import { RuntimeManager, registerRuntimeTools, type RuntimeAgent } from "@ringko-ai/sdk/runtime";
+import { RuntimeManager, type RuntimeAgent } from "@ringko-ai/sdk/runtime";
 import { PROTOCOL_VERSION } from "@ringko-ai/protocol";
 import { SyncManager } from "./services/sync.ts";
 import { RunStateManager } from "./services/runs.ts";
@@ -180,14 +180,6 @@ interface TerminalSession {
 }
 
 
-
-function registerTools(
-  ringko: RingKo,
-  config: RingkoConfig,
-  workspace: string,
-): void {
-  registerRuntimeTools(ringko, config, workspace);
-}
 
 /** Start the local server. Throws if the port is unavailable. */
 export function startServer(options: ServerOptions = {}): RingkoServer {
@@ -319,8 +311,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     const config = readConfig();
     if (typeof config === "string") return json({ error: config }, 500);
     const model = await loadModel(config);
-    const tools = createRingKo({ task: true, log: eventLog, model: async () => ({ content: "", toolCalls: [] }) });
-    registerTools(tools, config, workspace);
+    const tools = runtimeFor(workspace).previewTools(config).agent;
     const accessMode = isAccessMode(config.permission)
       ? config.permission
       : isAccessMode(config.mode)
@@ -1154,8 +1145,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     let used: number;
     try {
       const history = toChatMessages(store.open(id, "read").all());
-      const probe = createRingKo({ task: true, model: async () => ({ content: "", toolCalls: [] }) });
-      registerTools(probe, config, workspace);
+      const probe = runtimeFor(workspace).previewTools(config).agent;
       const mcpTools = (await runtimeFor(workspace).readyConnections()).connections.flatMap(connection => mcpToolDefinitions(connection, { mode: (typeof config === "string" ? "workspace-write" : config.sandbox?.mode ?? "workspace-write"), permissions: typeof config === "string" ? undefined : config.sandbox?.mcp }));
       used = estimateMessagesTokens(history) + estimateToolsTokens([...probe.tools.list(), ...mcpTools]);
     } catch {

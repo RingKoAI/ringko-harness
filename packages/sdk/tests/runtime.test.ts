@@ -235,3 +235,71 @@ it("gives the model a native tree tool and executes it with shell capability dis
   finally { managed.close(); await runtime.close(); }
 }));
 
+
+it("registers runtime contributions and releases agent-scoped handlers", async () => isolated(async directory => {
+  const runtime = new RuntimeManager(directory);
+  const order: string[] = [];
+  const dispose = await runtime.use({
+    name: "fixture-contribution",
+    setup(context) {
+      expect(context.workspace).toBe(directory);
+      context.onAgent((agent) => {
+        agent.tools.register(defineTool({
+          name: "fixture_tool",
+          description: "Fixture tool",
+          inputSchema: { type: "object", properties: {} },
+          parseInput: () => ({}),
+          assessRisk: () => ({ kind: "safe", reason: "Fixture" }),
+          execute: () => "ok",
+        }));
+        order.push("agent");
+        return () => { order.push("agent-dispose"); };
+      });
+      return () => { order.push("contribution-dispose"); };
+    },
+  });
+  const managed = runtime.createAgent({}, { model: async () => ({ content: "done", toolCalls: [] }) });
+  try {
+    expect(managed.agent.tools.names()).toContain("fixture_tool");
+    await expect(runtime.use({ name: "fixture-contribution", setup() {} })).rejects.toThrow("already registered");
+    await expect(runtime.use({ name: "broken", setup() { throw new Error("setup failed"); } })).rejects.toThrow("setup failed");
+  } finally {
+    managed.close();
+    await dispose();
+    await runtime.close();
+  }
+  expect(order).toEqual(["agent", "agent-dispose", "contribution-dispose"]);
+}));
+
+it("disposes runtime contributions in reverse registration order", async () => isolated(async directory => {
+  const runtime = new RuntimeManager(directory);
+  const order: string[] = [];
+  await runtime.use({ name: "first", setup: () => () => { order.push("first"); } });
+  await runtime.use({ name: "second", setup: () => () => { order.push("second"); } });
+  await runtime.close();
+  expect(order).toEqual(["second", "first"]);
+}));
+
+it("includes contribution tools in runtime previews", async () => isolated(async directory => {
+  const runtime = new RuntimeManager(directory);
+  await runtime.use({
+    name: "preview-tool",
+    setup(context) {
+      context.onAgent(agent => {
+        agent.tools.register(defineTool({
+          name: "preview_only",
+          description: "Preview-only tool",
+          inputSchema: { type: "object", properties: {} },
+          parseInput: () => ({}),
+          assessRisk: () => ({ kind: "safe", reason: "Fixture" }),
+          execute: () => "ok",
+        }));
+      });
+    },
+  });
+  try {
+    expect(runtime.previewTools({}).agent.tools.names()).toContain("preview_only");
+  } finally {
+    await runtime.close();
+  }
+}));
