@@ -1,5 +1,7 @@
 // Shared HTTP/auth plumbing for the WebUI API modules.
 
+import { BackendClient } from "@ringko-ai/client";
+
 export const BASE = "";
 
 const TOKEN_KEY = "ringko.token";
@@ -18,6 +20,8 @@ export function getToken(): string | null {
     return null;
   }
 }
+
+export const backendClient = new BackendClient({ token: () => getToken() });
 
 export function setToken(token: string): void {
   try {

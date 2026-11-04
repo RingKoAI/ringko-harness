@@ -1,10 +1,12 @@
 // Typed client for the RingKo local server (see @ringko-ai/app).
-import { BackendClient, consumeSse, type SessionSnapshot, type TodoItem, type SessionUsage } from '@ringko-ai/client';
-import { BASE, UnauthorizedError, authHeaders, errorFrom, getJson, getToken } from './api/http';
-export { UnauthorizedError, clearToken, getToken, setToken } from './api/http';
+import { consumeSse, type TodoItem, type SessionUsage } from '@ringko-ai/client';
+import { BASE, UnauthorizedError, authHeaders, backendClient, errorFrom, getJson } from './api/http';
+export { UnauthorizedError, backendClient, clearToken, getToken, setToken } from './api/http';
 export type { SessionSnapshot, TodoItem, SessionUsage } from '@ringko-ai/client';
 import type { UsageStatistics, UsageStatisticsQuery } from '@ringko-ai/client';
 export type { UsageStatistics, UsageStatisticsQuery, UsageStatisticsBucket, UsageRequest, UsageCallKind } from '@ringko-ai/client';
+export * from './api/connectors';
+export * from './api/sessions';
 
 export function fetchUsageStatistics(query: UsageStatisticsQuery, signal?: AbortSignal): Promise<UsageStatistics> {
   const params = new URLSearchParams();
@@ -132,18 +134,6 @@ export interface TrajectoryPage {
   records: TrajectoryRecord[]; hasOlder: boolean; hasNewer: boolean; lastSeq: number;
 }
 
-export function fetchTrajectory(id: string, cursor: { before?: number; after?: number } = {}, signal?: AbortSignal): Promise<TrajectoryPage> {
-  const query = new URLSearchParams();
-  if (cursor.before !== undefined) query.set('before', String(cursor.before));
-  if (cursor.after !== undefined) query.set('after', String(cursor.after));
-  return fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/trajectory?${query}`, { headers: authHeaders(), signal })
-    .then(async response => {
-      if (response.status === 401) throw new UnauthorizedError();
-      if (!response.ok) throw new Error(`Trajectory request failed (${response.status}).`);
-      return await response.json() as TrajectoryPage;
-    });
-}
-
 export interface ServerMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
@@ -169,23 +159,6 @@ export interface PermissionRule {
   tool: string;
   target?: string;
   behavior: 'allow' | 'deny' | 'ask';
-}
-
-export function fetchPermissionRules(): Promise<{ workspace: string; rules: PermissionRule[] }> {
-  return getJson('/api/permissions');
-}
-
-export async function removePermissionRule(workspace: string, rule: PermissionRule): Promise<void> {
-  const response = await fetch(`${BASE}/api/permissions`, {
-    method: 'DELETE',
-    headers: authHeaders({ 'content-type': 'application/json' }),
-    body: JSON.stringify({ workspace, ...rule }),
-  });
-  if (response.status === 401) throw new UnauthorizedError();
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({})) as { error?: unknown };
-    throw new Error(typeof body.error === 'string' ? body.error : `Permission update failed (${response.status}).`);
-  }
 }
 
 export interface UploadedFile {
@@ -289,7 +262,6 @@ export async function stopSession(id: string): Promise<void> {
   if (!response.ok && response.status !== 404) throw new Error(`Stop failed (${response.status}).`);
 }
 
-export const backendClient = new BackendClient({ token: () => getToken() });
 export interface QuestionRequest { id: string; input: { questions: Array<{ id: string; question: string; header?: string; detail?: string; multiSelect?: boolean; options?: Array<{ label: string; description?: string }> }> } }
 export interface QuestionOutput { answers: Array<{ id: string; selected: string[]; custom?: string }> }
 export interface JobSummary { jobId: string; kind: 'sub' | 'shell'; description: string; status: 'running' | 'completed' | 'failed' | 'cancelled' | 'unknown'; background: boolean; lastSeq: number; result?: unknown; output?: string }
@@ -314,92 +286,6 @@ export interface ContextUsage {
   ratio: number;
 }
 
-export function fetchContext(id: string): Promise<ContextUsage> {
-  return getJson<ContextUsage>(`/api/sessions/${encodeURIComponent(id)}/context`);
-}
-
-export async function forkSession(id: string, index?: number, before = false): Promise<{ sessionId: string }> {
-  const response = await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/fork`, {
-    method: "POST",
-    headers: authHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ ...(index === undefined ? {} : { index }), ...(before ? { before: true } : {}) }),
-  })
-  if (response.status === 401) throw new UnauthorizedError()
-  if (!response.ok) throw new Error(`Branch failed (${response.status}).`)
-  return (await response.json()) as { sessionId: string }
-}
-
-export function fetchFeedback(id: string): Promise<Record<number, 'up' | 'down'>> {
-  return getJson<Record<number, 'up' | 'down'>>(`/api/sessions/${encodeURIComponent(id)}/feedback`)
-}
-
-export async function sendFeedback(id: string, index: number, value: 'up' | 'down' | null): Promise<void> {
-  const response = await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/feedback`, {
-    method: 'POST',
-    headers: authHeaders({ 'content-type': 'application/json' }),
-    body: JSON.stringify({ index, value }),
-  })
-  if (response.status === 401) throw new UnauthorizedError()
-  if (!response.ok) throw new Error(`Feedback failed (${response.status}).`)
-}
-
-export function fetchSessions(): Promise<SessionMeta[]> {
-  return getJson<SessionMeta[]>("/api/sessions");
-}
-
-export function fetchSession(id: string): Promise<{ id: string; messages: ServerMessage[]; tasks?: TaskSummary[]; todos?: TodoItem[]; jobs?: JobSummary[] }> {
-  return getJson<{ id: string; messages: ServerMessage[] }>(`/api/sessions/${encodeURIComponent(id)}`);
-}
-
-export function fetchSnapshot(id: string): Promise<SessionSnapshot> { return backendClient.snapshot(id); }
-
-export function fetchToolLog(id: string, offset = 0): Promise<ToolLogPage> {
-  return getJson<ToolLogPage>(`/api/sessions/${encodeURIComponent(id)}/tool-log?offset=${offset}`);
-}
-
-export async function createSession(): Promise<SessionMeta> {
-  const response = await fetch(`${BASE}/api/sessions`, { method: "POST", headers: authHeaders() });
-  if (response.status === 401) throw new UnauthorizedError();
-  if (!response.ok) throw new Error(`Create session failed (${response.status}).`);
-  return (await response.json()) as SessionMeta;
-}
-
-async function sessionAction(id: string, action: string, body?: unknown): Promise<void> {
-  const response = await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/${action}`, {
-    method: "POST",
-    headers: authHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify(body ?? {}),
-  });
-  if (response.status === 401) throw new UnauthorizedError();
-  if (!response.ok) throw new Error(`${action} failed (${response.status}).`);
-}
-
-export function renameSession(id: string, title: string): Promise<void> {
-  return sessionAction(id, "title", { title });
-}
-
-export function archiveSession(id: string, archived: boolean): Promise<void> {
-  return sessionAction(id, "archive", { archived });
-}
-
-export async function deleteSession(id: string): Promise<void> {
-  const response = await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-    headers: authHeaders(),
-  });
-  if (response.status === 401) throw new UnauthorizedError();
-  if (!response.ok) throw new Error(`Delete failed (${response.status}).`);
-}
-
-export async function respondApproval(id: string, approved: boolean, scope?: 'session' | 'saved'): Promise<void> {
-  const response = await fetch(`${BASE}/api/approval`, {
-    method: "POST",
-    headers: authHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ id, approved, scope }),
-  });
-  if (!response.ok) throw new Error(`Approval failed (${response.status}).`);
-}
-
 export function fetchProjects(): Promise<ProjectsResponse> {
   return getJson<ProjectsResponse>("/api/projects");
 }
@@ -412,123 +298,6 @@ async function projectRequest(init: RequestInit): Promise<ProjectsResponse> {
     throw new Error(detail || `Request failed (${response.status}).`);
   }
   return (await response.json()) as ProjectsResponse;
-}
-
-export interface McpServerEntry {
-  name: string;
-  source: string;
-  scope: string;
-  kind: string;
-  authenticated: boolean;
-  config: Record<string, unknown>;
-}
-
-export interface McpPayload {
-  servers: McpServerEntry[];
-  map: Record<string, Record<string, unknown>>;
-}
-
-export function fetchMcp(): Promise<McpPayload> {
-  return getJson<McpPayload>("/api/mcp");
-}
-
-export interface McpToolInfo {
-  name: string;
-  description: string | null;
-}
-
-export interface McpConnected {
-  servers: { name: string; serverInfo: Record<string, unknown>; tools: McpToolInfo[] }[];
-  errors: { name: string; message: string }[];
-}
-
-export function fetchMcpConnected(): Promise<McpConnected> {
-  return getJson<McpConnected>("/api/mcp/connected");
-}
-
-export async function testMcp(
-  name: string,
-  config: Record<string, unknown>,
-): Promise<{ serverInfo: Record<string, unknown>; tools: McpToolInfo[] }> {
-  const response = await fetch(`${BASE}/api/mcp/test`, {
-    method: "POST",
-    headers: authHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ name, config }),
-  });
-  if (response.status === 401) throw new UnauthorizedError();
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(detail || `Test failed (${response.status}).`);
-  }
-  return (await response.json()) as { serverInfo: Record<string, unknown>; tools: McpToolInfo[] };
-}
-
-export async function startMcpOAuth(name: string, url: string): Promise<OAuthStart> {
-  const response = await fetch(`${BASE}/api/mcp/oauth`, {
-    method: "POST",
-    headers: authHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ name, url }),
-  });
-  if (response.status === 401) throw new UnauthorizedError();
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(detail || `OAuth start failed (${response.status}).`);
-  }
-  return (await response.json()) as OAuthStart;
-}
-
-export async function saveMcp(
-  servers: Record<string, unknown>,
-  scope: "global" | "project" = "global",
-): Promise<McpPayload> {
-  const response = await fetch(`${BASE}/api/mcp`, {
-    method: "PUT",
-    headers: authHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ servers, scope }),
-  });
-  if (response.status === 401) throw new UnauthorizedError();
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(detail || `Save failed (${response.status}).`);
-  }
-  return (await response.json()) as McpPayload;
-}
-
-export interface SkillEntry {
-  name: string;
-  description?: string;
-  source: string;
-  scope: string;
-  dir: string;
-}
-
-export function fetchSkills(): Promise<SkillEntry[]> {
-  return getJson<SkillEntry[]>("/api/skills");
-}
-
-export async function createSkill(input: { name: string; description?: string; body?: string }): Promise<SkillEntry[]> {
-  const response = await fetch(`${BASE}/api/skills`, {
-    method: "POST",
-    headers: authHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify(input),
-  });
-  if (response.status === 401) throw new UnauthorizedError();
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(detail || `Create failed (${response.status}).`);
-  }
-  return (await response.json()) as SkillEntry[];
-}
-
-export async function removeSkill(dir: string): Promise<SkillEntry[]> {
-  const response = await fetch(`${BASE}/api/skills/remove`, {
-    method: "POST",
-    headers: authHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ dir }),
-  });
-  if (response.status === 401) throw new UnauthorizedError();
-  if (!response.ok) throw new Error(`Remove failed (${response.status}).`);
-  return (await response.json()) as SkillEntry[];
 }
 
 export interface DirectoryEntry {
