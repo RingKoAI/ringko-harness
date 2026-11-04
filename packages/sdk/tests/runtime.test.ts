@@ -353,6 +353,26 @@ it("runs model hooks with primary usage kinds and records failures", async () =>
   } finally { managed.close(); await runtime.close(); }
 }));
 
+it("tags helper model calls with their usage kind", async () => isolated(async directory => {
+  const runtime = new RuntimeManager(directory);
+  const events: string[] = [];
+  runtime.events.on("model/before-request", event => { events.push(event.kind); });
+  runtime.events.on("model/after-response", event => { events.push(`done:${event.kind}`); });
+  const history = Array.from({ length: 10 }, (_, index) => ({ role: index % 2 === 0 ? "user" as const : "assistant" as const, content: `message ${String(index)}` }));
+  const managed = runtime.createAgent({}, {
+    model: async () => { throw new Error("primary model must not run"); },
+    smallModel: async request => {
+      expect(request.tools).toEqual([]);
+      return { content: "summary", toolCalls: [] };
+    },
+    history,
+  });
+  try {
+    await managed.agent.compact();
+    expect(events).toEqual(["compaction", "done:compaction"]);
+  } finally { managed.close(); await runtime.close(); }
+}));
+
 it("blocks model requests when a before hook fails and reports failing turns", async () => isolated(async directory => {
   const runtime = new RuntimeManager(directory);
   const events: string[] = [];
