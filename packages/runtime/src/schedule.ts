@@ -186,6 +186,12 @@ export class Scheduler {
     const task: ScheduledTask = { id, rule, topic: options.topic ?? "time", next: null, ...(options.data !== undefined ? { data: options.data } : {}) };
     this.tasks.set(id, { task });
     this.arm(id);
+    // A one-shot time already in the past would otherwise sit in the list
+    // forever with `next: null` and never produce an event.
+    if (rule.kind === "at" && task.next === null) {
+      this.tasks.delete(id);
+      throw new TypeError("Scheduled time must be in the future.");
+    }
     return task;
   }
 

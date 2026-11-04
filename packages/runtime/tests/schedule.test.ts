@@ -38,6 +38,12 @@ describe("nextOccurrence", () => {
 });
 
 describe("Scheduler", () => {
+  it("rejects a one-shot time in the past without leaving a dead task", () => {
+    const scheduler = new Scheduler(new EventLog());
+    expect(() => scheduler.create({ kind: "at", at: Date.now() - 1_000 })).toThrow("must be in the future");
+    expect(scheduler.list()).toEqual([]);
+  });
+
   it("fires an every schedule into the log", async () => {
     const log = new EventLog();
     const scheduler = new Scheduler(log);
