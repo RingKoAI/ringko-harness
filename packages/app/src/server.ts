@@ -283,7 +283,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
   // The main entry owns the runtimes; the server only resolves them by workspace.
-  const runtimeHost = options.runtimeHost ?? new RuntimeSupervisor();
+  const runtimeHost = options.runtimeHost ?? new RuntimeSupervisor({ ...(options.configPath ? { configPath: options.configPath } : {}) });
   function runtimeFor(cwd: string): RuntimeManager {
     return runtimeHost.get(cwd);
   }
@@ -312,7 +312,10 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     const config = readConfig();
     if (typeof config === "string") return json({ error: config }, 500);
     const model = await loadModel(config);
-    const tools = runtimeFor(workspace).previewTools(config).agent;
+    const preview = runtimeFor(workspace).previewTools(config);
+    let baseTools;
+    try { baseTools = preview.agent.tools.list(); }
+    finally { preview.close(); }
     const accessMode = isAccessMode(config.permission)
       ? config.permission
       : isAccessMode(config.mode)
@@ -321,7 +324,6 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     const workflow = resolveWorkflow(config.workflow);
     // Discovery must report the same effective tool set the model will receive,
     // including MCP tools registered for the current workspace.
-    const baseTools = tools.tools.list();
     const mcpTools = (await runtimeFor(workspace).readyConnections()).connections.flatMap(connection => mcpToolDefinitions(connection, { mode: (typeof config === "string" ? "workspace-write" : config.sandbox?.mode ?? "workspace-write"), permissions: typeof config === "string" ? undefined : config.sandbox?.mcp }));
     const toolNames = new Set(baseTools.map(tool => tool.name));
     for (const definition of mcpTools) if (!toolNames.has(definition.name)) toolNames.add(definition.name);
@@ -670,7 +672,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
   function trustedPlugins(): PluginTrust[] {
-    const trusted = loadConfig().plugins?.trusted;
+    const trusted = (options.configPath ? loadConfig({ path: options.configPath }) : loadConfig()).plugins?.trusted;
     if (trusted === undefined) return [];
     if (!Array.isArray(trusted)) throw new Error("Plugin trust must be an array of plugin entries.");
     for (const entry of trusted) {
@@ -693,14 +695,14 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         if (!candidate) return json({ error: `Unknown plugin "${name}".` }, 404);
         if (!candidate.trusted) {
           const bound: PluginTrust = { id: name, path: candidate.dir };
-          const loaded = loadPlugins({ cwd: workspace, trusted: [...current, bound] });
+          const loaded = loadPlugins({ cwd: workspace, trusted: [...current, bound], ...(options.configPath ? { configPath: options.configPath } : {}) });
           if (!loaded.plugins.some(plugin => plugin.id === name)) {
-            return json({ error: loaded.errors.find(entry => entry.source.includes(name))?.message ?? `Plugin "${name}" has no valid manifest.` }, 400);
+            return json({ error: loaded.errors.find(entry => entry.source === join(candidate.dir, "plugin.json"))?.message ?? `Plugin "${name}" has no valid manifest.` }, 400);
           }
-          savePluginTrust([...current, bound]);
+          savePluginTrust([...current, bound], process.env, options.configPath);
         }
       } else {
-        savePluginTrust(current.filter(entry => (typeof entry === "string" ? entry : entry.id) !== name));
+        savePluginTrust(current.filter(entry => (typeof entry === "string" ? entry : entry.id) !== name), process.env, options.configPath);
       }
       runtimeFor(workspace).reloadCapabilities();
       void runtimeFor(workspace).resetMcp().catch(error => writeDiagnostic("mcp.reset", String(error)));
@@ -1225,9 +1227,12 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     let used: number;
     try {
       const history = toChatMessages(store.open(id, "read").all());
-      const probe = runtimeFor(workspace).previewTools(config).agent;
+      const preview = runtimeFor(workspace).previewTools(config);
+      let probeTools;
+      try { probeTools = preview.agent.tools.list(); }
+      finally { preview.close(); }
       const mcpTools = (await runtimeFor(workspace).readyConnections()).connections.flatMap(connection => mcpToolDefinitions(connection, { mode: (typeof config === "string" ? "workspace-write" : config.sandbox?.mode ?? "workspace-write"), permissions: typeof config === "string" ? undefined : config.sandbox?.mcp }));
-      used = estimateMessagesTokens(history) + estimateToolsTokens([...probe.tools.list(), ...mcpTools]);
+      used = estimateMessagesTokens(history) + estimateToolsTokens([...probeTools, ...mcpTools]);
     } catch {
       return json({ error: "Unknown session." }, 404);
     }

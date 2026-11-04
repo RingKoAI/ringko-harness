@@ -12,6 +12,8 @@ import { RuntimeManager } from "./runtime.ts";
 export interface RuntimeSupervisorOptions {
   /** Shared event log for every runtime; created when omitted. */
   log?: EventLog;
+  /** Explicit settings file used for plugin trust and capabilities. */
+  configPath?: string;
 }
 
 export class RuntimeSupervisor {
@@ -20,7 +22,7 @@ export class RuntimeSupervisor {
   private closing?: Promise<void>;
   private closed = false;
 
-  constructor(options: RuntimeSupervisorOptions = {}) {
+  constructor(private readonly options: RuntimeSupervisorOptions = {}) {
     this.log = options.log ?? new EventLog();
   }
 
@@ -31,7 +33,7 @@ export class RuntimeSupervisor {
     const path = resolve(workspace);
     let runtime = this.runtimes.get(path);
     if (!runtime) {
-      runtime = new RuntimeManager(path, this.log);
+      runtime = new RuntimeManager(path, this.log, this.options.configPath);
       this.runtimes.set(path, runtime);
     }
     return runtime;

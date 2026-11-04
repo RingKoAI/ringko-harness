@@ -6,7 +6,7 @@
 // `settings.local.json` under `plugins.trusted`, so a cloned repository cannot
 // enable its own plugin. Invalid manifests are rejected whole (fail closed) and
 // reported through the result instead of partially applied.
-import { closeSync, existsSync, fstatSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { PluginTrust, PluginTrustEntry, RingkoConfig } from "./config.ts";
 import { loadConfig, saveConfigFile } from "./config.ts";
@@ -87,6 +87,8 @@ export interface LoadPluginsOptions {
   env?: NodeJS.ProcessEnv;
   /** Workspace used to locate project plugins. */
   cwd?: string;
+  /** Explicit settings file; trust is read from it when provided. */
+  configPath?: string;
   /** Explicit trust list; defaults to the user-level settings file. */
   trusted?: readonly PluginTrust[];
 }
@@ -113,7 +115,9 @@ function readTrusted(options: LoadPluginsOptions): TrustSet {
   let raw: unknown;
   if (options.trusted !== undefined) raw = options.trusted;
   else {
-    const config: RingkoConfig = loadConfig({ ...(options.env ? { env: options.env } : {}) });
+    const config: RingkoConfig = options.configPath
+      ? loadConfig({ path: options.configPath })
+      : loadConfig({ ...(options.env ? { env: options.env } : {}) });
     raw = config.plugins?.trusted;
   }
   const trust: TrustSet = { legacy: new Set(), paths: new Map() };
@@ -195,10 +199,10 @@ function parseManifest(id: string, raw: unknown): PluginManifest {
 function readManifest(id: string, dir: string): PluginManifest {
   const path = join(dir, PLUGIN_FILE_NAME);
   let stat;
-  try { stat = statSync(path); } catch { fail("Plugin manifest cannot be read."); }
-  if (!stat.isFile()) fail("Plugin manifest must be a regular file.");
+  try { stat = lstatSync(path); } catch { fail("Plugin manifest cannot be read."); }
+  if (stat.isSymbolicLink() || !stat.isFile()) fail("Plugin manifest must be a regular file.");
   if (stat.size > MAX_MANIFEST_BYTES) fail("Plugin manifest exceeds 256 KiB.");
-  const descriptor = openSync(path, "r");
+  const descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const current = fstatSync(descriptor);
     if (!current.isFile() || current.size > MAX_MANIFEST_BYTES) fail("Plugin manifest must be a regular file no larger than 256 KiB.");
@@ -339,7 +343,7 @@ export function loadPlugins(options: LoadPluginsOptions = {}): LoadPluginsResult
  * New callers should pass path-bound `{ id, path }` entries; legacy strings are
  * kept only for user-level roots. Callers must validate the plugin first.
  */
-export function savePluginTrust(entries: readonly PluginTrust[], env: NodeJS.ProcessEnv = process.env): string {
+export function savePluginTrust(entries: readonly PluginTrust[], env: NodeJS.ProcessEnv = process.env, configPath?: string): string {
   if (entries.length > MAX_PLUGINS) throw new TypeError(`Plugin trust may contain at most ${String(MAX_PLUGINS)} entries.`);
   const unique: PluginTrust[] = [];
   const seen = new Set<string>();
@@ -364,7 +368,7 @@ export function savePluginTrust(entries: readonly PluginTrust[], env: NodeJS.Pro
     seen.add(key);
     unique.push({ id: entry.id, path: canonical } satisfies PluginTrustEntry);
   }
-  const path = settingsPath(env);
+  const path = configPath ? resolve(configPath) : settingsPath(env);
   let settings: Record<string, unknown> = {};
   try {
     const text = readFileSync(path, "utf8");
@@ -384,7 +388,8 @@ export function savePluginTrust(entries: readonly PluginTrust[], env: NodeJS.Pro
 /** Expand a plugin command prompt. Arguments are appended when no slot exists. */
 export function expandCommandPrompt(prompt: string, argument: string): string {
   const args = argument.trim();
-  const replaced = prompt.replaceAll("$ARGUMENTS", args).replaceAll("{{args}}", args);
+  // Replacement callbacks keep `$&`, `$'`, `$1` and similar sequences literal.
+  const replaced = prompt.replaceAll("$ARGUMENTS", () => args).replaceAll("{{args}}", () => args);
   if (args.length === 0 || prompt.includes("$ARGUMENTS") || prompt.includes("{{args}}")) return replaced;
   return `${replaced}\n\n${args}`;
 }

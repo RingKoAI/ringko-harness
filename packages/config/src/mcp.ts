@@ -36,6 +36,8 @@ export interface LoadMcpServersOptions {
   env?: NodeJS.ProcessEnv;
   /** Workspace used to locate a project root. */
   cwd?: string;
+  /** Explicit settings file used for plugin trust. */
+  configPath?: string;
   /** Preloaded trusted plugins; when set, plugin manifests are not read again. */
   plugins?: readonly LoadedPlugin[];
 }
@@ -93,7 +95,7 @@ export function loadMcpServers(options: LoadMcpServersOptions = {}): McpServer[]
 
   // Trusted plugins may add servers, but never replace explicit configuration.
   const plugins = options.plugins ?? (() => {
-    const result = loadPlugins({ env, cwd });
+    const result = loadPlugins({ env, cwd, ...(options.configPath ? { configPath: options.configPath } : {}) });
     for (const error of result.errors) writeDiagnostic("plugins", `${error.source}: ${error.message}`);
     return result.plugins;
   })();

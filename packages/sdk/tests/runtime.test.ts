@@ -461,6 +461,45 @@ it("blocks model requests when a before hook fails and reports failing turns", a
   } finally { blocked.close(); await blocker.close(); }
 }));
 
+it("keeps host tool hooks alongside runtime hooks", async () => isolated(async directory => {
+  const runtime = new RuntimeManager(directory);
+  let executions = 0;
+  const managed = runtime.createAgent({}, {
+    onToolBefore: () => { throw new Error("host blocked"); },
+    model: async request => request.messages.some(message => message.role === "tool")
+      ? { content: "done", toolCalls: [] }
+      : { content: "", toolCalls: [{ id: "host-hook", name: "host_fixture", arguments: {} }] },
+  });
+  managed.agent.register(defineTool({
+    name: "host_fixture",
+    description: "Host hook fixture",
+    inputSchema: { type: "object", properties: {} },
+    parseInput: () => ({}),
+    assessRisk: () => ({ kind: "safe", reason: "Fixture" }),
+    execute: () => { executions += 1; return "ok"; },
+  }));
+  try {
+    expect((await managed.agent.run("blocked")).content).toBe("done");
+    expect(executions).toBe(0);
+  } finally { managed.close(); await runtime.close(); }
+}));
+
+it("closes preview agents and their extension disposers", async () => isolated(async directory => {
+  const runtime = new RuntimeManager(directory);
+  let disposed = 0;
+  await runtime.use({
+    name: "preview-disposer",
+    setup(context) {
+      context.onAgent(() => () => { disposed += 1; });
+    },
+  });
+  try {
+    const preview = runtime.previewTools({});
+    preview.close();
+    expect(disposed).toBe(1);
+  } finally { await runtime.close(); }
+}));
+
 it("runs tool hooks and blocks execution when a pre-execute hook fails", async () => isolated(async directory => {
   const runtime = new RuntimeManager(directory);
   const events: string[] = [];

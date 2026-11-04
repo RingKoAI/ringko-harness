@@ -33,7 +33,7 @@ export class CapabilityManager {
   private revision = 0;
   private closed = false;
 
-  constructor(private readonly workspace: string) {}
+  constructor(private readonly workspace: string, private readonly configPath?: string) {}
 
   /** The current snapshot, loading it on first use. */
   snapshot(): CapabilitySnapshot {
@@ -63,12 +63,12 @@ export class CapabilityManager {
   }
 
   private load(): CapabilitySnapshot {
-    const plugins = loadPlugins({ cwd: this.workspace });
+    const plugins = loadPlugins({ cwd: this.workspace, ...(this.configPath ? { configPath: this.configPath } : {}) });
     const skills = discoverSkills({ cwd: this.workspace, plugins: plugins.plugins });
     let mcpServers: McpServer[] = [];
     let mcpError: string | undefined;
     try {
-      mcpServers = loadMcpServers({ cwd: this.workspace, plugins: plugins.plugins });
+      mcpServers = loadMcpServers({ cwd: this.workspace, plugins: plugins.plugins, ...(this.configPath ? { configPath: this.configPath } : {}) });
     } catch (error) {
       mcpError = error instanceof Error ? error.message : "Invalid MCP configuration.";
       // Explicit configuration failed, but trusted plugin servers still have a

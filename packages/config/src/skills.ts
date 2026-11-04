@@ -4,10 +4,11 @@
 // at least a `name` (and usually a `description`). RingKo scans
 // `~/.ringko/skills` and `~/.agents/skills` (and the singular `skill` alias);
 // ringko-specific skills take precedence over shared ones with the same name.
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { agentsRoot, ancestorSkillsDirs, findProjectRoot, projectSkillsDirs, RINGKO_DIR_NAME, ringkoRoot, SKILLS_DIR_NAMES, skillsDirs } from "./paths.ts";
 import { loadPlugins, type LoadedPlugin } from "./plugins.ts";
+import { isPathInside } from "./util.ts";
 
 export const SKILL_FILE_NAME = "SKILL.md";
 const SKILL_METADATA_BYTES = 16 * 1024;
@@ -83,8 +84,10 @@ interface SkillRoot {
 function readSkillFile(skillFile: string): SkillMetadata | undefined {
   let text: string;
   try {
-    const descriptor = openSync(skillFile, "r");
+    const descriptor = openSync(skillFile, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {
+      const stat = fstatSync(descriptor);
+      if (!stat.isFile()) return undefined;
       const buffer = Buffer.alloc(SKILL_METADATA_BYTES);
       const bytes = readSync(descriptor, buffer, 0, buffer.length, 0);
       text = buffer.subarray(0, bytes).toString("utf8");
@@ -98,7 +101,8 @@ function readSkillFile(skillFile: string): SkillMetadata | undefined {
 function loadSkill(root: SkillRoot, dir: string, fallbackName: string): Skill | undefined {
   const skillFile = join(dir, SKILL_FILE_NAME);
   try {
-    if (!statSync(skillFile).isFile()) return undefined;
+    const stat = lstatSync(skillFile);
+    if (stat.isSymbolicLink() || !stat.isFile()) return undefined;
   } catch {
     return undefined;
   }
@@ -200,6 +204,7 @@ export function skillInstallTargets(options: DiscoverSkillsOptions = {}): SkillI
 }
 
 const MAX_INSTALL_FILES = 256;
+const MAX_INSTALL_DIRECTORIES = 4_096;
 const MAX_INSTALL_DEPTH = 16;
 const MAX_INSTALL_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_INSTALL_BYTES = 8 * 1024 * 1024;
@@ -213,8 +218,10 @@ interface SkillSourceFile {
 function collectSkillSource(root: string): SkillSourceFile[] {
   const files: SkillSourceFile[] = [];
   let bytes = 0;
+  let directories = 0;
   const visit = (directory: string, prefix: string, depth: number): void => {
     if (depth > MAX_INSTALL_DEPTH) throw new Error("Skill source exceeds the maximum directory depth.");
+    if (++directories > MAX_INSTALL_DIRECTORIES) throw new Error("Skill source exceeds 4096 directories.");
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const absolute = join(directory, entry.name);
       const path = prefix.length === 0 ? entry.name : join(prefix, entry.name);
@@ -285,6 +292,14 @@ export function installSkill(options: InstallSkillOptions): Skill {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   mkdirSync(target.root, { recursive: true, mode: 0o700 });
+  if (options.scope === "project") {
+    const projectRoot = findProjectRoot(cwd, env) ?? resolve(cwd);
+    let realProject: string;
+    let realRoot: string;
+    try { realProject = realpathSync(projectRoot); realRoot = realpathSync(target.root); }
+    catch { throw new Error("Cannot resolve the project skill directory."); }
+    if (!isPathInside(realProject, realRoot)) throw new Error("Project skill directory escapes the workspace.");
+  }
   const temporary = mkdtempSync(join(target.root, ".install-"));
   try {
     for (const file of files) {

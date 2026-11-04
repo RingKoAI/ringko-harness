@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadMcpServers } from "../src/mcp.ts";
@@ -103,6 +103,18 @@ describe("loadPlugins", () => {
     }
   });
 
+  it("does not follow a symlinked plugin manifest", () => {
+    const dir = writePlugin(join(home, ".ringko"), "linked-manifest", { name: "linked-manifest" });
+    const outside = join(home, "outside-plugin.json");
+    writeFileSync(outside, JSON.stringify({ name: "linked-manifest" }));
+    rmSync(join(dir, "plugin.json"));
+    try { symlinkSync(outside, join(dir, "plugin.json")); }
+    catch { return; }
+    const result = loadPlugins({ env, cwd: home, trusted: ["linked-manifest"] });
+    expect(result.plugins).toEqual([]);
+    expect(result.errors[0]?.message).toContain("regular file");
+  });
+
   it("rejects malformed manifests as a whole", () => {
     writePlugin(join(home, ".ringko"), "bad-name", { name: "other" });
     writePlugin(join(home, ".ringko"), "hooks", { name: "hooks", hooks: { "run/before": [] } });
@@ -190,6 +202,16 @@ describe("savePluginTrust", () => {
     expect(settings.plugins.trusted[0]?.path.endsWith("bound")).toBe(true);
   });
 
+  it("writes trust to an explicit settings file", () => {
+    const dir = writePlugin(join(home, ".ringko"), "bound", { name: "bound" });
+    const custom = join(home, "custom.json");
+    writeFileSync(custom, JSON.stringify({ workspace: "/custom" }));
+    savePluginTrust([{ id: "bound", path: dir }], env, custom);
+    const settings = JSON.parse(readFileSync(custom, "utf8")) as { workspace?: string; plugins?: { trusted?: Array<{ id: string }> } };
+    expect(settings.workspace).toBe("/custom");
+    expect(settings.plugins?.trusted?.[0]?.id).toBe("bound");
+  });
+
   it("rejects invalid names and malformed settings", () => {
     expect(() => savePluginTrust(["../escape"], env)).toThrow("Invalid plugin name");
     expect(() => savePluginTrust([{ id: "ok", path: "relative" }], env)).toThrow("absolute path");
@@ -204,5 +226,6 @@ describe("expandCommandPrompt", () => {
     expect(expandCommandPrompt("Review {{args}}", "src/a.ts")).toBe("Review src/a.ts");
     expect(expandCommandPrompt("Review the diff", "src/a.ts")).toBe("Review the diff\n\nsrc/a.ts");
     expect(expandCommandPrompt("Review the diff", "  ")).toBe("Review the diff");
+    expect(expandCommandPrompt("Review $ARGUMENTS", "a $& b")).toBe("Review a $& b");
   });
 });

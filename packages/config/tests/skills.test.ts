@@ -89,6 +89,32 @@ describe("installSkill", () => {
     expect(existsSync(join(home, ".ringko", "skills", "linked"))).toBeFalse();
   });
 
+  it("does not follow a symlinked SKILL.md during discovery", () => {
+    const skills = join(home, ".ringko", "skills");
+    const dir = join(skills, "linked");
+    mkdirSync(dir, { recursive: true });
+    const outside = join(home, "outside.md");
+    writeFileSync(outside, "---\nname: linked\ndescription: leaked\n---\nsecret");
+    try { symlinkSync(outside, join(dir, "SKILL.md")); }
+    catch { return; }
+    expect(discoverSkills({ env, cwd: home }).some(skill => skill.name === "linked")).toBe(false);
+  });
+
+  it("rejects a project skill root that escapes through a symlink", () => {
+    const project = mkdtempSync(join(tmpdir(), "ringko-install-link-"));
+    const outside = mkdtempSync(join(tmpdir(), "ringko-install-outside-"));
+    mkdirSync(join(project, ".git"));
+    try {
+      try { symlinkSync(outside, join(project, ".ringko"), process.platform === "win32" ? "junction" : "dir"); }
+      catch { return; }
+      const source = writeSource(home, "escaped");
+      expect(() => installSkill({ source, scope: "project", env, cwd: project })).toThrow("escapes the workspace");
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("rejects oversized SKILL.md files", () => {
     const source = join(home, "oversized");
     mkdirSync(source, { recursive: true });

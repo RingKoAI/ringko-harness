@@ -41,12 +41,12 @@ export class RuntimeManager {
   private closed = false;
   private closing?: Promise<void>;
 
-  constructor(workspace: string, log?: EventLog) {
+  constructor(workspace: string, log?: EventLog, configPath?: string) {
     if (typeof workspace !== "string" || !workspace.trim()) throw new TypeError("Runtime requires a workspace.");
     this.workspace = resolve(workspace);
     this.sandbox = new Sandbox({ workspace: this.workspace });
     this.permissions = new PermissionManager(this.workspace);
-    this.capabilityManager = new CapabilityManager(this.workspace);
+    this.capabilityManager = new CapabilityManager(this.workspace, configPath);
     this.toolManager = new ToolManager(this.workspace, () => this.capabilityManager.snapshot().skills);
     this.mcp = new McpManager(this.workspace, undefined, () => {
       const snapshot = this.capabilityManager.snapshot();

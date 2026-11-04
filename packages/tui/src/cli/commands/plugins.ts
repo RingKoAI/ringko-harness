@@ -1,9 +1,10 @@
+import { join, resolve } from "node:path";
 import { discoverPluginCandidates, isRecord, loadConfig, loadPlugins, savePluginTrust, type PluginTrust } from "@ringko-ai/config";
 import { readConfig } from "../shared.ts";
 import type { CliIo, ParsedArgs } from "../types.ts";
 
-function trustedEntries(): PluginTrust[] {
-  const trusted = loadConfig().plugins?.trusted;
+function trustedEntries(configPath?: string): PluginTrust[] {
+  const trusted = (configPath ? loadConfig({ path: configPath }) : loadConfig()).plugins?.trusted;
   if (trusted === undefined) return [];
   if (!Array.isArray(trusted)) throw new TypeError("Plugin trust must be an array of plugin entries.");
   for (const entry of trusted) {
@@ -20,9 +21,10 @@ export function pluginsCommand(parsed: ParsedArgs, io: CliIo): number {
   const config = readConfig(parsed, io);
   if (!config) return 2;
   const workspace = parsed.workspace ?? config.workspace ?? process.cwd();
+  const configPath = parsed.config ? resolve(parsed.config) : undefined;
 
   if (sub === "list") {
-    const result = discoverPluginCandidates({ cwd: workspace });
+    const result = discoverPluginCandidates({ cwd: workspace, ...(configPath ? { configPath } : {}) });
     for (const error of result.errors) io.err(`${error.source}: ${error.message}`);
     if (result.candidates.length === 0) {
       io.out("No plugins found. Add one under .ringko/plugins or ~/.ringko/plugins.");
@@ -42,12 +44,12 @@ export function pluginsCommand(parsed: ParsedArgs, io: CliIo): number {
 
   try {
     if (sub === "untrust") {
-      const current = trustedEntries();
-      savePluginTrust(current.filter(entry => (typeof entry === "string" ? entry : entry.id) !== id));
+      const current = trustedEntries(configPath);
+      savePluginTrust(current.filter(entry => (typeof entry === "string" ? entry : entry.id) !== id), process.env, configPath);
       io.out(`Plugin ${id} is no longer trusted.`);
       return 0;
     }
-    const result = discoverPluginCandidates({ cwd: workspace });
+    const result = discoverPluginCandidates({ cwd: workspace, ...(configPath ? { configPath } : {}) });
     for (const error of result.errors) io.err(`${error.source}: ${error.message}`);
     const candidate = result.candidates.find(entry => entry.id === id);
     if (!candidate) {
@@ -55,16 +57,16 @@ export function pluginsCommand(parsed: ParsedArgs, io: CliIo): number {
       return 1;
     }
     if (candidate.trusted) { io.out(`Plugin ${id} is already trusted.`); return 0; }
-    const current = trustedEntries();
+    const current = trustedEntries(configPath);
     const bound: PluginTrust = { id, path: candidate.dir };
-    const loaded = loadPlugins({ cwd: workspace, trusted: [...current, bound] });
+    const loaded = loadPlugins({ cwd: workspace, trusted: [...current, bound], ...(configPath ? { configPath } : {}) });
     const plugin = loaded.plugins.find(entry => entry.id === id);
     if (!plugin) {
-      const error = loaded.errors.find(entry => entry.source.includes(id));
+      const error = loaded.errors.find(entry => entry.source === join(candidate.dir, "plugin.json"));
       io.err(error?.message ?? `Plugin "${id}" has no valid manifest.`);
       return 1;
     }
-    savePluginTrust([...current, bound]);
+    savePluginTrust([...current, bound], process.env, configPath);
     io.out(`Trusted plugin ${plugin.id} (${plugin.commands.length} command${plugin.commands.length === 1 ? "" : "s"}, ${String(Object.keys(plugin.mcpServers).length)} MCP server${Object.keys(plugin.mcpServers).length === 1 ? "" : "s"}, ${String(plugin.skillDirs.length)} skill director${plugin.skillDirs.length === 1 ? "y" : "ies"}).`);
     return 0;
   } catch (error) {

@@ -23,6 +23,7 @@ interface Entry {
 export class ExtensionRegistry {
   private readonly contributions = new Map<string, Entry>();
   private readonly agentHandlers = new Set<AgentContribution>();
+  private readonly revoked = new WeakSet<Set<AgentContribution>>();
   private closed = false;
 
   constructor(private readonly contextFactory: (handlers: Set<AgentContribution>) => RuntimeContext) {}
@@ -39,6 +40,9 @@ export class ExtensionRegistry {
     }
     if (result instanceof Promise) {
       this.rollback(handlers);
+      // A rejected async setup may still run; swallow its late failure after
+      // revoking the handler set so onAgent cannot register orphan handlers.
+      void result.catch(error => writeDiagnostic("runtime.contribution", String(error)));
       throw new TypeError(`Runtime contribution "${name}" must be synchronous during construction.`);
     }
     this.contributions.set(name, { ...(typeof result === "function" ? { dispose: result } : {}), handlers });
@@ -69,6 +73,7 @@ export class ExtensionRegistry {
   /** Add one agent handler to a contribution's ownership set. */
   add(handlers: Set<AgentContribution>, handler: AgentContribution): Disposable {
     if (this.closed) throw new Error("Runtime is closed.");
+    if (this.revoked.has(handlers)) throw new Error("Contribution setup was rejected.");
     this.agentHandlers.add(handler);
     handlers.add(handler);
     return () => {
@@ -112,6 +117,7 @@ export class ExtensionRegistry {
   }
 
   private rollback(handlers: Set<AgentContribution>): void {
+    this.revoked.add(handlers);
     for (const handler of handlers) this.agentHandlers.delete(handler);
     handlers.clear();
   }

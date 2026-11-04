@@ -80,7 +80,7 @@ Options:
   -s, --session [id]   Continue a session; omit the id for the session picker
   --workspace <dir>    Workspace root for file tools (default: current directory)
   --server <url>       Connect to an existing local backend (or RINGKO_SERVER)
-  --port <number>      (serve) HTTP port (default: 8787)
+  --port <number>      (serve) HTTP port (default: per-workspace shared port)
   --shared             (serve) Pin the backend to the launch workspace
   --max-iterations <n>   (loop) Stop after n iterations; 0 = unlimited (default)
   --completion-promise <text>  (loop) Stop when a reply contains <promise>text</promise>
@@ -335,7 +335,9 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       const workspace = parsed.workspace ?? config.workspace ?? process.cwd();
       const runtime = new RuntimeManager(workspace);
       try {
-        for (const tool of runtime.previewTools(config).agent.tools.list()) io.out(tool.name);
+        const preview = runtime.previewTools(config);
+        try { for (const tool of preview.agent.tools.list()) io.out(tool.name); }
+        finally { preview.close(); }
         return 0;
       } finally {
         await runtime.close();

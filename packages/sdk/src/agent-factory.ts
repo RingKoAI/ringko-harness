@@ -39,11 +39,20 @@ export class AgentFactory {
   constructor(private readonly deps: AgentFactoryDeps) {}
 
   /** Build a tool-only agent for capability discovery without starting MCP. */
-  preview(config: RingkoConfig, host: RuntimeHost = {}): { agent: RingKo; sandbox: Sandbox } {
+  preview(config: RingkoConfig, host: RuntimeHost = {}): { agent: RingKo; sandbox: Sandbox; close(): void } {
     if (this.closed) throw new Error("Agent factory is closed.");
     const agent = createRingKo({ task: true, model: async () => ({ content: "", toolCalls: [] }) });
-    this.deps.extensions.apply(agent, config, { host });
-    return { agent, sandbox: this.deps.toolManager.sandboxFor(agent) ?? this.deps.sandbox };
+    const disposers = this.deps.extensions.apply(agent, config, { host });
+    const close = (): void => {
+      for (const dispose of disposers.reverse()) {
+        try {
+          const pending = dispose();
+          if (pending) void Promise.resolve(pending).catch(error => writeDiagnostic("runtime.contribution", String(error)));
+        } catch (error) { writeDiagnostic("runtime.contribution", String(error)); }
+      }
+      agent.jobs.cancelAll();
+    };
+    return { agent, sandbox: this.deps.toolManager.sandboxFor(agent) ?? this.deps.sandbox, close };
   }
 
   create(config: RingkoConfig, options: AgentConfig, host: RuntimeHost = {}): RuntimeAgent {
@@ -84,16 +93,20 @@ export class AgentFactory {
         options.onEvent?.(event);
       },
       onToolBefore: async event => {
+        await options.onToolBefore?.(event);
         await this.deps.events.serial("tool/pre-execute", event);
       },
       onToolAfter: async event => {
         await this.deps.events.parallel("tool/post-execute", event).catch(error => writeDiagnostic("runtime.tool.post", String(error)));
+        await options.onToolAfter?.(event);
       },
       onModelBefore: async event => {
+        await options.onModelBefore?.(event);
         await this.deps.events.serial("model/before-request", event);
       },
       onModelAfter: async event => {
         await this.deps.events.parallel("model/after-response", event).catch(error => writeDiagnostic("runtime.model.post", String(error)));
+        await options.onModelAfter?.(event);
       },
     });
     const agentContext = { host, ...(options.session ? { session: options.session } : {}) };
