@@ -17,13 +17,13 @@ const workspace = canonicalWorkspace(explicitWorkspace ?? defaultProjectWorkspac
 const configPath = option("--config");
 const shared = args.includes("--shared");
 
-const runtimeHost = new RuntimeSupervisor();
+const runtimeHost = new RuntimeSupervisor({ ...(configPath ? { configPath } : {}) });
 const server = startServer({
   workspace,
   shared,
   runtimeHost,
   ...(configPath ? { configPath } : {}),
-  ...(portArg ? { port: Number(portArg) } : shared ? { port: sharedPort(workspace, configPath) } : {}),
+  ...(portArg ? { port: Number(portArg) } : process.env.RINGKO_PORT ? {} : { port: sharedPort(workspace, configPath) }),
   ...(dev ? { devServerUrl } : {}),
   ...(authToken ? { authToken } : {}),
 });

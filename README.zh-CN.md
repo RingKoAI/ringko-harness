@@ -29,7 +29,7 @@ RingKo 是一套 Agent Harness。它通过受审批门约束的工具注册表�
 ```sh
 npm install -g @ringko-ai/rkh
 ringko          # 终端界面（默认）
-ringko serve    # 浏览器界面，打印访问地址（端口 8787）
+ringko serve    # 浏览器界面，打印按 workspace 派生的访问地址
 ```
 
 `ringko help` 列出全部命令。不想全局安装时，`npx @ringko-ai/rkh` 会启动终端界面。

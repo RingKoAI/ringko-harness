@@ -30,7 +30,7 @@ bundle, so Bun is not optional.
 ```sh
 npm install -g @ringko-ai/rkh
 ringko          # terminal UI (default)
-ringko serve    # browser UI, prints its URL (port 8787)
+ringko serve    # browser UI, prints its per-workspace URL
 ```
 
 `ringko help` lists all commands. `npx @ringko-ai/rkh` runs the terminal UI
