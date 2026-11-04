@@ -1,5 +1,8 @@
 # Unreleased
 
+- Print a complete resume command, separated by blank lines, when the TUI
+  exits.
+
 - Use ASCII status markers in the TUI task and todo panels instead of
   emoji-rendered symbols.
 

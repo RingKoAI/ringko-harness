@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { resumeHint } from "../src/resume-hint.ts";
+import { printResumeHint, resumeHint } from "../src/resume-hint.ts";
 
 it("prints a reusable Bun invocation for source launches", () => {
   const text = resumeHint("session-one", "C:\\Work Dir", "C:\\RingKo\\cli.ts", true);
@@ -20,4 +20,15 @@ it("uses ringko for npm launches on Windows and Unix", () => {
   for (const entry of ["C:\\npm\\node_modules\\@ringko-ai\\rkh\\bin\\ringko.mjs", "/usr/local/lib/node_modules/@ringko-ai/rkh/bin/ringko.mjs"]) {
     expect(resumeHint("session-one", "/work", entry, false)).toContain("ringko --session 'session-one'");
   }
+});
+
+it("prints the hint as complete, separated lines", () => {
+  const lines: string[] = [];
+  printResumeHint({ out: line => lines.push(line) }, "session-one", "/work", undefined, false);
+  expect(lines).toEqual([
+    "",
+    "Resume this session with:",
+    "ringko --session 'session-one' --workspace '/work'",
+    "",
+  ]);
 });

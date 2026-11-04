@@ -1,5 +1,5 @@
 import { createRingKo, access, loopPrompt, promiseText, type ApprovalHandler, type ChatMessage, type RingKo } from "@ringko-ai/sdk";
-import { resumeHint } from "./resume-hint.ts";
+import { printResumeHint } from "./resume-hint.ts";
 import { cliCommand } from "./cli-identity.ts";
 import { RuntimeManager, registerRuntimeTools } from "@ringko-ai/sdk/runtime";
 import { resolve } from "node:path";
@@ -402,7 +402,7 @@ async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
     ...(info.modelId ? { modelId: info.modelId } : {}),
   });
   if (sessionId && (await backend.sessions()).some(session => session.id === sessionId)) {
-    io.out(resumeHint(sessionId, resolve(workspace), process.argv[1]));
+    printResumeHint(io, sessionId, resolve(workspace), process.argv[1]);
   }
   return 0;
 }
