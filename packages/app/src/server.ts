@@ -46,7 +46,6 @@ import {
   localBackendOrigin,
   removeBackendRegistration,
   discoverPluginCandidates,
-  discoverSkills,
   getOAuthAccount,
   loadPlugins,
   getToolAuth,
@@ -602,7 +601,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
   function handleSkills(): Response {
-    return json(discoverSkills({ cwd: workspace }).map((skill) => ({ ...skill })));
+    return json(runtimeFor(workspace).skills());
   }
 
   async function handleCreateSkill(request: Request): Promise<Response> {
@@ -615,6 +614,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         ...(typeof body?.description === "string" ? { description: body.description } : {}),
         ...(typeof body?.body === "string" ? { body: body.body } : {}),
       });
+      runtimeFor(workspace).reloadCapabilities();
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Cannot create skill." }, 400);
     }
@@ -627,6 +627,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     if (dir.length === 0) return json({ error: "dir is required." }, 400);
     try {
       if (!removeSkill(dir, process.env, workspace)) return json({ error: "Unknown skill directory." }, 404);
+      runtimeFor(workspace).reloadCapabilities();
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Cannot remove skill." }, 400);
     }
@@ -650,10 +651,10 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
 
   /** Read-only plugin inventory: trusted plugins, candidates and manifest errors. */
   function handlePlugins(): Response {
-    const loaded = loadPlugins({ cwd: workspace });
+    const capabilities = runtimeFor(workspace).capabilities();
     const candidates = discoverPluginCandidates({ cwd: workspace });
     return json({
-      plugins: loaded.plugins.map(plugin => ({
+      plugins: capabilities.plugins.map(plugin => ({
         id: plugin.id,
         dir: plugin.dir,
         source: plugin.source,
@@ -665,7 +666,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         skillDirs: plugin.skillDirs,
       })),
       candidates: candidates.candidates,
-      errors: [...candidates.errors, ...loaded.errors],
+      errors: [...candidates.errors, ...capabilities.pluginErrors, ...(capabilities.mcpError ? [{ source: "mcp", message: capabilities.mcpError }] : [])],
     });
   }
 
@@ -696,6 +697,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       } else {
         savePluginTrust(current.filter(entry => entry !== name));
       }
+      runtimeFor(workspace).reloadCapabilities();
+      void runtimeFor(workspace).resetMcp().catch(error => writeDiagnostic("mcp.reset", String(error)));
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Cannot update plugin trust." }, 400);
     }

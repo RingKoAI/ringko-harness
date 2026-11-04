@@ -7,7 +7,7 @@
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { agentsRoot, ancestorSkillsDirs, findProjectRoot, projectSkillsDirs, RINGKO_DIR_NAME, ringkoRoot, SKILLS_DIR_NAMES, skillsDirs } from "./paths.ts";
-import { loadPlugins } from "./plugins.ts";
+import { loadPlugins, type LoadedPlugin } from "./plugins.ts";
 
 export const SKILL_FILE_NAME = "SKILL.md";
 const SKILL_METADATA_BYTES = 16 * 1024;
@@ -69,6 +69,8 @@ export interface DiscoverSkillsOptions {
   env?: NodeJS.ProcessEnv;
   /** Workspace used to locate a project root. */
   cwd?: string;
+  /** Preloaded trusted plugins; when set, plugin directories are not discovered again. */
+  plugins?: readonly LoadedPlugin[];
 }
 
 interface SkillRoot {
@@ -127,7 +129,7 @@ export function discoverSkills(options: DiscoverSkillsOptions = {}): Skill[] {
     ]),
     // Plugin skill directories are lowest precedence. Their names are
     // namespaced (`<plugin>:<skill>`) so they cannot shadow installed skills.
-    ...loadPlugins({ env, cwd }).plugins.flatMap(plugin => plugin.skillDirs.map(dir => ({
+    ...(options.plugins ?? loadPlugins({ env, cwd }).plugins).flatMap(plugin => plugin.skillDirs.map(dir => ({
       dir,
       source: plugin.source,
       scope: plugin.scope,

@@ -1,16 +1,20 @@
 import { resolve } from "node:path";
-import { discoverSkills, installSkill as installSkillDirectory, instructionsText, loadInstructions, loadPlugins, writeDiagnostic, type LoadedPlugin, type PluginLoadError, type RingkoConfig, type Skill, type SkillInstallScope } from "@ringko-ai/config";
+import { instructionsText, loadInstructions, writeDiagnostic, type LoadedPlugin, type PluginLoadError, type RingkoConfig, type Skill, type SkillInstallScope } from "@ringko-ai/config";
 import { registerMcpTools } from "@ringko-ai/mcp";
 import { EventBus, EventLog, Scheduler, createTimeSource } from "@ringko-ai/runtime";
 import { Sandbox } from "@ringko-ai/tools";
 import { resolveWorkflow, workflowInstructions } from "@ringko-ai/workflow";
 import { abortable, type ToolExecutionEvent, type ToolExecutionResult } from "@ringko-ai/harness";
 import { createRingKo, isAccessMode, type AgentEvent, type ModelExecutionEvent, type ModelExecutionResult, type RingKo, type RingKoConfig as AgentConfig } from "./index.ts";
+import { CapabilityManager, type CapabilitySnapshot } from "./capabilities.ts";
 import { PermissionManager } from "./permissions.ts";
 import { McpManager } from "./mcp-manager.ts";
-import { applyToolPolicy, createRuntimeToolsContribution } from "./runtime-tools.ts";
+import { ToolManager } from "./tool-manager.ts";
+import { applyToolPolicy } from "./runtime-tools.ts";
 import type { AgentContribution, AgentContributionContext, Disposable, RuntimeContext, RuntimeContribution, RuntimeHost } from "./runtime-contribution.ts";
 export { registerRuntimeTools } from "./runtime-tools.ts";
+export type { CapabilitySnapshot } from "./capabilities.ts";
+export { ToolManager } from "./tool-manager.ts";
 export type { AgentContribution, AgentContributionContext, Disposable, RuntimeContext, RuntimeContribution, RuntimeHost } from "./runtime-contribution.ts";
 export type { PermissionRule } from "./permissions.ts";
 
@@ -24,6 +28,7 @@ export interface RuntimeEvents extends Record<string, unknown> {
   "model/before-request": ModelExecutionEvent;
   "model/after-response": ModelExecutionResult;
   "skill/installed": Skill;
+  "capabilities/changed": CapabilitySnapshot;
   "tool/permission": { toolName: string; target?: string; decision: "allow" | "deny" | "ask" | "default" };
 }
 
@@ -37,9 +42,10 @@ export class RuntimeManager {
   readonly scheduler: Scheduler;
   readonly permissions: PermissionManager;
   readonly sandbox: Sandbox;
+  readonly toolManager: ToolManager;
   private readonly stopTime: () => void;
+  private readonly capabilityManager: CapabilityManager;
   private readonly mcp: McpManager;
-  private readonly builtinTools = createRuntimeToolsContribution();
   private readonly agents = new Set<() => void>();
   private readonly contributions = new Map<string, { dispose?: Disposable; handlers: Set<AgentContribution> }>();
   private readonly agentHandlers = new Set<AgentContribution>();
@@ -51,12 +57,18 @@ export class RuntimeManager {
     this.workspace = resolve(workspace);
     this.sandbox = new Sandbox({ workspace: this.workspace });
     this.permissions = new PermissionManager(this.workspace);
-    this.mcp = new McpManager(this.workspace);
+    this.capabilityManager = new CapabilityManager(this.workspace);
+    this.toolManager = new ToolManager(this.workspace, () => this.capabilityManager.snapshot().skills);
+    this.mcp = new McpManager(this.workspace, undefined, () => {
+      const snapshot = this.capabilityManager.snapshot();
+      return { servers: snapshot.mcpServers, ...(snapshot.mcpError ? { error: snapshot.mcpError } : {}) };
+    });
     this.log = log ?? new EventLog();
     this.scheduler = new Scheduler(this.log);
     this.stopTime = log ? () => {} : createTimeSource(this.log);
-    const { name, handlers, context } = this.begin(this.builtinTools.contribution);
-    const result = this.builtinTools.contribution.setup(context);
+    const contribution = this.toolManager.contribution();
+    const { name, handlers, context } = this.begin(contribution);
+    const result = contribution.setup(context);
     if (result instanceof Promise) throw new TypeError(`Runtime contribution "${name}" must be synchronous during construction.`);
     this.contributions.set(name, { ...(typeof result === "function" ? { dispose: result } : {}), handlers });
   }
@@ -106,6 +118,8 @@ export class RuntimeManager {
         ready: () => this.mcp.ready(),
         reset: () => this.mcp.reset(),
       },
+      tools: this.toolManager,
+      capabilities: () => this.capabilities(),
       skills: () => this.skills(),
       plugins: () => this.plugins(),
       installSkill: options => this.installSkill(options),
@@ -133,24 +147,39 @@ export class RuntimeManager {
     await this.mcp.reset();
   }
 
+  /** Current immutable capabilities (plugins, skills, MCP servers). */
+  capabilities(): CapabilitySnapshot {
+    if (this.closed) throw new Error("Runtime is closed.");
+    return this.capabilityManager.snapshot();
+  }
+
+  /** Rebuild the capability snapshot and notify observers. */
+  reloadCapabilities(): CapabilitySnapshot {
+    if (this.closed) throw new Error("Runtime is closed.");
+    const snapshot = this.capabilityManager.reload();
+    void this.events.parallel("capabilities/changed", snapshot).catch(error => writeDiagnostic("runtime.capabilities", String(error)));
+    return snapshot;
+  }
+
   /** Installed skills visible to this workspace, including trusted plugin skills. */
   skills(): Skill[] {
-    if (this.closed) throw new Error("Runtime is closed.");
-    return discoverSkills({ cwd: this.workspace });
+    return [...this.capabilities().skills];
   }
 
   /** Install a local skill directory and report the result to runtime observers. */
   async installSkill(options: { source: string; scope: SkillInstallScope }): Promise<Skill> {
     if (this.closed) throw new Error("Runtime is closed.");
-    const skill = installSkillDirectory({ ...options, cwd: this.workspace });
+    const skill = this.capabilityManager.installSkill(options);
+    const snapshot = this.capabilityManager.snapshot();
     await this.events.parallel("skill/installed", skill).catch(error => writeDiagnostic("runtime.skill.installed", String(error)));
+    await this.events.parallel("capabilities/changed", snapshot).catch(error => writeDiagnostic("runtime.capabilities", String(error)));
     return skill;
   }
 
   /** Trusted plugins and manifest errors for this workspace. */
   plugins(): { plugins: LoadedPlugin[]; errors: PluginLoadError[] } {
-    if (this.closed) throw new Error("Runtime is closed.");
-    return loadPlugins({ cwd: this.workspace });
+    const snapshot = this.capabilities();
+    return { plugins: [...snapshot.plugins], errors: [...snapshot.pluginErrors] };
   }
 
   /** Snapshot connected MCP servers for discovery/status without starting them. */
@@ -168,7 +197,7 @@ export class RuntimeManager {
     if (this.closed) throw new Error("Runtime is closed.");
     const agent = createRingKo({ task: true, model: async () => ({ content: "", toolCalls: [] }) });
     for (const handler of this.agentHandlers) handler(agent, config, { host });
-    return { agent, sandbox: this.builtinTools.sandboxFor(agent) ?? this.sandbox };
+    return { agent, sandbox: this.toolManager.sandboxFor(agent) ?? this.sandbox };
   }
 
   createAgent(config: RingkoConfig, options: AgentConfig, host: RuntimeHost = {}): RuntimeAgent {
@@ -232,7 +261,7 @@ export class RuntimeManager {
       controller.abort();
       throw error;
     }
-    const toolSandbox = this.builtinTools.sandboxFor(agent) ?? this.sandbox;
+    const toolSandbox = this.toolManager.sandboxFor(agent) ?? this.sandbox;
     agent.tools.setPermissionCheck(async request => {
       const rule = this.permissions.decide(permissionSession, request.toolName, request.target);
       const decision = rule === "deny" || rule === "ask" ? rule : (await abortable(this.events.waterfall("tool/permission", { toolName: request.toolName, target: request.target, decision: rule }), request.signal)).decision;
@@ -300,6 +329,7 @@ export class RuntimeManager {
         try { await contribution.dispose?.(); }
         catch (error) { writeDiagnostic("runtime.contribution", String(error)); }
       }
+      this.capabilityManager.close();
       await this.mcp.close();
     })();
     return this.closing;

@@ -24,8 +24,8 @@ function skillListing(skills: readonly Skill[]): string {
 }
 
 /** Only discovered skill names can select a file; callers supply no paths. */
-export function registerRuntimeSkills(registry: ToolRegistry, workspace: string): void {
-  const skills = discoverSkills({ cwd: workspace }).slice(0, MAX_SKILLS);
+export function registerRuntimeSkills(registry: ToolRegistry, workspace: string, available?: readonly Skill[]): void {
+  const skills = (available ?? discoverSkills({ cwd: workspace })).slice(0, MAX_SKILLS);
   if (skills.length === 0) return;
   registry.register(defineTool<{ name: string }, string>({
     name: "skill",

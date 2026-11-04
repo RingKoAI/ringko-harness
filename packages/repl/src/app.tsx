@@ -363,15 +363,26 @@ export function Repl(props: ReplProps) {
       })),
       onSelect: value => {
         setPicker(null);
-        try {
-          const skill = installSkill({ source: resolve(workspace, raw), scope: value as SkillInstallScope, cwd: workspace });
-          print(`Installed skill ${skill.name} to ${skill.dir}`);
-        } catch (error) {
-          print(error instanceof Error ? error.message : "Cannot install skill.");
-        }
+        void (async () => {
+          try {
+            const sourcePath = resolve(workspace, raw);
+            if (backend) {
+              await backend.request("/api/skills/install", { source: sourcePath, scope: value });
+              print(`Installed skill into the ${value} skills directory.`);
+              return;
+            }
+            const runtime = runtimeRef.current;
+            const skill = runtime
+              ? await runtime.installSkill({ source: sourcePath, scope: value as SkillInstallScope })
+              : installSkill({ source: sourcePath, scope: value as SkillInstallScope, cwd: workspace });
+            print(`Installed skill ${skill.name} to ${skill.dir}`);
+          } catch (error) {
+            print(error instanceof Error ? error.message : "Cannot install skill.");
+          }
+        })();
       },
     });
-  }, [workspace, print]);
+  }, [backend, workspace, print]);
 
   const openMcpPicker = useCallback((): void => {
     showMcpPicker({ workspace, ...(backend ? { backend } : {}), setPicker, print });

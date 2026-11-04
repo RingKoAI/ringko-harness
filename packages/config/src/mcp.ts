@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { dirname, join } from "node:path";
 import { writeDiagnostic } from "./diagnostics.ts";
 import { agentsRoot, findProjectRoot, mcpPaths, projectMcpPaths, ringkoRoot } from "./paths.ts";
-import { loadPlugins } from "./plugins.ts";
+import { loadPlugins, type LoadedPlugin } from "./plugins.ts";
 import { isRecord } from "./util.ts";
 
 export interface McpServerConfig {
@@ -36,6 +36,8 @@ export interface LoadMcpServersOptions {
   env?: NodeJS.ProcessEnv;
   /** Workspace used to locate a project root. */
   cwd?: string;
+  /** Preloaded trusted plugins; when set, plugin manifests are not read again. */
+  plugins?: readonly LoadedPlugin[];
 }
 
 /**
@@ -90,9 +92,12 @@ export function loadMcpServers(options: LoadMcpServersOptions = {}): McpServer[]
   }
 
   // Trusted plugins may add servers, but never replace explicit configuration.
-  const plugins = loadPlugins({ env, cwd });
-  for (const error of plugins.errors) writeDiagnostic("plugins", `${error.source}: ${error.message}`);
-  for (const plugin of plugins.plugins) {
+  const plugins = options.plugins ?? (() => {
+    const result = loadPlugins({ env, cwd });
+    for (const error of result.errors) writeDiagnostic("plugins", `${error.source}: ${error.message}`);
+    return result.plugins;
+  })();
+  for (const plugin of plugins) {
     for (const [name, config] of Object.entries(plugin.mcpServers)) {
       if (!found.has(name)) found.set(name, { name, config, source: plugin.source, scope: plugin.scope });
     }

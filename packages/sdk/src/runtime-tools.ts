@@ -1,4 +1,4 @@
-import type { RingkoConfig } from "@ringko-ai/config";
+import type { RingkoConfig, Skill } from "@ringko-ai/config";
 import { sessionTodos, type SessionHandle } from "@ringko-ai/session";
 import {
   Sandbox,
@@ -11,7 +11,7 @@ import {
 } from "@ringko-ai/tools";
 import { resolveWorkflow, workflowAllowsTool } from "@ringko-ai/workflow";
 import type { RingKo } from "./index.ts";
-import type { RuntimeContribution, RuntimeHost } from "./runtime-contribution.ts";
+import type { RuntimeHost } from "./runtime-contribution.ts";
 import { registerRuntimeSkills } from "./skills.ts";
 
 /** Remove tools excluded by the workspace workflow policy. */
@@ -26,6 +26,7 @@ export function registerRuntimeTools(
   workspace: string,
   host: RuntimeHost = {},
   session?: SessionHandle,
+  skills?: readonly Skill[],
 ): Sandbox {
   const sandbox = new Sandbox({ workspace, mode: config.sandbox?.mode, additionalWritableRoots: config.sandbox?.additionalWritableRoots });
   registerWorkspaceTools(agent.tools, { workspace, sandbox });
@@ -41,26 +42,8 @@ export function registerRuntimeTools(
     search: { provider: config.capabilities.websearchProvider },
   });
   if (config.capabilities?.shell) registerShellTools(agent.tools, { cwd: workspace, sandbox });
-  registerRuntimeSkills(agent.tools, workspace);
+  registerRuntimeSkills(agent.tools, workspace, skills);
   applyToolPolicy(agent, resolveWorkflow(config.workflow));
   return sandbox;
 }
 
-/** The built-in workspace tools, registered as the first runtime contribution. */
-export function createRuntimeToolsContribution(): {
-  contribution: RuntimeContribution;
-  sandboxFor(agent: RingKo): Sandbox | undefined;
-} {
-  const sandboxes = new WeakMap<RingKo, Sandbox>();
-  return {
-    contribution: {
-      name: "core/tools",
-      setup(context) {
-        context.onAgent((agent, config, agentContext) => {
-          sandboxes.set(agent, registerRuntimeTools(agent, config, context.workspace, agentContext.host, agentContext.session));
-        });
-      },
-    },
-    sandboxFor: agent => sandboxes.get(agent),
-  };
-}

@@ -139,12 +139,18 @@ it("installs skills through the runtime and reports them to observers", async ()
   writeFileSync(join(source, "SKILL.md"), "---\nname: runtime-skill\ndescription: Runtime installed\n---\nBody");
   const runtime = new RuntimeManager(directory);
   const events: string[] = [];
+  const revisions: number[] = [];
   runtime.events.on("skill/installed", skill => { events.push(`${skill.name}:${skill.scope}`); });
+  runtime.events.on("capabilities/changed", snapshot => { revisions.push(snapshot.revision); });
   try {
+    const before = runtime.capabilities();
+    expect(runtime.capabilities()).toBe(before);
     const skill = await runtime.installSkill({ source, scope: "global" });
     expect(skill).toEqual(expect.objectContaining({ name: "runtime-skill", source: "ringko", scope: "global" }));
     expect(events).toEqual(["runtime-skill:global"]);
     expect(runtime.skills().some(entry => entry.name === "runtime-skill")).toBe(true);
+    expect(runtime.capabilities().revision).toBeGreaterThan(before.revision);
+    expect(revisions).toEqual([runtime.capabilities().revision]);
   } finally { await runtime.close(); }
 }));
 
@@ -308,6 +314,8 @@ it("registers runtime contributions and releases agent-scoped handlers", async (
     name: "fixture-contribution",
     setup(context) {
       expect(context.workspace).toBe(directory);
+      expect(context.capabilities().revision).toBeGreaterThan(0);
+      expect(typeof context.tools.register).toBe("function");
       expect(Array.isArray(context.skills())).toBe(true);
       expect(Array.isArray(context.plugins().plugins)).toBe(true);
       expect(typeof context.installSkill).toBe("function");

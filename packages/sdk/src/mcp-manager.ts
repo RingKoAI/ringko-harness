@@ -1,4 +1,4 @@
-import { loadMcpServers, writeDiagnostic, type McpServerConfig } from "@ringko-ai/config";
+import { loadMcpServers, writeDiagnostic, type McpServer, type McpServerConfig } from "@ringko-ai/config";
 import { closeMcpConnections, mcpEndpoint, mcpPermissions, openMcpServer, type McpConnection } from "@ringko-ai/mcp";
 import { Sandbox } from "@ringko-ai/tools";
 
@@ -30,6 +30,12 @@ function publicFailure(error: unknown): string {
   return "Unable to initialize MCP server. Check its command, URL and credentials.";
 }
 
+export interface McpServerSource {
+  servers: readonly McpServer[];
+  /** Invalid explicit configuration; plugin servers may still be present. */
+  error?: string;
+}
+
 /** Workspace-scoped MCP connections with per-server retry limits and no overlapping attempts. */
 export class McpManager {
   private state = newState();
@@ -37,7 +43,11 @@ export class McpManager {
   private sandbox: Sandbox;
   private authorizations: Readonly<Record<string, unknown>> = {};
 
-  constructor(private readonly workspace: string, private readonly retryDelayMs = RETRY_DELAY_MS) {
+  constructor(
+    private readonly workspace: string,
+    private readonly retryDelayMs = RETRY_DELAY_MS,
+    private readonly serverSource?: () => McpServerSource,
+  ) {
     this.sandbox = new Sandbox({ workspace });
   }
 
@@ -116,7 +126,12 @@ export class McpManager {
     const state = this.state;
     state.initial ??= (async () => {
       try {
-        const servers = loadMcpServers({ cwd: this.workspace });
+        const source = this.serverSource?.();
+        const servers = source ? [...source.servers] : loadMcpServers({ cwd: this.workspace });
+        if (source?.error) {
+          state.errors.set("configuration", source.error);
+          writeDiagnostic("mcp.configuration", source.error);
+        }
         if (servers.length > MAX_SERVERS) throw new Error("MCP configuration exceeds 64 servers.");
         await Promise.all(servers.map(server => {
           const local = typeof server.config.command === "string" && server.config.command.trim().length > 0;

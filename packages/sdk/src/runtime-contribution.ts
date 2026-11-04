@@ -5,8 +5,10 @@ import type { LoadedPlugin, PluginLoadError, RingkoConfig, Skill, SkillInstallSc
 import type { EventBus, EventLog, Scheduler } from "@ringko-ai/runtime";
 import type { SessionHandle } from "@ringko-ai/session";
 import type { AskHandler, Sandbox, TodoItem } from "@ringko-ai/tools";
+import type { CapabilitySnapshot } from "./capabilities.ts";
 import type { RingKo } from "./index.ts";
 import type { McpManager } from "./mcp-manager.ts";
+import type { ToolManager } from "./tool-manager.ts";
 import type { PermissionManager } from "./permissions.ts";
 import type { RuntimeEvents } from "./runtime.ts";
 
@@ -38,6 +40,10 @@ export interface RuntimeContext {
   readonly permissions: PermissionManager;
   readonly sandbox: Sandbox;
   readonly mcp: Pick<McpManager, "start" | "current" | "ready" | "reset">;
+  /** Built-in tool assembly shared by every agent. */
+  readonly tools: ToolManager;
+  /** Immutable capability snapshot for this workspace. */
+  capabilities(): CapabilitySnapshot;
   /** Installed skills visible to this workspace, including plugin skills. */
   skills(): Skill[];
   /** Trusted plugins and manifest errors for this workspace. */
