@@ -901,6 +901,7 @@ export function Repl(props: ReplProps) {
   const slash = useMemo<SlashContext>(
     () => ({
       print,
+      sendPrompt: text => { void submit(text); },
       clear: () => { setItems([]); setScrollOffset(0); },
       newSession: () => {
         if (backend) { void backend.createSession().then(session => { setItems([]); setTaskViews([]); setViewedTaskId(undefined); setSessionId(session.id); onSession?.(session.id); }).catch(reportRemote); return; }

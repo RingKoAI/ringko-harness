@@ -15,6 +15,7 @@ export * from "./usage.ts";
 export * from "./proxy.ts";
 export * from "./skills.ts";
 export * from "./mcp.ts";
+export * from "./plugins.ts";
 export * from "./instructions.ts";
 export { configuredModelIds } from "./task-models.ts";
 export * from "./diagnostics.ts";

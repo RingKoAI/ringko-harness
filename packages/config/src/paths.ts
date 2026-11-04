@@ -36,6 +36,10 @@ export const USAGE_FILE_NAME = "usage.json";
 
 /** Supported skills directory names, in precedence order. */
 export const SKILLS_DIR_NAMES = ["skills", "skill"] as const;
+/** Plugin manifest file inside a plugin directory. */
+export const PLUGIN_FILE_NAME = "plugin.json";
+/** Directory holding discovered plugins under a resource root. */
+export const PLUGINS_DIR_NAME = "plugins";
 
 /** Markers that identify a project root when walking up from a workspace. */
 const PROJECT_MARKERS = [".git", ".mcp.json", PROJECT_CONFIG_FILE_NAME, AGENTS_DIR_NAME];
@@ -109,6 +113,18 @@ export function skillsDirs(env: NodeJS.ProcessEnv = process.env): string[] {
     }
   }
   return dirs;
+}
+
+/** User-level plugin roots, precedence order (ringko first). */
+export function pluginRoots(env: NodeJS.ProcessEnv = process.env): string[] {
+  return [join(ringkoRoot(env), PLUGINS_DIR_NAME), join(agentsRoot(env), PLUGINS_DIR_NAME)];
+}
+
+/** Project-level plugin roots, when a project root exists. */
+export function projectPluginRoots(cwd: string = process.cwd(), env: NodeJS.ProcessEnv = process.env): string[] {
+  const root = findProjectRoot(cwd, env);
+  if (!root) return [];
+  return [join(root, RINGKO_DIR_NAME, PLUGINS_DIR_NAME), join(root, AGENTS_DIR_NAME, PLUGINS_DIR_NAME)];
 }
 
 /** Walk up from `cwd` for a project marker, stopping before the home directory. */

@@ -1,0 +1,71 @@
+# 插件
+
+插件是一个包含 `plugin.json` 清单的目录。清单是声明式的：它可以添加技能、
+提示词命令和 MCP 服务器，但不能执行代码。需要执行代码的扩展请使用运行时
+contribution API。
+
+## 位置与信任
+
+插件按以下顺序发现，先找到的同名插件优先：
+
+| 范围 | 目录 |
+| --- | --- |
+| 项目 | `<project>/.ringko/plugins/<id>` |
+| 项目 | `<project>/.agents/plugins/<id>` |
+| 用户 | `~/.ringko/plugins/<id>` |
+| 共享 | `~/.agents/plugins/<id>` |
+
+项目根目录是最近的包含 `.git`、`.mcp.json`、`ringko.json` 或 `.agents` 的
+祖先目录。
+
+只有目录名出现在**用户级** `~/.ringko/settings.local.json` 中时才会加载：
+
+```json
+{
+  "plugins": {
+    "trusted": ["reviewer"]
+  }
+}
+```
+
+信任列表刻意不从项目文件读取，因此克隆的仓库无法自行启用插件。删除名称即可
+停用插件。未受信任的目录在解析清单之前就被忽略。
+
+## 清单格式
+
+```json
+{
+  "schemaVersion": 1,
+  "name": "reviewer",
+  "version": "1.0.0",
+  "description": "Review helpers",
+  "skills": ["skills"],
+  "commands": [
+    {
+      "name": "review",
+      "description": "Review a diff",
+      "argumentHint": "path",
+      "prompt": "Review the current diff. Focus on $ARGUMENTS."
+    }
+  ],
+  "mcpServers": {
+    "reviewer": { "command": "node", "args": ["server.js"] }
+  }
+}
+```
+
+- `name` 必填，且必须与目录名一致。
+- `schemaVersion` 存在时必须为 `1`。未知字段会被拒绝。
+- 不支持 `hooks`；请改用运行时 contribution。
+- `skills` 是相对于插件根目录的目录列表。绝对路径、`..` 片段以及逃逸出插件
+  目录的符号链接都会被拒绝。省略时，若存在 `skills` 目录则默认使用它。
+- `commands` 是 REPL 中的提示词模板。`$ARGUMENTS` 或 `{{args}}` 会被替换为
+  命令后的参数；若两者都不存在，参数会追加到末尾。插件命令不能覆盖内置命令。
+- `mcpServers` 与 `.mcp.json` 结构相同。名称冲突时，显式的项目或用户 MCP
+  配置优先。
+
+限制：最多 128 个插件，清单最大 256 KiB，每个插件最多 64 条命令、提示词最大
+64 KiB、64 个技能目录和 64 个 MCP 服务器。
+
+受信任插件的清单只要有一处无效，整个插件都不会贡献任何内容；所有路径都会在
+读取插件目录之外的文件之前完成校验。

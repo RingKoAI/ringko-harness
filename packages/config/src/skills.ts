@@ -7,6 +7,7 @@
 import { closeSync, openSync, readSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { agentsRoot, ancestorSkillsDirs, projectSkillsDirs, RINGKO_DIR_NAME, ringkoRoot, SKILLS_DIR_NAMES, skillsDirs } from "./paths.ts";
+import { loadPlugins } from "./plugins.ts";
 
 export const SKILL_FILE_NAME = "SKILL.md";
 const SKILL_METADATA_BYTES = 16 * 1024;
@@ -85,6 +86,13 @@ export function discoverSkills(options: DiscoverSkillsOptions = {}): Skill[] {
       { dir: join(ringkoRoot(env), name), source: "ringko" as const, scope: "global" as const },
       { dir: join(agentsRoot(env), name), source: "agents" as const, scope: "global" as const },
     ]),
+    // Plugin skill directories are lowest precedence: an explicitly installed
+    // skill with the same name always wins.
+    ...loadPlugins({ env, cwd }).plugins.flatMap(plugin => plugin.skillDirs.map(dir => ({
+      dir,
+      source: plugin.source,
+      scope: plugin.scope,
+    }))),
   ];
   const seenRoots = new Set<string>();
   const uniqueRoots = roots.filter((root) => {

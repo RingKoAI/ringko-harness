@@ -1,9 +1,10 @@
 import { render } from "ink";
 import { createElement } from "react";
 import type { ModelClient } from "@ringko-ai/sdk";
-import type { RingkoConfig } from "@ringko-ai/config";
+import { loadPlugins, type RingkoConfig } from "@ringko-ai/config";
 import type { BackendClient } from "@ringko-ai/client";
 import { Repl } from "./app.tsx";
+import { buildPluginCommands, resetPluginCommands, setPluginCommands } from "./commands.ts";
 import { isolateTerminalDiagnostics } from "./diagnostics.ts";
 
 export interface LaunchReplOptions {
@@ -29,6 +30,8 @@ export async function launchRepl(options: LaunchReplOptions): Promise<string | u
     let lastSessionId: string | undefined;
     const restoreDiagnostics = isolateTerminalDiagnostics();
     try {
+    const plugins = loadPlugins({ cwd: options.workspace });
+    setPluginCommands(buildPluginCommands(plugins.plugins));
     const app = render(
       createElement(Repl, {
         ...options,
@@ -46,6 +49,7 @@ export async function launchRepl(options: LaunchReplOptions): Promise<string | u
       app.cleanup();
     }
     } finally {
+      resetPluginCommands();
       restoreDiagnostics();
     }
 }

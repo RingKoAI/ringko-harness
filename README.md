@@ -116,6 +116,7 @@ stay in the session JSONL.
 | Config | `~/.ringko/provider.json`, `~/.ringko/settings.local.json` |
 | Skills | `~/.ringko/skills`, `~/.agents/skills` |
 | MCP servers | `~/.ringko/.mcp.json`, `~/.agents/.mcp.json` |
+| Plugins | `~/.ringko/plugins`, `~/.agents/plugins` (trusted names in `settings.local.json`) |
 | Sessions | `~/.ringko/sessions/` |
 
 `RINGKO_HOME` and `AGENTS_HOME` override the home directories. Inspect them with

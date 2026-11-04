@@ -87,6 +87,11 @@ export interface RingkoConfig {
     keepRecent?: number;
     margin?: number;
   };
+  /** Declarative plugin trust. Only names listed here may contribute. */
+  plugins?: {
+    /** Plugin ids (directory names) explicitly trusted by the user. */
+    trusted?: string[];
+  };
   /** Currently selected model, `"<providerName>/<modelId>"`. */
   model?: string;
   /** Optional cheaper model for helper tasks. */

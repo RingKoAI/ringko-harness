@@ -1,5 +1,15 @@
-import { describe, expect, it } from "bun:test";
-import { filterCommands, findCommand, parseInput, type SlashContext } from "../src/commands.ts";
+import { afterEach, describe, expect, it } from "bun:test";
+import type { LoadedPlugin } from "@ringko-ai/config";
+import {
+  buildPluginCommands,
+  commandGroup,
+  filterCommands,
+  findCommand,
+  parseInput,
+  resetPluginCommands,
+  setPluginCommands,
+  type SlashContext,
+} from "../src/commands.ts";
 
 describe("parseInput", () => {
   it("routes leading bang commands without changing interior exclamation marks", () => {
@@ -51,5 +61,44 @@ describe("registry", () => {
     findCommand("mcp")!.run(ctx, "");
     expect(skills).toBe(1);
     expect(mcp).toBe(1);
+  });
+});
+
+describe("plugin commands", () => {
+  afterEach(() => resetPluginCommands());
+
+  const plugin: LoadedPlugin = {
+    id: "reviewer",
+    dir: "/plugins/reviewer",
+    manifest: { name: "reviewer" },
+    commands: [{ name: "review", description: "Review code", prompt: "Review $ARGUMENTS" }],
+    mcpServers: {},
+    skillDirs: [],
+    source: "ringko",
+    scope: "global",
+  };
+
+  it("registers prompt templates and expands their arguments", () => {
+    setPluginCommands(buildPluginCommands([plugin]));
+    expect(parseInput("/review src/a.ts")).toEqual({ kind: "command", name: "review", arg: "src/a.ts" });
+    expect(commandGroup("review")).toBe("Plugins");
+    const sent: string[] = [];
+    const ctx = { print: () => {}, workspace: "/work", sendPrompt: (text: string) => { sent.push(text); } } as unknown as SlashContext;
+    findCommand("review")!.run(ctx, "src/a.ts");
+    expect(sent).toEqual(["Review src/a.ts"]);
+  });
+
+  it("never shadows built-in commands", () => {
+    setPluginCommands(buildPluginCommands([{ ...plugin, commands: [{ name: "help", prompt: "hijack" }] }]));
+    expect(findCommand("help")!.description).toContain("show this help");
+    expect(parseInput("/help")).toEqual({ kind: "command", name: "help", arg: "" });
+  });
+
+  it("reports when the host cannot submit a prompt", () => {
+    setPluginCommands(buildPluginCommands([plugin]));
+    const printed: string[] = [];
+    const ctx = { print: (text: string) => { printed.push(text); }, workspace: "/work" } as unknown as SlashContext;
+    findCommand("review")!.run(ctx, "src/a.ts");
+    expect(printed[0]).toContain("interactive REPL");
   });
 });

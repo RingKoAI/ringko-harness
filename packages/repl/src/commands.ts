@@ -1,5 +1,5 @@
 // Slash-command registry and input parsing for the REPL (pure, unit-testable).
-import { discoverSkills, loadMcpServers } from "@ringko-ai/config";
+import { discoverSkills, expandCommandPrompt, loadMcpServers, type LoadedPlugin } from "@ringko-ai/config";
 import { SHORTCUT_HELP } from "./keybindings.ts";
 
 export type ParsedInput =
@@ -44,6 +44,8 @@ export interface SlashContext {
   toggleThinking(arg: string): void | Promise<void>;
   /** Compact the running context into a summary (optional focus text). */
   compact(arg: string): void | Promise<void>;
+  /** Submit a prompt as if the user typed it (plugin prompt templates). */
+  sendPrompt?(text: string): void;
 }
 
 export interface SlashCommand {
@@ -150,9 +152,47 @@ export function buildCommands(): SlashCommand[] {
   ];
 }
 
-const COMMANDS = buildCommands();
+const BASE_COMMANDS = buildCommands();
+let pluginCommands: SlashCommand[] = [];
+const pluginNames = new Set<string>();
+
+/** Install plugin prompt commands for this host; names never shadow built-ins. */
+export function setPluginCommands(commands: readonly SlashCommand[]): void {
+  pluginNames.clear();
+  const names = new Set(BASE_COMMANDS.flatMap(command => [command.name, ...(command.aliases ?? [])]));
+  pluginCommands = [];
+  for (const command of commands) {
+    if (names.has(command.name)) continue;
+    names.add(command.name);
+    pluginCommands.push(command);
+    pluginNames.add(command.name);
+  }
+}
+
+/** Reset the command registry (host shutdown and tests). */
+export function resetPluginCommands(): void {
+  pluginCommands = [];
+  pluginNames.clear();
+}
+
+function registry(): readonly SlashCommand[] {
+  return pluginCommands.length === 0 ? BASE_COMMANDS : [...BASE_COMMANDS, ...pluginCommands];
+}
+
+/** Build slash commands from trusted plugin prompt templates. */
+export function buildPluginCommands(plugins: readonly LoadedPlugin[]): SlashCommand[] {
+  return plugins.flatMap(plugin => plugin.commands.map(command => ({
+    name: command.name,
+    description: `[${plugin.id}] ${command.description ?? command.argumentHint ?? "plugin prompt"}`,
+    run(ctx: SlashContext, arg: string) {
+      if (!ctx.sendPrompt) { ctx.print("Plugin commands require an interactive REPL."); return; }
+      ctx.sendPrompt(expandCommandPrompt(command.prompt, arg));
+    },
+  })));
+}
 
 export function commandGroup(name: string): string {
+  if (pluginNames.has(name)) return "Plugins";
   if (["new", "resume", "session", "clear", "compact", "loop", "cancel-loop", "stop-loop"].includes(name)) return "Session";
   if (["connect", "login", "model", "effort", "thinking"].includes(name)) return "Model & providers";
   if (["workspace", "tools", "skills", "mcp", "permissions", "agents"].includes(name)) return "Workspace";
@@ -161,20 +201,21 @@ export function commandGroup(name: string): string {
 
 export function findCommand(name: string): SlashCommand | undefined {
   const lower = name.toLowerCase();
-  return COMMANDS.find((command) => command.name === lower || command.aliases?.includes(lower));
+  return registry().find((command) => command.name === lower || command.aliases?.includes(lower));
 }
 
 export function listCommands(): readonly SlashCommand[] {
-  return COMMANDS;
+  return registry();
 }
 
 /** Commands whose name/alias/description matches `query` (no leading slash). */
 export function filterCommands(query: string): SlashCommand[] {
   const trimmed = query.trim().toLowerCase();
-  if (trimmed.length === 0) return [...COMMANDS];
+  const commands = registry();
+  if (trimmed.length === 0) return [...commands];
   const prefix: SlashCommand[] = [];
   const contains: SlashCommand[] = [];
-  for (const command of COMMANDS) {
+  for (const command of commands) {
     const names = [command.name, ...(command.aliases ?? [])];
     if (names.some((name) => name.startsWith(trimmed))) prefix.push(command);
     else if (command.description.toLowerCase().includes(trimmed)) contains.push(command);
@@ -195,9 +236,10 @@ export function parseInput(input: string): ParsedInput {
 }
 
 export function helpText(): string {
+  const commands = registry();
   const lines = ["Commands:"];
-  const width = Math.max(...COMMANDS.map((command) => command.name.length));
-  for (const command of COMMANDS) {
+  const width = Math.max(...commands.map((command) => command.name.length));
+  for (const command of commands) {
     const names = [command.name, ...(command.aliases ?? [])].join(", ");
     lines.push(`  /${names.padEnd(width + 4)} ${command.description}`);
   }

@@ -101,6 +101,35 @@ it("shares pending MCP connections across agents and refreshes after reset", asy
   } finally { await runtime.close(); server.stop(true); }
 }));
 
+it("loads trusted plugin skills and MCP servers", async () => isolated(async directory => {
+  const root = join(directory, "home", ".ringko");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "settings.local.json"), JSON.stringify({ plugins: { trusted: ["helper"] } }));
+  const plugin = join(root, "plugins", "helper");
+  mkdirSync(join(plugin, "skills", "focus"), { recursive: true });
+  writeFileSync(join(plugin, "skills", "focus", "SKILL.md"), "---\nname: plugin-focus\ndescription: Plugin skill\n---\nPlugin guidance");
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const message = await request.json() as { id?: string; method: string };
+    if (!message.id) return new Response(null, { status: 202 });
+    return Response.json({ jsonrpc: "2.0", id: message.id, result: message.method === "initialize" ? { serverInfo: {} } : { tools: [{ name: "ping", inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } }] } });
+  } });
+  writeFileSync(join(plugin, "plugin.json"), JSON.stringify({
+    name: "helper",
+    mcpServers: { fixture: { url: `http://127.0.0.1:${server.port}` } },
+  }));
+  const runtime = new RuntimeManager(directory);
+  const managed = runtime.createAgent({ sandbox: { mcp: { fixture: { url: `http://127.0.0.1:${server.port}`, readOnlyTools: ["ping"] } } } }, {
+    model: async request => {
+      expect(request.tools.some(tool => tool.name === "fixture__ping")).toBe(true);
+      return { content: "done", toolCalls: [] };
+    },
+  });
+  try {
+    expect(await managed.agent.tools.call("skill", { name: "plugin-focus" })).toContain("Plugin guidance");
+    expect((await managed.agent.run("plugin")).content).toBe("done");
+  } finally { await runtime.close(); server.stop(true); }
+}));
+
 it("blocks execution on a rejected hook and closes agents and scheduled resources", async () => isolated(async directory => {
   const runtime = new RuntimeManager(directory);
   let calls = 0;

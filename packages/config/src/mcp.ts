@@ -5,7 +5,9 @@
 // a present but invalid file is a hard error so misconfiguration is not hidden.
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { writeDiagnostic } from "./diagnostics.ts";
 import { agentsRoot, findProjectRoot, mcpPaths, projectMcpPaths, ringkoRoot } from "./paths.ts";
+import { loadPlugins } from "./plugins.ts";
 
 export interface McpServerConfig {
   /** stdio transport command. */
@@ -87,6 +89,15 @@ export function loadMcpServers(options: LoadMcpServersOptions = {}): McpServer[]
       if (!found.has(name)) {
         found.set(name, { name, config: config as McpServerConfig, source: entry.source, scope: entry.scope });
       }
+    }
+  }
+
+  // Trusted plugins may add servers, but never replace explicit configuration.
+  const plugins = loadPlugins({ env, cwd });
+  for (const error of plugins.errors) writeDiagnostic("plugins", `${error.source}: ${error.message}`);
+  for (const plugin of plugins.plugins) {
+    for (const [name, config] of Object.entries(plugin.mcpServers)) {
+      if (!found.has(name)) found.set(name, { name, config, source: plugin.source, scope: plugin.scope });
     }
   }
 
