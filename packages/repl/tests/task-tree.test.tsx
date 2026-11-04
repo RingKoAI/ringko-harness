@@ -39,8 +39,8 @@ describe("TaskTree", () => {
     expect(text).toContain("└─");
     expect(text).toContain("Inspect files");
     expect(text).toContain("Review code");
-    expect(text).toContain("[>]");
-    expect(text).toContain("[-]");
+    expect(text).toContain("[*]");
+    expect(text).toContain("[x]");
     expect(text).toContain("3 tools");
     expect(text).toContain("2 subagents");
   });

@@ -55,11 +55,12 @@ export function TaskTree({ tasks, selectedId, columns, maxRows = MAX_VISIBLE + 2
       {visible.map((task, index) => {
         const viewed = selectedId === task.id;
         const isRunning = task.status === "running";
+        const marker = isRunning ? GLYPH.running : task.status === "completed" ? GLYPH.tick : task.status === "failed" ? GLYPH.failed : GLYPH.cancelled;
         const color = task.status === "failed" || task.status === "cancelled" ? theme.error : viewed ? theme.brand : theme.dim;
         const elapsed = formatElapsed((task.endedAt ?? now) - task.startedAt);
         const tools = task.toolCount > 0 ? ` · ${task.toolCount} tool${task.toolCount === 1 ? "" : "s"}` : "";
         const activity = lastActivity(task);
-        const suffix = `${isRunning ? GLYPH.running : GLYPH.paused} ${elapsed}${tools}${activity ? ` · ${activity}` : ""}`;
+        const suffix = `${marker} ${elapsed}${tools}${activity ? ` · ${activity}` : ""}`;
         return (
           <Text key={task.id} color={color} bold={viewed}>
             {fitTerminalLine(`${viewed ? `${GLYPH.pointer} ` : "  "}${index === visible.length - 1 ? GLYPH.last : GLYPH.tee} ${viewed ? GLYPH.bulletOn : GLYPH.bulletOff} ${task.description}  ${suffix}`, width)}
