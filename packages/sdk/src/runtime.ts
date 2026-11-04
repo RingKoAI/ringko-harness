@@ -2,23 +2,17 @@ import { resolve } from "node:path";
 import { instructionsText, loadInstructions, writeDiagnostic, type RingkoConfig } from "@ringko-ai/config";
 import { registerMcpTools } from "@ringko-ai/mcp";
 import { EventBus, EventLog, Scheduler, createTimeSource } from "@ringko-ai/runtime";
-import { sessionTodos } from "@ringko-ai/session";
-import { Sandbox, createTodoStore, registerNetworkTools, registerSessionQueryTools, registerSessionTools, registerShellTools, registerWorkspaceTools, type AskHandler, type TodoItem } from "@ringko-ai/tools";
-import { resolveWorkflow, workflowAllowsTool, workflowInstructions, type Workflow } from "@ringko-ai/workflow";
+import { Sandbox } from "@ringko-ai/tools";
+import { resolveWorkflow, workflowInstructions } from "@ringko-ai/workflow";
 import { abortable, type ToolExecutionEvent, type ToolExecutionResult } from "@ringko-ai/harness";
 import { createRingKo, isAccessMode, type AgentEvent, type ModelExecutionEvent, type ModelExecutionResult, type RingKo, type RingKoConfig as AgentConfig } from "./index.ts";
-import { registerRuntimeSkills } from "./skills.ts";
 import { PermissionManager } from "./permissions.ts";
 import { McpManager } from "./mcp-manager.ts";
-import type { AgentContribution, Disposable, RuntimeContext, RuntimeContribution } from "./runtime-contribution.ts";
-export type { AgentContribution, Disposable, RuntimeContext, RuntimeContribution } from "./runtime-contribution.ts";
+import { applyToolPolicy, createRuntimeToolsContribution } from "./runtime-tools.ts";
+import type { AgentContribution, AgentContributionContext, Disposable, RuntimeContext, RuntimeContribution, RuntimeHost } from "./runtime-contribution.ts";
+export { registerRuntimeTools } from "./runtime-tools.ts";
+export type { AgentContribution, AgentContributionContext, Disposable, RuntimeContext, RuntimeContribution, RuntimeHost } from "./runtime-contribution.ts";
 export type { PermissionRule } from "./permissions.ts";
-
-export interface RuntimeHost {
-  ask?: AskHandler;
-  onTodo?: (todos: TodoItem[]) => void;
-  report?: (message: string) => void;
-}
 
 export interface RuntimeEvents extends Record<string, unknown> {
   "run/before": { prompt: string; signal: AbortSignal };
@@ -30,31 +24,6 @@ export interface RuntimeEvents extends Record<string, unknown> {
   "model/before-request": ModelExecutionEvent;
   "model/after-response": ModelExecutionResult;
   "tool/permission": { toolName: string; target?: string; decision: "allow" | "deny" | "ask" | "default" };
-}
-
-function applyToolPolicy(agent: RingKo, workflow: Workflow): void {
-  for (const tool of agent.tools.list()) if (!workflowAllowsTool(workflow, tool.name)) agent.tools.unregister(tool.name);
-}
-
-/** Shared tool assembly for executing agents and capability previews. */
-export function registerRuntimeTools(agent: RingKo, config: RingkoConfig, workspace: string, host: RuntimeHost = {}, session?: AgentConfig["session"]): Sandbox {
-  const sandbox = new Sandbox({ workspace, mode: config.sandbox?.mode, additionalWritableRoots: config.sandbox?.additionalWritableRoots });
-  registerWorkspaceTools(agent.tools, { workspace, sandbox });
-  const todos = createTodoStore(items => {
-    if (session) { session.appendEvent("session/todo", { todos: items }); session.flush(); }
-    host.onTodo?.(items);
-  });
-  todos.todos = session ? sessionTodos(session.all()) : [];
-  registerSessionTools(agent.tools, { todos, ask: host.ask ?? (async () => { throw new Error("Questions require an interactive host."); }) });
-  registerSessionQueryTools(agent.tools, { workspace });
-  if (config.capabilities?.network) registerNetworkTools(agent.tools, {
-    allowPrivateHosts: config.capabilities.privateNetwork === true,
-    search: { provider: config.capabilities.websearchProvider },
-  });
-  if (config.capabilities?.shell) registerShellTools(agent.tools, { cwd: workspace, sandbox });
-  registerRuntimeSkills(agent.tools, workspace);
-  applyToolPolicy(agent, resolveWorkflow(config.workflow));
-  return sandbox;
 }
 
 export interface RuntimeAgent { agent: RingKo; close(): void }
@@ -69,6 +38,7 @@ export class RuntimeManager {
   readonly sandbox: Sandbox;
   private readonly stopTime: () => void;
   private readonly mcp: McpManager;
+  private readonly builtinTools = createRuntimeToolsContribution();
   private readonly agents = new Set<() => void>();
   private readonly contributions = new Map<string, { dispose?: Disposable; handlers: Set<AgentContribution> }>();
   private readonly agentHandlers = new Set<AgentContribution>();
@@ -84,16 +54,24 @@ export class RuntimeManager {
     this.log = log ?? new EventLog();
     this.scheduler = new Scheduler(this.log);
     this.stopTime = log ? () => {} : createTimeSource(this.log);
+    const { name, handlers, context } = this.begin(this.builtinTools.contribution);
+    const result = this.builtinTools.contribution.setup(context);
+    if (result instanceof Promise) throw new TypeError(`Runtime contribution "${name}" must be synchronous during construction.`);
+    this.contributions.set(name, { ...(typeof result === "function" ? { dispose: result } : {}), handlers });
   }
 
-  /** Register a contribution and return an idempotent disposer. */
-  async use(contribution: RuntimeContribution): Promise<Disposable> {
+  private begin(contribution: RuntimeContribution): { name: string; handlers: Set<AgentContribution>; context: RuntimeContext } {
     if (this.closed) throw new Error("Runtime is closed.");
     const name = typeof contribution?.name === "string" ? contribution.name.trim() : "";
     if (name.length === 0) throw new TypeError("Runtime contribution requires a name.");
     if (this.contributions.has(name)) throw new Error(`Runtime contribution "${name}" is already registered.`);
     const handlers = new Set<AgentContribution>();
-    const context = this.context(handlers);
+    return { name, handlers, context: this.context(handlers) };
+  }
+
+  /** Register a contribution and return an idempotent disposer. */
+  async use(contribution: RuntimeContribution): Promise<Disposable> {
+    const { name, handlers, context } = this.begin(contribution);
     let dispose: Disposable | undefined;
     try {
       const result = await contribution.setup(context);
@@ -165,9 +143,8 @@ export class RuntimeManager {
   previewTools(config: RingkoConfig, host: RuntimeHost = {}): { agent: RingKo; sandbox: Sandbox } {
     if (this.closed) throw new Error("Runtime is closed.");
     const agent = createRingKo({ task: true, model: async () => ({ content: "", toolCalls: [] }) });
-    const sandbox = registerRuntimeTools(agent, config, this.workspace, host);
-    for (const handler of this.agentHandlers) handler(agent, config);
-    return { agent, sandbox };
+    for (const handler of this.agentHandlers) handler(agent, config, { host });
+    return { agent, sandbox: this.builtinTools.sandboxFor(agent) ?? this.sandbox };
   }
 
   createAgent(config: RingkoConfig, options: AgentConfig, host: RuntimeHost = {}): RuntimeAgent {
@@ -220,17 +197,18 @@ export class RuntimeManager {
         await this.events.parallel("model/after-response", event).catch(error => writeDiagnostic("runtime.model.post", String(error)));
       },
     });
-    const toolSandbox = registerRuntimeTools(agent, config, this.workspace, host, options.session);
     const agentDisposers: Disposable[] = [];
+    const agentContext: AgentContributionContext = { host, ...(options.session ? { session: options.session } : {}) };
     try {
       for (const handler of this.agentHandlers) {
-        const dispose = handler(agent, config);
+        const dispose = handler(agent, config, agentContext);
         if (typeof dispose === "function") agentDisposers.push(dispose);
       }
     } catch (error) {
       controller.abort();
       throw error;
     }
+    const toolSandbox = this.builtinTools.sandboxFor(agent) ?? this.sandbox;
     agent.tools.setPermissionCheck(async request => {
       const rule = this.permissions.decide(permissionSession, request.toolName, request.target);
       const decision = rule === "deny" || rule === "ask" ? rule : (await abortable(this.events.waterfall("tool/permission", { toolName: request.toolName, target: request.target, decision: rule }), request.signal)).decision;

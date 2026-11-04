@@ -1,6 +1,6 @@
-import { createRingKo, access, loopPrompt, promiseText, type ApprovalHandler, type ChatMessage, type RingKo } from "@ringko-ai/sdk";
+import { access, loopPrompt, promiseText, type ApprovalHandler, type ChatMessage } from "@ringko-ai/sdk";
 import { cliCommand } from "./cli-identity.ts";
-import { RuntimeManager, registerRuntimeTools } from "@ringko-ai/sdk/runtime";
+import { RuntimeManager } from "@ringko-ai/sdk/runtime";
 import { connectBackend } from "./backend.ts";
 import {
   applyProxyEnv,
@@ -150,10 +150,6 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     }
   }
   return { command, positionals, config, provider, model, workspace, resume, session, sessionPicker, server, port, shared };
-}
-
-function registerTools(ringko: RingKo, config: RingkoConfig, workspace: string, session?: SessionHandle): void {
-  registerRuntimeTools(ringko, config, workspace, {}, session);
 }
 
 interface CliLoop { maxIterations: number; completionPromise?: string }
@@ -333,10 +329,13 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       const config = readConfig(parsed, io);
       if (!config) return 2;
       const workspace = parsed.workspace ?? config.workspace ?? process.cwd();
-      const ringko = createRingKo({ task: true, model: async () => ({ content: "", toolCalls: [] }) });
-      registerTools(ringko, config, workspace);
-      for (const tool of ringko.tools.list()) io.out(tool.name);
-      return 0;
+      const runtime = new RuntimeManager(workspace);
+      try {
+        for (const tool of runtime.previewTools(config).agent.tools.list()) io.out(tool.name);
+        return 0;
+      } finally {
+        await runtime.close();
+      }
     }
     case "skills":
       return skillsCommand(parsed, io);

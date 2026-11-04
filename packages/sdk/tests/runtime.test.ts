@@ -243,7 +243,8 @@ it("registers runtime contributions and releases agent-scoped handlers", async (
     name: "fixture-contribution",
     setup(context) {
       expect(context.workspace).toBe(directory);
-      context.onAgent((agent) => {
+      context.onAgent((agent, _config, agentContext) => {
+        expect(agentContext.host).toEqual({});
         agent.tools.register(defineTool({
           name: "fixture_tool",
           description: "Fixture tool",
