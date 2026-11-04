@@ -106,6 +106,7 @@ JSONL 中。
 | 配置 | `~/.ringko/provider.json`、`~/.ringko/settings.local.json` |
 | 技能 | `~/.ringko/skills`、`~/.agents/skills` |
 | MCP server | `~/.ringko/.mcp.json`、`~/.agents/.mcp.json` |
+| 插件 | `~/.ringko/plugins`、`~/.agents/plugins`（信任名单在 `settings.local.json`） |
 | 会话 | `~/.ringko/sessions/` |
 
 `RINGKO_HOME` 与 `AGENTS_HOME` 可以覆盖这些主目录。用 `ringko config show`、
@@ -146,7 +147,9 @@ npm 包内含 CLI、内置供应商与 WebUI。浏览器终端使用 `node-pty`�
 
 - [配置](docs/configuration.zh-CN.md)
 - [MCP server](docs/mcp.zh-CN.md)
+- [插件](docs/plugins.zh-CN.md)
 - [供应商](docs/providers.zh-CN.md)
+- [技能](docs/skills.zh-CN.md)
 - [沙盒](SANDBOX.md)
 - [使用统计](docs/usage-statistics.md)
 

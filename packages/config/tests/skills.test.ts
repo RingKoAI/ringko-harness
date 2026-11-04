@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverSkills, parseSkillFrontmatter, removeSkill } from "../src/skills.ts";
+import { discoverSkills, installSkill, parseSkillFrontmatter, removeSkill } from "../src/skills.ts";
 
 let home: string;
 let env: NodeJS.ProcessEnv;
@@ -31,6 +31,69 @@ describe("parseSkillFrontmatter", () => {
   it("returns undefined without a name", () => {
     expect(parseSkillFrontmatter("---\ndescription: x\n---\n")).toBeUndefined();
     expect(parseSkillFrontmatter("# no frontmatter")).toBeUndefined();
+  });
+});
+
+describe("installSkill", () => {
+  function writeSource(root: string, name: string, extra?: (dir: string) => void): string {
+    const dir = join(root, "source");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: Installed skill\n---\nBody`);
+    extra?.(dir);
+    return dir;
+  }
+
+  it("installs into the global skills root", () => {
+    const source = writeSource(home, "installed", dir => {
+      mkdirSync(join(dir, "references"));
+      writeFileSync(join(dir, "references", "note.txt"), "note");
+    });
+    const skill = installSkill({ source, scope: "global", env, cwd: home });
+    expect(skill).toEqual({ name: "installed", description: "Installed skill", dir: join(home, ".ringko", "skills", "installed"), source: "ringko", scope: "global" });
+    expect(discoverSkills({ env, cwd: home }).find(entry => entry.name === "installed")?.scope).toBe("global");
+  });
+
+  it("installs into the current project skills root", () => {
+    const project = mkdtempSync(join(tmpdir(), "ringko-install-proj-"));
+    const sub = join(project, "app");
+    mkdirSync(sub, { recursive: true });
+    mkdirSync(join(project, ".git"));
+    try {
+      const source = writeSource(home, "project-skill");
+      const skill = installSkill({ source, scope: "project", env, cwd: sub });
+      expect(skill.dir).toBe(join(project, ".ringko", "skills", "project-skill"));
+      expect(skill.source).toBe("project");
+      expect(discoverSkills({ env, cwd: sub }).find(entry => entry.name === "project-skill")?.scope).toBe("project");
+    } finally { rmSync(project, { recursive: true, force: true }); }
+  });
+
+  it("refuses to overwrite an installed skill", () => {
+    const source = writeSource(home, "duplicate");
+    installSkill({ source, scope: "global", env, cwd: home });
+    expect(() => installSkill({ source, scope: "global", env, cwd: home })).toThrow("already installed");
+  });
+
+  it("rejects unsafe names and missing manifests", () => {
+    const source = writeSource(home, "../escape");
+    expect(() => installSkill({ source, scope: "global", env, cwd: home })).toThrow("single path segment");
+    const empty = join(home, "empty");
+    mkdirSync(empty, { recursive: true });
+    expect(() => installSkill({ source: empty, scope: "global", env, cwd: home })).toThrow("must contain SKILL.md");
+  });
+
+  it("rejects symlinks without leaving a partial install", () => {
+    const source = writeSource(home, "linked");
+    try { symlinkSync(join(home, "outside"), join(source, "link")); }
+    catch { return; }
+    expect(() => installSkill({ source, scope: "global", env, cwd: home })).toThrow("symbolic links");
+    expect(existsSync(join(home, ".ringko", "skills", "linked"))).toBeFalse();
+  });
+
+  it("rejects oversized SKILL.md files", () => {
+    const source = join(home, "oversized");
+    mkdirSync(source, { recursive: true });
+    writeFileSync(join(source, "SKILL.md"), "x".repeat(64 * 1024 + 1));
+    expect(() => installSkill({ source, scope: "global", env, cwd: home })).toThrow("64 KiB");
   });
 });
 

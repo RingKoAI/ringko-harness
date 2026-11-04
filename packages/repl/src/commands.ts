@@ -32,6 +32,8 @@ export interface SlashContext {
   pickAgent?(): void;
   /** Browse installed skills (metadata and paths). */
   pickSkills?(): void;
+  /** Install a local skill directory into the global or project skills root. */
+  addSkill?(source: string): void;
   /** Browse MCP servers with their live connection status. */
   pickMcp?(): void | Promise<void>;
   /** Start a self-referential loop: `<prompt> [--max-iterations N] [--completion-promise TEXT]`. */
@@ -137,6 +139,19 @@ export function buildCommands(): SlashCommand[] {
       },
     },
     {
+      name: "skill",
+      description: "install a skill with `/skill add <path>`, or browse installed skills",
+      run: (ctx, arg) => {
+        const match = /^add(?:\s+([\s\S]*))?$/i.exec(arg.trim());
+        if (match) {
+          if (!ctx.addSkill) { ctx.print("Skill installation requires an interactive REPL."); return; }
+          ctx.addSkill((match[1] ?? "").trim());
+          return;
+        }
+        ctx.pickSkills?.();
+      },
+    },
+    {
       name: "mcp",
       description: "browse MCP servers and connection status",
       run: (ctx) => {
@@ -195,7 +210,7 @@ export function commandGroup(name: string): string {
   if (pluginNames.has(name)) return "Plugins";
   if (["new", "resume", "session", "clear", "compact", "loop", "cancel-loop", "stop-loop"].includes(name)) return "Session";
   if (["connect", "login", "model", "effort", "thinking"].includes(name)) return "Model & providers";
-  if (["workspace", "tools", "skills", "mcp", "permissions", "agents"].includes(name)) return "Workspace";
+  if (["workspace", "tools", "skills", "skill", "mcp", "permissions", "agents"].includes(name)) return "Workspace";
   return "Help & application";
 }
 

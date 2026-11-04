@@ -1,4 +1,5 @@
 import { Box, Text, useApp, useInput, useStdout, useBoxMetrics, type DOMElement } from "ink";
+import { resolve } from "node:path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generateSessionMeta, loopPrompt, parseLoopArgs, promiseText, type ChatMessage, type LoopOptions, type ModelClient, type RingKo, type ToolApprovalRequest } from "@ringko-ai/sdk";
 import {
@@ -23,6 +24,8 @@ import {
 } from "@ringko-ai/session";
 import {
   discoverSkills,
+  installSkill,
+  skillInstallTargets,
   loadMcpServers,
   modelLabel,
   configuredModelIds,
@@ -34,6 +37,7 @@ import {
   upsertProviderModels,
   writeDiagnostic,
   type RingkoConfig,
+  type SkillInstallScope,
 } from "@ringko-ai/config";
 import { discoverModels } from "@ringko-ai/providers";
 import { loginAnthropic, loginGitHubCopilot, loginOpenAiBrowser, loginOpenAiDevice, loginXaiDevice, openBrowser } from "@ringko-ai/auth";
@@ -341,6 +345,32 @@ export function Repl(props: ReplProps) {
 
   const openSkillPicker = useCallback((): void => {
     showSkillPicker({ workspace, setPicker, print });
+  }, [workspace, print]);
+
+  const addSkill = useCallback((source: string): void => {
+    const raw = source.trim();
+    if (raw.length === 0) { print("Usage: /skill add <path-to-skill-directory>"); return; }
+    let targets;
+    try { targets = skillInstallTargets({ cwd: workspace }); }
+    catch (error) { print(error instanceof Error ? error.message : "Cannot resolve skill directories."); return; }
+    setPicker({
+      title: "Install skill",
+      items: targets.map(target => ({
+        value: target.scope,
+        label: target.scope === "global" ? "Global skills" : "Project skills",
+        description: target.root,
+        group: "Install into",
+      })),
+      onSelect: value => {
+        setPicker(null);
+        try {
+          const skill = installSkill({ source: resolve(workspace, raw), scope: value as SkillInstallScope, cwd: workspace });
+          print(`Installed skill ${skill.name} to ${skill.dir}`);
+        } catch (error) {
+          print(error instanceof Error ? error.message : "Cannot install skill.");
+        }
+      },
+    });
   }, [workspace, print]);
 
   const openMcpPicker = useCallback((): void => {
@@ -972,6 +1002,7 @@ export function Repl(props: ReplProps) {
       pickSession: openSessionPicker,
       pickAgent: openTaskPicker,
       pickSkills: openSkillPicker,
+      addSkill,
       pickMcp: openMcpPicker,
       pickThinking,
       toggleThinking,
@@ -989,6 +1020,7 @@ export function Repl(props: ReplProps) {
       openSessionPicker,
       openTaskPicker,
       openSkillPicker,
+      addSkill,
       openMcpPicker,
       startLoop,
       cancelLoop,

@@ -53,6 +53,18 @@ describe("registry", () => {
     expect(filterCommands("").length).toBeGreaterThan(5);
   });
 
+  it("routes /skill add to the installation flow", () => {
+    const sources: string[] = [];
+    let picker = 0;
+    const ctx = { addSkill: (source: string) => { sources.push(source); }, pickSkills: () => { picker += 1; }, print: () => {}, workspace: "/work" } as unknown as SlashContext;
+    findCommand("skill")!.run(ctx, "add ./skills/reviewer");
+    findCommand("skill")!.run(ctx, "add");
+    findCommand("skill")!.run(ctx, "");
+    expect(sources).toEqual(["./skills/reviewer", ""]);
+    expect(picker).toBe(1);
+    expect(parseInput("/skill add ./skills/reviewer")).toEqual({ kind: "command", name: "skill", arg: "add ./skills/reviewer" });
+  });
+
   it("routes skills and MCP to their pickers when a host provides them", () => {
     let skills = 0;
     let mcp = 0;
@@ -86,6 +98,11 @@ describe("plugin commands", () => {
     const ctx = { print: () => {}, workspace: "/work", sendPrompt: (text: string) => { sent.push(text); } } as unknown as SlashContext;
     findCommand("review")!.run(ctx, "src/a.ts");
     expect(sent).toEqual(["Review src/a.ts"]);
+  });
+
+  it("ignores plugin commands whose names collide with /skill", () => {
+    setPluginCommands(buildPluginCommands([{ ...plugin, commands: [{ name: "skill", prompt: "hijack" }] }]));
+    expect(findCommand("skill")!.description).toContain("install a skill");
   });
 
   it("never shadows built-in commands", () => {

@@ -4,9 +4,9 @@
 // at least a `name` (and usually a `description`). RingKo scans
 // `~/.ringko/skills` and `~/.agents/skills` (and the singular `skill` alias);
 // ringko-specific skills take precedence over shared ones with the same name.
-import { closeSync, openSync, readSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { agentsRoot, ancestorSkillsDirs, projectSkillsDirs, RINGKO_DIR_NAME, ringkoRoot, SKILLS_DIR_NAMES, skillsDirs } from "./paths.ts";
+import { agentsRoot, ancestorSkillsDirs, findProjectRoot, projectSkillsDirs, RINGKO_DIR_NAME, ringkoRoot, SKILLS_DIR_NAMES, skillsDirs } from "./paths.ts";
 import { loadPlugins } from "./plugins.ts";
 
 export const SKILL_FILE_NAME = "SKILL.md";
@@ -151,6 +151,132 @@ export function createSkill(
   if (input.body && input.body.length > 0) lines.push(input.body);
   writeFileSync(join(dir, SKILL_FILE_NAME), `${lines.join("\n")}\n`);
   return { name, ...(input.description ? { description: input.description } : {}), dir, source: "ringko", scope: "global" };
+}
+
+export type SkillInstallScope = "global" | "project";
+
+export interface SkillInstallTarget {
+  scope: SkillInstallScope;
+  /** Directory that holds installed skill directories. */
+  root: string;
+}
+
+/** Global and project skill installation roots for a workspace. */
+export function skillInstallTargets(options: DiscoverSkillsOptions = {}): SkillInstallTarget[] {
+  const env = options.env ?? process.env;
+  const cwd = options.cwd ?? process.cwd();
+  const projectRoot = findProjectRoot(cwd, env) ?? resolve(cwd);
+  return [
+    { scope: "global", root: join(ringkoRoot(env), "skills") },
+    { scope: "project", root: join(projectRoot, RINGKO_DIR_NAME, "skills") },
+  ];
+}
+
+const MAX_INSTALL_FILES = 256;
+const MAX_INSTALL_DEPTH = 16;
+const MAX_INSTALL_FILE_BYTES = 4 * 1024 * 1024;
+const MAX_INSTALL_BYTES = 8 * 1024 * 1024;
+const MAX_SKILL_FILE_BYTES = 64 * 1024;
+
+interface SkillSourceFile {
+  relative: string;
+  absolute: string;
+}
+
+function collectSkillSource(root: string): SkillSourceFile[] {
+  const files: SkillSourceFile[] = [];
+  let bytes = 0;
+  const visit = (directory: string, prefix: string, depth: number): void => {
+    if (depth > MAX_INSTALL_DEPTH) throw new Error("Skill source exceeds the maximum directory depth.");
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const absolute = join(directory, entry.name);
+      const path = prefix.length === 0 ? entry.name : join(prefix, entry.name);
+      if (entry.isSymbolicLink()) throw new Error("Skill sources may not contain symbolic links.");
+      if (entry.isDirectory()) { visit(absolute, path, depth + 1); continue; }
+      if (!entry.isFile()) throw new Error("Skill sources may contain only regular files and directories.");
+      const stat = lstatSync(absolute);
+      if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Skill sources may contain only regular files and directories.");
+      if (stat.size > MAX_INSTALL_FILE_BYTES) throw new Error("A skill source file exceeds 4 MiB.");
+      bytes += stat.size;
+      if (bytes > MAX_INSTALL_BYTES) throw new Error("Skill source exceeds 8 MiB.");
+      files.push({ relative: path, absolute });
+      if (files.length > MAX_INSTALL_FILES) throw new Error("Skill source exceeds 256 files.");
+    }
+  };
+  visit(root, "", 0);
+  return files;
+}
+
+/** Copy one file without following a replaced symlink. */
+function copySkillFile(source: string, destination: string): void {
+  const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+  const descriptor = openSync(source, constants.O_RDONLY | noFollow);
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile() || stat.size > MAX_INSTALL_FILE_BYTES) throw new Error("A skill source file changed during installation.");
+    const data = readFileSync(descriptor);
+    if (data.length > MAX_INSTALL_FILE_BYTES) throw new Error("A skill source file changed during installation.");
+    writeFileSync(destination, data, { flag: "wx", mode: 0o600 });
+  } finally { closeSync(descriptor); }
+}
+
+export interface InstallSkillOptions {
+  /** Local skill directory containing SKILL.md. */
+  source: string;
+  scope: SkillInstallScope;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+/**
+ * Install a local skill directory into the global or project skills root.
+ * The whole source is validated before anything is written; the copy lands in
+ * a temporary directory and is renamed into place, and existing skills are
+ * never overwritten.
+ */
+export function installSkill(options: InstallSkillOptions): Skill {
+  const env = options.env ?? process.env;
+  const cwd = options.cwd ?? process.cwd();
+  const source = resolve(cwd, options.source);
+  let sourceStat;
+  try { sourceStat = lstatSync(source); } catch { throw new Error(`Skill source "${options.source}" does not exist.`); }
+  if (sourceStat.isSymbolicLink() || !sourceStat.isDirectory()) throw new Error("Skill source must be a directory, not a symbolic link.");
+  const files = collectSkillSource(source);
+  const skillFile = files.find(file => file.relative === SKILL_FILE_NAME);
+  if (!skillFile) throw new Error(`Skill source must contain ${SKILL_FILE_NAME} at its root.`);
+  if (statSync(skillFile.absolute).size > MAX_SKILL_FILE_BYTES) throw new Error("SKILL.md exceeds 64 KiB.");
+  const metadata = parseSkillFrontmatter(readFileSync(skillFile.absolute, "utf8"));
+  const name = metadata?.name ?? basename(source);
+  if (!SINGLE_SEGMENT.test(name) || name === "." || name === "..") throw new Error("Skill name must be a single path segment.");
+  const target = skillInstallTargets({ env, cwd }).find(entry => entry.scope === options.scope);
+  if (!target) throw new Error("Unknown skill installation scope.");
+  const destination = join(target.root, name);
+  try {
+    lstatSync(destination);
+    throw new Error(`Skill "${name}" is already installed at ${destination}.`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  mkdirSync(target.root, { recursive: true, mode: 0o700 });
+  const temporary = mkdtempSync(join(target.root, ".install-"));
+  try {
+    for (const file of files) {
+      const destinationFile = join(temporary, file.relative);
+      mkdirSync(dirname(destinationFile), { recursive: true, mode: 0o700 });
+      copySkillFile(file.absolute, destinationFile);
+    }
+    renameSync(temporary, destination);
+  } catch (error) {
+    rmSync(temporary, { recursive: true, force: true });
+    throw error;
+  }
+  return {
+    name,
+    ...(metadata?.description ? { description: metadata.description } : {}),
+    dir: destination,
+    source: options.scope === "project" ? "project" : "ringko",
+    scope: options.scope,
+  };
 }
 
 /** Delete a skill directory; refuses paths outside the managed skills roots. */

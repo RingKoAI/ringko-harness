@@ -161,7 +161,9 @@ terminal uses `node-pty`. See [unreleased changes](CHANGELOG/unreleased.md).
 
 - [Configuration](docs/configuration.md)
 - [MCP servers](docs/mcp.md)
+- [Plugins](docs/plugins.md)
 - [Providers](docs/providers.md)
+- [Skills](docs/skills.md)
 - [Sandbox](SANDBOX.md)
 - [Usage statistics](docs/usage-statistics.md)
 
