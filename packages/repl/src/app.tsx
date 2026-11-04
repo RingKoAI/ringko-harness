@@ -269,15 +269,31 @@ export function Repl(props: ReplProps) {
 
   const openSessionPicker = useCallback((): void => {
     if (backend) {
-      void backend.sessions().then(sessions => { if (!sessions.length) { print("no sessions to resume"); return; } setPicker({
-        title: "Select a session", items: sessions.map(meta => ({ value: meta.id, label: meta.title ?? meta.id, description: meta.summary ?? new Date(meta.createdAt).toLocaleString(), group: meta.cwd ?? "Sessions" })),
-        onSelect: id => { setPicker(null); resumeSession(id); },
-        actions: [
-          { label: "Ctrl+R rename", match: (input, key) => key.ctrl && input === "r", trigger: item => { setPicker(null); setRenameTarget({ id: item.value, title: item.label }); } },
-          { label: "Ctrl+F fork", match: (input, key) => key.ctrl && input === "f", trigger: item => { setPicker(null); void backend.request<{ sessionId: string }>(`/api/sessions/${encodeURIComponent(item.value)}/fork`, {}).then(child => resumeSession(child.sessionId)).catch(reportRemote); } },
-          { label: "Ctrl+D delete", match: (input, key) => key.ctrl && input === "d", trigger: item => { void backend.request(`/api/sessions/${encodeURIComponent(item.value)}`, undefined, "DELETE").then(() => { setPicker(null); if (sessionId === item.value) setSessionId(undefined); print(`deleted ${item.value}`); }).catch(reportRemote); } },
-        ],
-      }); }).catch(reportRemote);
+      // Keep the picker open after a delete so several sessions can be removed
+      // in one pass. The list is rebuilt from the backend after each mutation.
+      const show = (): void => {
+        void backend.sessions().then(sessions => {
+          if (!sessions.length) { setPicker(null); print("no sessions to resume"); return; }
+          setPicker({
+            title: "Select a session",
+            items: sessions.map(meta => ({ value: meta.id, label: meta.title ?? meta.id, description: meta.summary ?? new Date(meta.createdAt).toLocaleString(), group: meta.cwd ?? "Sessions" })),
+            onSelect: id => { setPicker(null); resumeSession(id); },
+            actions: [
+              { label: "Ctrl+R rename", match: (input, key) => key.ctrl && input === "r", trigger: item => { setPicker(null); setRenameTarget({ id: item.value, title: item.label }); } },
+              { label: "Ctrl+F fork", match: (input, key) => key.ctrl && input === "f", trigger: item => { setPicker(null); void backend.request<{ sessionId: string }>(`/api/sessions/${encodeURIComponent(item.value)}/fork`, {}).then(child => resumeSession(child.sessionId)).catch(reportRemote); } },
+              {
+                label: "Ctrl+D delete",
+                match: (input, key) => key.ctrl && input === "d",
+                trigger: item => {
+                  if (sessionId === item.value) { print("cannot delete the active session."); return; }
+                  void backend.request(`/api/sessions/${encodeURIComponent(item.value)}`, undefined, "DELETE").then(() => { print(`deleted ${item.value}`); show(); }).catch(reportRemote);
+                },
+              },
+            ],
+          });
+        }).catch(reportRemote);
+      };
+      show();
       return;
     }
     const store = new SessionStore({ cwd: workspace });

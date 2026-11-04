@@ -7,6 +7,57 @@ import { render } from "./render.ts";
 import { BackendClient, type SessionSnapshot } from "@ringko-ai/client";
 import { Repl } from "../src/app.tsx";
 
+it("keeps the session picker open after deleting a session", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rkh-remote-delete-"));
+  const previous = process.env.RINGKO_HOME; process.env.RINGKO_HOME = root;
+  const input = new PassThrough(), output = new PassThrough();
+  Object.assign(input, { isTTY: true, setRawMode: () => input, ref: () => input, unref: () => input });
+  Object.assign(output, { columns: 100, rows: 30, isTTY: true });
+  let text = ""; output.on("data", data => { text += data.toString(); });
+  let sessions = [
+    { id: "extra1", createdAt: 1, cwd: root, title: "Extra 1" },
+    { id: "extra2", createdAt: 2, cwd: root, title: "Extra 2" },
+    { id: "active", createdAt: 3, cwd: root, title: "Active" },
+  ];
+  const deleted: string[] = [];
+  const snapshot: SessionSnapshot = { id: "active", instance: "fixture", revision: 0, title: null, summary: null, archived: false, messages: [], events: [], busy: false, approvals: [], questions: [], tasks: [], todos: [], jobs: [], partial: null, loop: null, error: null };
+  const backend = new BackendClient({ fetch: async (url, init) => {
+    const path = String(url);
+    if (path === "/api/sessions" && init?.method === "POST") return Response.json(sessions.find(session => session.id === "active"));
+    if (path === "/api/sessions") return Response.json(sessions);
+    if (path === "/api/sessions/active/snapshot") return Response.json(snapshot);
+    if (path === "/api/info") return Response.json({ model: "Remote model", modelId: "Remote/model", thinking: "high", expandThinking: false, expandTools: false, tools: ["read"], providers: [] });
+    if (path === "/api/sync") return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('event: sync\ndata: {"instance":"fixture","revision":0,"kind":"reset"}\n\n')); } }));
+    if (init?.method === "DELETE" && path.startsWith("/api/sessions/")) {
+      const id = decodeURIComponent(path.slice("/api/sessions/".length));
+      deleted.push(id);
+      sessions = sessions.filter(session => session.id !== id);
+      return Response.json({ ok: true });
+    }
+    return Response.json({ error: `Unexpected request ${path}` }, { status: 400 });
+  } });
+  const app = render(<Repl backend={backend} workspace={root} model={async () => ({ content: "", toolCalls: [] })} modelLabel="Remote model" config={{}} />, { stdin: input as unknown as NodeJS.ReadStream, stdout: output as unknown as NodeJS.WriteStream, stderr: output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
+  try {
+    await Bun.sleep(250);
+    input.write("\x12"); await Bun.sleep(150);
+    expect(text).toContain("Select a session");
+    input.write("\x04"); await Bun.sleep(200);
+    expect(deleted).toEqual(["extra1"]);
+    expect(text).toContain("Select a session");
+    expect(text).toContain("Extra 2");
+    input.write("\x04"); await Bun.sleep(200);
+    expect(deleted).toEqual(["extra1", "extra2"]);
+    expect(text).toContain("Select a session");
+    input.write("\x04"); await Bun.sleep(150);
+    expect(text).toContain("cannot delete the active session.");
+    expect(deleted).toEqual(["extra1", "extra2"]);
+  } finally {
+    app.unmount(); input.destroy(); output.destroy();
+    if (previous === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it("the connected terminal only uses backend sessions and detaches without cancelling runs", async () => {
   const root = mkdtempSync(join(tmpdir(), "rkh-remote-repl-"));
   const previous = process.env.RINGKO_HOME; process.env.RINGKO_HOME = root;
