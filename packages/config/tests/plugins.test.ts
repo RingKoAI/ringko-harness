@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadMcpServers } from "../src/mcp.ts";
@@ -97,7 +97,7 @@ describe("loadPlugins", () => {
       const result = loadPlugins({ env, cwd: project });
       expect(result.plugins.map(plugin => plugin.id)).toEqual(["shared"]);
       expect(result.plugins[0].source).toBe("project");
-      expect(result.plugins[0].dir).toBe(projectDir);
+      expect(result.plugins[0].dir).toBe(realpathSync(projectDir));
     } finally {
       rmSync(project, { recursive: true, force: true });
     }
@@ -179,7 +179,7 @@ describe("loadPlugins", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "SKILL.md"), "---\nname: review\ndescription: Review\n---\nBody");
     const skills = discoverSkills({ env, cwd: home });
-    expect(skills.find(skill => skill.name === "reviewer:review")?.dir).toBe(dir);
+    expect(skills.find(skill => skill.name === "reviewer:review")?.dir).toBe(realpathSync(dir));
   });
 });
 
