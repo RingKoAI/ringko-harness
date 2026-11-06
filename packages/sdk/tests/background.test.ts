@@ -1,6 +1,7 @@
 import { expect, it } from "bun:test";
 import { defineTool } from "@ringko-ai/harness";
 import { createRingKo } from "../src/index.ts";
+import type { TaskEvent } from "../src/task.ts";
 
 it("runs a specified child model in background and resumes the parent with the result", async () => {
   let complete!: (value: { content: string; toolCalls: [] }) => void;
@@ -29,6 +30,22 @@ it("runs a specified child model in background and resumes the parent with the r
   expect(parentTurns).toBe(3);
   expect(ringko.jobs.list()).toMatchObject([{ kind: "sub", status: "completed", background: true }]);
   expect(ringko.history.filter(message => message.role === "user").map(message => message.content)).toEqual(["parent secret", "delegate"]);
+});
+
+it("reports an explicitly cancelled background job as cancelled", async () => {
+  const events: TaskEvent[] = [];
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  let turns = 0;
+  const ringko = createRingKo({ task: true, compaction: { enabled: false }, taskModels: ["test/child"], resolveTaskModel: async () => () => new Promise(() => { started(); }), onTaskEvent: event => events.push(event), model: async () => {
+    if (++turns === 1) return { content: "", toolCalls: [{ id: "delegate", name: "task", arguments: { description: "Inspect", prompt: "child", mode: "read", model: "test/child", background: true } }] };
+    return { content: "done", toolCalls: [] };
+  } });
+  const pending = ringko.run("delegate");
+  await ready;
+  ringko.jobs.cancel(ringko.jobs.list()[0]!.jobId);
+  await pending;
+  expect(events.at(-1)).toMatchObject({ type: "cancelled", reason: "cancelled" });
 });
 
 it("converts a running foreground child to background and then resumes automatically", async () => {

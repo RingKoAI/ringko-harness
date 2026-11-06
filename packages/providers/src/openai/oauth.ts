@@ -75,7 +75,7 @@ export function createOpenAiOauthFetch(accountId?: string): typeof fetch {
     applyProxyEnv();
     const account = getOAuthAccount(OPENAI_OAUTH_DOMAIN, accountId);
     if (!account) {
-      throw new Error('Not signed in to OpenAI. Run "ringko auth login openai-oauth" first.');
+      throw new Error('Not signed in to OpenAI. Run "ringko auth login openai-oauth" (browser flow) or "ringko auth login openai-oauth --device" (device-code flow) first.');
     }
     let credential = account.credential;
     if (credential.expires <= Date.now() + REFRESH_SKEW_MS) {

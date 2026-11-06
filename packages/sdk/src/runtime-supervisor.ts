@@ -49,7 +49,10 @@ export class RuntimeSupervisor {
     this.closed = true;
     const runtimes = [...this.runtimes.values()];
     this.runtimes.clear();
-    this.closing = Promise.allSettled(runtimes.map(runtime => runtime.close())).then(() => undefined);
+    this.closing = Promise.allSettled(runtimes.map(runtime => runtime.close())).then(results => {
+      const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+      if (errors.length > 0) throw errors.length === 1 ? errors[0] : new AggregateError(errors, "Runtime supervisor close failed.");
+    });
     return this.closing;
   }
 }

@@ -11,7 +11,7 @@ Every executing host uses the same assembly for project instructions,
 workflows, permission modes, files, session tools, optional shell and network
 capabilities, and installed skills: the non-interactive `ringko run` / `loop`
 commands, the TUI in embedded mode, and the shared backend that serves
-`ringko serve` and the Web UI. A TUI attached to the shared backend executes
+`ringko web` and the Web UI. A TUI attached to the shared backend executes
 nothing locally; it is a client of that backend. Hosts prewarm MCP connections
 at startup; concurrent agents share each server's connection attempt. A failed
 server retries twice in the background (three attempts total) and then stops
@@ -35,8 +35,20 @@ resolver or unknown model fails explicitly rather than selecting a fallback.
 The typed event bus exposes ordered `run/before` and `run/after` hooks, error
 notifications and agent events. `on()` returns an unsubscribe function. Before
 and after hook failures reject the run; agent event observer failures are logged.
+MCP preparation and run hooks execute inside the SDK's durable run lifecycle:
+`run/started` precedes preparation, and completion is recorded only after the
+after hooks and resource cleanup succeed. Failures record `run/failed`, while
+cancellation records `run/cancelled`, using the same run id. The SDK callbacks
+`onRunBefore(prompt, signal)` and `onRunAfter(result, signal)` share this boundary.
 Hooks run in-process and are trusted code. They do not provide sandboxing for
 untrusted plugins. This change does not implement a plugin installer or marketplace.
+
+`createRingKo({ task: true })` also mounts the subagent catalog. Providers are
+configured under `subagents` and registered at agent creation; `task` starts a
+child and `task_control` lists, sends follow-ups, interrupts and reports status.
+In-process children keep a durable session and inherit the parent approval gate;
+Claude Code, Codex, ACP and generic command providers run out of process. See
+[`docs/subagents.md`](../../docs/subagents.md) for provider setup and limits.
 
 The `skill` tool accepts only discovered names, never caller-provided paths.
 It reads at most 64 KiB from a regular file. The catalog exposes at most 256 skills;

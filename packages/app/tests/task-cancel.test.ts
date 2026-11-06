@@ -63,7 +63,7 @@ it("cancels a running delegated task through the job control endpoint", async ()
       }
     }
     expect(taskId).not.toBe("");
-    expect(cancelledStatus).toBe("parent_cancelled");
+    expect(cancelledStatus).toBe("cancelled");
     expect(done).toBe(true);
     const detail = await (await fetch(`${app.url}/api/sessions/${session}`, { headers })).json();
     expect(detail.tasks).toMatchObject([{ taskId, status: "cancelled" }]);

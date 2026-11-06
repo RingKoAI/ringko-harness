@@ -8,6 +8,10 @@ it("restores recorded task outcomes and leaves incomplete historical tasks unkno
   const started: SessionEvent = { seq: 0, time: 10, type: "task/started", data };
   expect(taskSummaries([started])[0]?.status).toBe("unknown");
   expect(taskSummaries([started], true)[0]?.status).toBe("running");
+  const runStarted: SessionEvent = { seq: 1, time: 5, type: "run/started", data: {} };
+  expect(taskSummaries([started, runStarted], true)[0]?.status).toBe("unknown");
+  const current: SessionEvent = { ...started, seq: 2, data: { ...data, taskId: "two" } };
+  expect(taskSummaries([started, runStarted, current], true).map(task => task.status)).toEqual(["unknown", "running"]);
   const completed: SessionEvent = { seq: 2, time: 30, type: "task/completed", data: { ...data, result: { content: "findings" } } };
   const collision: SessionEvent = { seq: 1, time: 20, type: "tool/call", data: { toolCallId: "task:one" } };
   expect(taskSummaries([started, completed])[0]).toMatchObject({ status: "completed", content: "findings", completedAt: 30 });

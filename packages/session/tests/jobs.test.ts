@@ -11,6 +11,10 @@ it("restores unknown interrupted jobs, terminal results, todos and model notific
   expect(sessionJobs([started], true)[0].status).toBe("running");
   const completed = event("job/sub/completed", { jobId: "one", kind: "sub", type: "completed", seq: 2, data: { result: "findings" } });
   expect(sessionJobs([started, detached, completed])).toMatchObject([{ status: "completed", result: "findings", lastSeq: 2 }]);
+  const runStarted: SessionEvent = { seq: 5, time: 2, type: "run/started", data: {} };
+  expect(sessionJobs([started, runStarted], true)[0]?.status).toBe("unknown");
+  const current: SessionEvent = { ...started, seq: 6, data: { jobId: "two", kind: "sub", type: "started", seq: 0, data: { description: "Current", background: true } } };
+  expect(sessionJobs([started, runStarted, current], true).map(job => [job.jobId, job.status])).toEqual([["one", "unknown"], ["two", "running"]]);
   const todos = [{ content: "Inspect", status: "completed" as const }];
   expect(sessionTodos([event("session/todo", { todos }), event("session/todo", { todos: [{ status: "invalid" }] })])).toEqual(todos);
   expect(toChatMessages([event("session/notification", { content: "Background result" })])).toEqual([{ role: "system", content: "Background result" }]);

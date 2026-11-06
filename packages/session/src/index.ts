@@ -11,4 +11,5 @@ export * from "./trajectory.ts";
 export * from "./task-log.ts";
 export * from "./todos.ts";
 export * from "./jobs.ts";
+export * from "./runs.ts";
 export * from "./usage.ts";

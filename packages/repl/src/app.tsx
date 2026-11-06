@@ -53,6 +53,7 @@ import { findCommand, parseInput, type SlashContext } from "./commands.ts";
 import { showMcpPicker, showSkillPicker, showTaskPicker, type PickerState } from "./pickers.ts";
 import { applyAgentEvent, finishPendingTools, nextId, noticeItem, userItem, type ReplItem } from "./state.ts";
 import { modelItems, nextModel } from "./selection.ts";
+import { remoteSessionItems } from "./session-picker.ts";
 import type { Shortcut } from "./keybindings.ts";
 import { theme } from "./theme.ts";
 import { HISTORY_LIMIT, type EditorState } from "./editor.ts";
@@ -148,7 +149,13 @@ export function Repl(props: ReplProps) {
   const [jobs, setJobs] = useState<Array<{ jobId: string; description: string; kind: string; status: string; background: boolean }>>([]);
   const abortRef = useRef<AbortController | null>(null);
   const [authBox, setAuthBox] = useState<AuthBox | null>(null);
-  const [picker, setPicker] = useState<PickerState | null>(null);
+  const [picker, updatePicker] = useState<PickerState | null>(null);
+  const pickerRefreshRef = useRef<(() => void) | undefined>(undefined);
+  const setPicker = useCallback((next: PickerState | null): void => {
+    if (next?.title !== "Select a session") pickerRefreshRef.current = undefined;
+    updatePicker(next);
+  }, []);
+  useEffect(() => () => { pickerRefreshRef.current = undefined; }, []);
   const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null);
   const [loopStatus, setLoopStatus] = useState<string | undefined>(undefined);
   const loopRef = useRef<{ options: LoopOptions; iteration: number; active: boolean } | null>(null);
@@ -166,6 +173,17 @@ export function Repl(props: ReplProps) {
   const runtimeRef = useRef<RuntimeManager | null>(null);
   const initializationRef = useRef<Promise<void> | null>(null);
   const sessionRef = useRef<SessionHandle | null>(null);
+
+  useEffect(() => {
+    if (!backend || picker?.title !== "Select a session") {
+      pickerRefreshRef.current = undefined;
+      return;
+    }
+    const subscription = backend.watch(notice => {
+      if (notice.kind === "session" || notice.kind === "reset") pickerRefreshRef.current?.();
+    });
+    return () => subscription.close();
+  }, [backend, picker?.title]);
   const historyRef = useRef<ChatMessage[]>([]);
   const titledRef = useRef(false);
   const remoteSendingRef = useRef(false);
@@ -269,15 +287,19 @@ export function Repl(props: ReplProps) {
     if (backend) {
       // Keep the picker open after a delete so several sessions can be removed
       // in one pass. The list is rebuilt from the backend after each mutation.
+      let requestVersion = 0;
       const show = (): void => {
+        if (pickerRefreshRef.current !== show) return;
+        const version = ++requestVersion;
         void backend.sessions().then(sessions => {
+          if (pickerRefreshRef.current !== show || version !== requestVersion) return;
           if (!sessions.length) { setPicker(null); print("no sessions to resume"); return; }
           setPicker({
             title: "Select a session",
-            items: sessions.map(meta => ({ value: meta.id, label: meta.title ?? meta.id, description: meta.summary ?? new Date(meta.createdAt).toLocaleString(), group: meta.cwd ?? "Sessions" })),
+            items: remoteSessionItems(sessions),
             onSelect: id => { setPicker(null); resumeSession(id); },
             actions: [
-              { label: "Ctrl+R rename", match: (input, key) => key.ctrl && input === "r", trigger: item => { setPicker(null); setRenameTarget({ id: item.value, title: item.label }); } },
+              { label: "Ctrl+R rename", match: (input, key) => key.ctrl && input === "r", trigger: item => { setPicker(null); setRenameTarget({ id: item.value, title: sessions.find(meta => meta.id === item.value)?.title ?? item.value }); } },
               { label: "Ctrl+F fork", match: (input, key) => key.ctrl && input === "f", trigger: item => { setPicker(null); void backend.request<{ sessionId: string }>(`/api/sessions/${encodeURIComponent(item.value)}/fork`, {}).then(child => resumeSession(child.sessionId)).catch(reportRemote); } },
               {
                 label: "Ctrl+D delete",
@@ -289,8 +311,11 @@ export function Repl(props: ReplProps) {
               },
             ],
           });
-        }).catch(reportRemote);
+        }).catch(error => {
+          if (pickerRefreshRef.current === show && version === requestVersion) reportRemote(error);
+        });
       };
+      pickerRefreshRef.current = show;
       show();
       return;
     }
@@ -532,7 +557,7 @@ export function Repl(props: ReplProps) {
     initializationRef.current = ready;
     return () => {
       active = false;
-      managed?.close();
+      void managed?.close().catch(error => print(`Runtime cleanup failed: ${String(error)}`));
       asker.cancelAll(); managed?.agent.jobs.cancelAll();
       if (initializationRef.current === ready) initializationRef.current = null;
       askRef.current = null;

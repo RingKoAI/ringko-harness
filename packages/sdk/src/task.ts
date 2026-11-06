@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Agent, AgentTurnLimitError, ToolRegistry, defineTool, abortable, type AgentEvent, type ModelClient, type ToolDefinition, type ToolExecutionContext, type JobSnapshot } from "@ringko-ai/harness";
+import type { SubagentResult } from "./subagents/types.ts";
 
 export type TaskMode = "read" | "write" | "full";
 export type TaskStatus = "running" | "completed" | "failed" | "cancelled";
@@ -11,10 +12,12 @@ export interface TaskEvent {
   description: string;
   mode: TaskMode;
   model: string;
-  type: "started" | "event" | "completed" | "failed" | "cancelled";
+  type: "started" | "event" | "message" | "status" | "completed" | "failed" | "cancelled";
   time: number;
+  provider?: string;
   event?: AgentEvent;
-  result?: TaskResult;
+  message?: { role: "user" | "assistant"; content: string };
+  result?: TaskResult | SubagentResult;
   reason?: string;
 }
 export const TASK_LIMITS = Object.freeze({ maxConcurrent: 2, maxPerRun: 8, maxTurns: 10, timeoutMs: 120_000, promptCharacters: 16_384, descriptionCharacters: 120, resultCharacters: 32_768 });
@@ -112,7 +115,10 @@ export class TaskManager {
       return output;
     } catch (error) {
       const cancelled = controller.signal.aborted;
-      const reason = cancelled ? (controller.signal.reason?.name === "TimeoutError" ? "timeout" : "parent_cancelled") : error instanceof AgentTurnLimitError ? "turn_limit" : "execution_failed";
+      const cause = controller.signal.reason as { name?: string } | undefined;
+      const reason = cancelled
+        ? cause?.name === "TimeoutError" ? "timeout" : cause?.name === "JobCancelled" ? "cancelled" : "parent_cancelled"
+        : error instanceof AgentTurnLimitError ? "turn_limit" : "execution_failed";
       emit(cancelled ? "cancelled" : "failed", { reason });
       throw new Error(`Task ${taskId} ${cancelled ? "cancelled" : "failed"} (${reason}).`);
     } finally {

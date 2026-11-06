@@ -69,6 +69,7 @@ ringko info
 | `maxTurns` | 每次运行的工具回合上限，默认 50。 |
 | `compaction` | 自动上下文压缩。默认在窗口 80% 时触发，保留最近六条消息。 |
 | `workflow` | 当前工作流 id，来自 `~/.ringko/workflows.json`。 |
+| `subagents` | 委派 provider 注册表：`default`、`maxActive`、`maxPerRun`、`providers`。见[子代理](subagents.zh-CN.md)。 |
 
 项目级文件也可以带 `mcpServers`；查找顺序见 [MCP server](mcp.zh-CN.md)。
 

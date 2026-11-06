@@ -30,13 +30,18 @@ const server = startServer({
 
 process.stdout.write(`RingKo WebUI (${dev ? `dev -> ${devServerUrl}` : "static"}): ${server.url}\n`);
 
+let shuttingDown = false;
 const shutdown = (): void => {
-  server.stop();
-  const bounded = Promise.race([
-    runtimeHost.close(),
-    new Promise<void>(resolve => setTimeout(resolve, 2_000)),
-  ]);
-  void bounded.finally(() => process.exit(0));
+  if (shuttingDown) return;
+  shuttingDown = true;
+  void server.stop().then(result => {
+    if (result.timedOut) process.stderr.write(`Shutdown timed out; still settling: ${result.pendingRuns.join(", ") || "(runtime resources)"}\n`);
+    if (result.errors.length > 0) process.stderr.write(`Shutdown completed with ${result.errors.length} error(s).\n`);
+    process.exit(result.timedOut || result.errors.length > 0 ? 1 : 0);
+  }).catch(error => {
+    process.stderr.write(`Shutdown failed: ${String(error)}\n`);
+    process.exit(1);
+  });
 };
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

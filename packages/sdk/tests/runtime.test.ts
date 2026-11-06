@@ -355,7 +355,7 @@ it("registers runtime contributions and releases agent-scoped handlers", async (
     await expect(runtime.use({ name: "fixture-contribution", setup() {} })).rejects.toThrow("already registered");
     await expect(runtime.use({ name: "broken", setup() { throw new Error("setup failed"); } })).rejects.toThrow("setup failed");
   } finally {
-    managed.close();
+    await managed.close();
     await dispose();
     await runtime.close();
   }
@@ -495,10 +495,67 @@ it("closes preview agents and their extension disposers", async () => isolated(a
   });
   try {
     const preview = runtime.previewTools({});
-    preview.close();
+    await preview.close();
     expect(disposed).toBe(1);
   } finally { await runtime.close(); }
 }));
+
+it("cancels a run before awaiting its extension disposer", async () => isolated(async directory => {
+  const runtime = new RuntimeManager(directory);
+  const entered = Promise.withResolvers<void>();
+  const aborted = Promise.withResolvers<void>();
+  let disposedAfterAbort = false;
+  await runtime.use({ name: "wait-for-cancel", setup(context) {
+    context.onAgent(() => async () => { await aborted.promise; disposedAfterAbort = true; });
+  } });
+  const managed = runtime.createAgent({}, { model: async request => {
+    entered.resolve();
+    await new Promise<void>(resolve => request.signal?.addEventListener("abort", () => { aborted.resolve(); resolve(); }, { once: true }));
+    request.signal?.throwIfAborted();
+    return { content: "", toolCalls: [] };
+  } });
+  const running = managed.agent.run("wait").catch(() => undefined);
+  await entered.promise;
+  const closing = managed.close();
+  try {
+    const finished = await Promise.race([closing.then(() => true), Bun.sleep(100).then(() => false)]);
+    expect(finished).toBe(true);
+    expect(disposedAfterAbort).toBe(true);
+  } finally { aborted.resolve(); await closing; await running; await runtime.close(); }
+}));
+
+it("closes a preview only once across concurrent callers", async () => isolated(async directory => {
+  const runtime = new RuntimeManager(directory);
+  let disposals = 0;
+  await runtime.use({ name: "count-preview-close", setup(context) {
+    context.onAgent(() => async () => { disposals++; await Promise.resolve(); });
+  } });
+  try {
+    const preview = runtime.previewTools({});
+    await Promise.all([preview.close(), preview.close()]);
+    expect(disposals).toBe(1);
+  } finally { await runtime.close(); }
+}));
+
+for (const hook of ["run/before", "run/after"] as const) {
+  it(`records ${hook} failures in the durable run lifecycle`, async () => isolated(async directory => {
+    const runtime = new RuntimeManager(directory);
+    const session = new SessionStore({ root: join(directory, "sessions") }).create();
+    let modelCalls = 0;
+    let rejectHook = true;
+    runtime.events.on(hook, () => { if (rejectHook) throw new Error("fixture run hook"); });
+    const managed = runtime.createAgent({}, { session, model: async () => { modelCalls++; return { content: "ok", toolCalls: [] }; } });
+    try {
+      await expect(managed.agent.run("fail")).rejects.toThrow("fixture run hook");
+      const events = session.all().filter(event => event.type.startsWith("run/"));
+      expect(events.map(event => event.type)).toEqual(["run/started", "run/failed"]);
+      expect(events[0]?.data).toMatchObject({ runId: (events[1]?.data as { runId: string }).runId });
+      expect(modelCalls).toBe(hook === "run/before" ? 0 : 1);
+      rejectHook = false;
+      expect((await managed.agent.run("retry")).content).toBe("ok");
+    } finally { await managed.close(); await runtime.close(); session.close(); }
+  }));
+}
 
 it("runs tool hooks and blocks execution when a pre-execute hook fails", async () => isolated(async directory => {
   const runtime = new RuntimeManager(directory);

@@ -70,6 +70,7 @@ ringko info
 | `maxTurns` | Tool rounds per run. Defaults to 50. |
 | `compaction` | Automatic context compaction. Enabled by default at 80% of the window, keeping six recent messages. |
 | `workflow` | Active workflow id from `~/.ringko/workflows.json`. |
+| `subagents` | Delegated-provider registry: `default`, `maxActive`, `maxPerRun` and `providers`. See [Subagents](subagents.md). |
 
 Project-level files can also carry an `mcpServers` map; see
 [MCP servers](mcp.md) for the exact lookup order.

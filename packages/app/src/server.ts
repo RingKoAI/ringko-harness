@@ -156,10 +156,17 @@ export interface ServerOptions {
   runtimeHost?: RuntimeSupervisor;
 }
 
+export interface ServerCloseResult {
+  timedOut: boolean;
+  pendingRuns: string[];
+  errors: unknown[];
+}
+
 export interface RingkoServer {
   readonly url: string;
   readonly port: number;
-  stop(): void;
+  /** Stop admission, cancel runs, wait for settlement, then release resources. */
+  stop(): Promise<ServerCloseResult>;
 }
 
 const DEFAULT_PORT = DEFAULT_BACKEND_PORT;
@@ -168,6 +175,7 @@ const DEFAULT_WEBUI_DIR = resolve(import.meta.dir, "../../webui/dist");
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_ACTIVE_RUNS = 8;
 const META_TIMEOUT_MS = 30_000;
+const SHUTDOWN_TIMEOUT_MS = 5_000;
 const MAX_TERMINAL_SESSIONS = 4;
 const TERMINAL_SESSION_TTL_MS = 30 * 60 * 1000;
 
@@ -206,6 +214,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   const activeAgents = new Map<string, RingKo>();
   const activeRuns = new Map<string, AbortController>();
   const activeHandles = new Map<string, SessionHandle>();
+  const runDrains = new Map<string, PromiseWithResolvers<void>>();
   const sync = new SyncManager();
   const modelCatalog = new ModelCatalogCache({ onRefresh: () => sync.publish("config") });
   const loadModel = (config: RingkoConfig) => resolveLoadedModel(config, modelCatalog);
@@ -249,10 +258,17 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       throw error;
     }
     const controller = new AbortController();
-    activeRuns.set(session.id, controller); activeHandles.set(session.id, session); runStates.begin(session.id);
+    const drain = Promise.withResolvers<void>();
+    activeRuns.set(session.id, controller); activeHandles.set(session.id, session); runDrains.set(session.id, drain); runStates.begin(session.id);
     writeDiagnostic("backend.run.start", JSON.stringify({ sessionId: session.id }));
     sync.publish("session", session.id);
     return controller;
+  }
+  function finishRun(id: string): void {
+    const drain = runDrains.get(id);
+    if (!drain) return;
+    runDrains.delete(id);
+    drain.resolve();
   }
   const terminalSessions = new Map<string, TerminalSession>();
   let pendingTerminals = 0;
@@ -315,7 +331,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     const preview = runtimeFor(workspace).previewTools(config);
     let baseTools;
     try { baseTools = preview.agent.tools.list(); }
-    finally { preview.close(); }
+    finally { await preview.close().catch(error => writeDiagnostic("runtime.preview.close", String(error))); }
     const accessMode = isAccessMode(config.permission)
       ? config.permission
       : isAccessMode(config.mode)
@@ -1173,7 +1189,10 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       const events = [...(activeHandles.get(id)?.all() ?? store.open(id, "read").all())];
       const state = runStates.get(id);
       const busy = activeRuns.has(id);
-      const lastRunEvent = [...events].reverse().find(event => event.type === "run/error" || event.type === "run/started");
+      const lastRunEvent = [...events].reverse().find(event => event.type === "run/started" || event.type === "run/error" || event.type === "run/failed" || event.type === "run/cancelled" || event.type === "run/completed");
+      const terminalError = lastRunEvent?.type === "run/error" || lastRunEvent?.type === "run/failed"
+        ? (lastRunEvent.data as { message?: string } | undefined)?.message ?? null
+        : null;
       return json({
         id, instance: sync.instance, revision: sync.revision,
         title: sessionTitle(events) ?? null, summary: sessionSummary(events) ?? null, archived: sessionArchived(events),
@@ -1183,7 +1202,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         tasks: taskSummaries(events, busy), todos: sessionTodos(events), jobs: sessionJobs(events, busy),
         approvals: [...(state?.approvals.values() ?? [])], questions: [...(state?.questions.values() ?? [])],
         partial: state?.partial ?? null, loop: state?.loop ?? null,
-        error: state?.error ?? runStates.error(id) ?? (busy || lastRunEvent?.type !== "run/error" ? null : (lastRunEvent.data as { message?: string } | undefined)?.message ?? null),
+        error: state?.error ?? runStates.error(id) ?? (busy || lastRunEvent?.type === "run/completed" || lastRunEvent?.type === "run/cancelled" ? null : terminalError),
       });
     } catch { return json({ error: "Unknown session." }, 404); }
   }
@@ -1230,7 +1249,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       const preview = runtimeFor(workspace).previewTools(config);
       let probeTools;
       try { probeTools = preview.agent.tools.list(); }
-      finally { preview.close(); }
+      finally { await preview.close().catch(error => writeDiagnostic("runtime.preview.close", String(error))); }
       const mcpTools = (await runtimeFor(workspace).readyConnections()).connections.flatMap(connection => mcpToolDefinitions(connection, { mode: (typeof config === "string" ? "workspace-write" : config.sandbox?.mode ?? "workspace-write"), permissions: typeof config === "string" ? undefined : config.sandbox?.mcp }));
       used = estimateMessagesTokens(history) + estimateToolsTokens([...probeTools, ...mcpTools]);
     } catch {
@@ -1353,7 +1372,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       finally {
         try { session.close(); }
         catch (error) { runStates.update(id, "error", { message: "Session persistence failed. Inspect diagnostics before continuing." }); writeDiagnostic("session.close", String(error)); }
-        activeHandles.delete(id); activeRuns.delete(id); runStates.finish(id); sync.publish("session", id);
+        activeHandles.delete(id); activeRuns.delete(id); runStates.finish(id); finishRun(id); sync.publish("session", id);
       }
     })().catch(error => writeDiagnostic("shell.run", String(error)));
     return json({ sessionId: id }, 202);
@@ -1408,7 +1427,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
 
     const encoder = new TextEncoder();
     const abort = beginRun(session, () => {
-      session.appendEvent("run/started", {});
+      // The SDK records `run/started` with a stable run id at the actual start
+      // of execution; the HTTP layer only records the selected model.
       recordSessionModel(session, `${model.selection.provider.name}/${model.selection.model.id}`);
       if (config.thinking) recordSessionThinking(session, config.thinking);
     });
@@ -1545,12 +1565,12 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
             send("done", { sessionId: session.id, content: result.content, turns: result.turns });
           }
         } catch (error) {
+          // The SDK owns the durable terminal event (`run/failed` or
+          // `run/cancelled`); this layer only reports the live stream error.
           const message = error instanceof Error ? error.message : "Run failed.";
-          try { session.appendEvent("run/error", { message }); session.flush(); }
-          catch (failure) { writeDiagnostic("session.persist", String(failure)); }
           send("error", { message });
         } finally {
-          try { managed?.close(); } catch (error) { writeDiagnostic("runtime.agent.close", String(error)); }
+          try { await managed?.close(); } catch (error) { writeDiagnostic("runtime.agent.close", String(error)); }
           activeRuns.delete(session.id);
           activeAgents.delete(session.id);
           for (const id of pendingApprovals) approvals.get(id)?.(false);
@@ -1558,6 +1578,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
           catch (error) { send("error", { message: "Session persistence failed. Inspect diagnostics before continuing." }); writeDiagnostic("session.close", String(error)); }
           activeHandles.delete(session.id);
           runStates.finish(session.id);
+          finishRun(session.id);
           writeDiagnostic("backend.run.finish", JSON.stringify({ sessionId: session.id }));
           sync.publish("session", session.id);
           if (!closed) { closed = true; try { controller.close(); } catch { /* Consumer detached during completion. */ } }
@@ -1952,16 +1973,51 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     throw error;
   }
   const url = backendOrigin(boundPort) ?? `http://${host}:${boundPort}`;
+  let closing: Promise<ServerCloseResult> | undefined;
   return {
     url,
     port: boundPort,
     stop: () => {
-      releaseOwnership();
-      modelCatalog.dispose(); sync.close(); stopTimeSource();
-      for (const run of activeRuns.values()) run.abort();
-      for (const id of terminalSessions.keys()) removeTerminal(id, true);
-      void runtimeHost.close().catch(() => {});
-      server.stop(true);
+      if (closing) return closing;
+      closing = (async (): Promise<ServerCloseResult> => {
+        const errors: unknown[] = [];
+        let timedOut = false;
+        // Stop admission before touching ownership so no new run can start.
+        try { server.stop(true); } catch (error) { errors.push(error); }
+        for (const run of activeRuns.values()) {
+          try { run.abort(); } catch (error) { errors.push(error); }
+        }
+        const drains = [...runDrains.values()];
+        const settled = drains.length === 0
+          ? true
+          : await Promise.race([
+              Promise.allSettled(drains.map(drain => drain.promise)).then(() => true),
+              new Promise<boolean>(resolve => { const timer = setTimeout(() => resolve(false), SHUTDOWN_TIMEOUT_MS); timer.unref?.(); }),
+            ]);
+        if (!settled) timedOut = true;
+        const pendingRuns = timedOut ? [...runDrains.keys()] : [];
+        try { releaseOwnership(); } catch (error) { errors.push(error); }
+        const runtimeClose = runtimeHost.close().then(
+          () => true,
+          error => { errors.push(error); return true; },
+        );
+        const runtimeClosed = await Promise.race([
+          runtimeClose,
+          new Promise<boolean>(resolve => { const timer = setTimeout(() => resolve(false), SHUTDOWN_TIMEOUT_MS); timer.unref?.(); }),
+        ]);
+        if (!runtimeClosed) {
+          timedOut = true;
+          errors.push(new Error("Runtime close did not settle before the shutdown timeout."));
+        }
+        try { modelCatalog.dispose(); } catch (error) { errors.push(error); }
+        try { sync.close(); } catch (error) { errors.push(error); }
+        try { stopTimeSource(); } catch (error) { errors.push(error); }
+        for (const id of terminalSessions.keys()) {
+          try { removeTerminal(id, true); } catch (error) { errors.push(error); }
+        }
+        return { timedOut, pendingRuns, errors };
+      })();
+      return closing;
     },
   };
 }

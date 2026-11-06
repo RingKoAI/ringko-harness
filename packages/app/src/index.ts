@@ -29,8 +29,10 @@ export function createApp(options: AppOptions): RingKoApp {
     async close() {
       if (closed) return;
       closed = true;
-      managed.close();
-      await runtime.close();
+      const errors: unknown[] = [];
+      try { await managed.close(); } catch (error) { errors.push(error); }
+      try { await runtime.close(); } catch (error) { errors.push(error); }
+      if (errors.length > 0) throw errors.length === 1 ? errors[0] : new AggregateError(errors, "App close failed.");
     },
   };
 }

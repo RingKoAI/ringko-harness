@@ -18,7 +18,18 @@ import { applyToolPolicy } from "./runtime-tools.ts";
 import type { ExtensionRegistry } from "./extension-registry.ts";
 import type { ToolManager } from "./tool-manager.ts";
 
-export interface RuntimeAgent { agent: RingKo; close(): void }
+export interface RuntimeAgent { agent: RingKo; close(): Promise<void> }
+
+async function disposeReverse(disposers: readonly Disposable[]): Promise<unknown[]> {
+  const errors: unknown[] = [];
+  for (const dispose of [...disposers].reverse()) {
+    try {
+      const pending = dispose();
+      if (pending) await pending;
+    } catch (error) { errors.push(error); }
+  }
+  return errors;
+}
 
 export interface AgentFactoryDeps {
   workspace: string;
@@ -33,24 +44,28 @@ export interface AgentFactoryDeps {
 }
 
 export class AgentFactory {
-  private readonly agents = new Set<() => void>();
+  private readonly agents = new Set<() => Promise<void>>();
   private closed = false;
 
   constructor(private readonly deps: AgentFactoryDeps) {}
 
   /** Build a tool-only agent for capability discovery without starting MCP. */
-  preview(config: RingkoConfig, host: RuntimeHost = {}): { agent: RingKo; sandbox: Sandbox; close(): void } {
+  preview(config: RingkoConfig, host: RuntimeHost = {}): { agent: RingKo; sandbox: Sandbox; close(): Promise<void> } {
     if (this.closed) throw new Error("Agent factory is closed.");
     const agent = createRingKo({ task: true, model: async () => ({ content: "", toolCalls: [] }) });
     const disposers = this.deps.extensions.apply(agent, config, { host });
-    const close = (): void => {
-      for (const dispose of disposers.reverse()) {
-        try {
-          const pending = dispose();
-          if (pending) void Promise.resolve(pending).catch(error => writeDiagnostic("runtime.contribution", String(error)));
-        } catch (error) { writeDiagnostic("runtime.contribution", String(error)); }
-      }
-      agent.jobs.cancelAll();
+    let closing: Promise<void> | undefined;
+    const close = (): Promise<void> => {
+      if (closing) return closing;
+      closing = (async () => {
+        const errors: unknown[] = [];
+        try { agent.jobs.cancelAll(); } catch (error) { errors.push(error); }
+        try { await agent.jobs.settle(); } catch (error) { errors.push(error); }
+        errors.push(...await disposeReverse(disposers));
+        try { await agent.subagents?.close(); } catch (error) { errors.push(error); }
+        if (errors.length > 0) throw errors.length === 1 ? errors[0] : new AggregateError(errors, "Preview agent close failed.");
+      })();
+      return closing;
     };
     return { agent, sandbox: this.deps.toolManager.sandboxFor(agent) ?? this.deps.sandbox, close };
   }
@@ -108,29 +123,8 @@ export class AgentFactory {
         await this.deps.events.parallel("model/after-response", event).catch(error => writeDiagnostic("runtime.model.post", String(error)));
         await options.onModelAfter?.(event);
       },
-    });
-    const agentContext = { host, ...(options.session ? { session: options.session } : {}) };
-    let agentDisposers: Disposable[];
-    try {
-      agentDisposers = this.deps.extensions.apply(agent, config, agentContext);
-    } catch (error) {
-      controller.abort();
-      throw error;
-    }
-    const toolSandbox = this.deps.toolManager.sandboxFor(agent) ?? this.deps.sandbox;
-    agent.tools.setPermissionCheck(async request => {
-      const rule = this.deps.permissions.decide(permissionSession, request.toolName, request.target);
-      const decision = rule === "deny" || rule === "ask" ? rule : (await abortable(this.deps.events.waterfall("tool/permission", { toolName: request.toolName, target: request.target, decision: rule }), request.signal)).decision;
-      writeDiagnostic("permission.decision", JSON.stringify({ tool: request.toolName, decision }));
-      return decision;
-    });
-    const run = agent.run.bind(agent);
-    agent.run = async (prompt, runOptions) => {
-      if (running) throw new Error("Agent is already running.");
-      const signal = runOptions?.signal ? AbortSignal.any([controller.signal, runOptions.signal]) : controller.signal;
-      signal.throwIfAborted();
-      running = true;
-      try {
+      onRunBefore: async (prompt, runSignal) => {
+        const signal = runSignal ?? controller.signal;
         const opened = await abortable(this.deps.startMcp(toolSandbox, config.sandbox?.mcp), signal);
         signal.throwIfAborted();
         for (const name of mcpToolNames) agent.tools.unregister(name);
@@ -143,36 +137,71 @@ export class AgentFactory {
         }
         for (const name of reportedErrors.keys()) if (!opened.errors.some(error => error.name === name)) reportedErrors.delete(name);
         applyToolPolicy(agent, workflow);
+        await abortable(Promise.resolve(options.onRunBefore?.(prompt, signal)), signal);
         await abortable(this.deps.events.serial("run/before", { prompt, signal }), signal);
         applyToolPolicy(agent, workflow);
-        const result = await run(prompt, { signal });
+      },
+      onRunAfter: async (result, runSignal) => {
+        const signal = runSignal ?? controller.signal;
         await abortable(this.deps.events.serial("run/after", { content: result.content }), signal);
-        return result;
+        await abortable(Promise.resolve(options.onRunAfter?.(result, signal)), signal);
+      },
+    });
+    const agentContext = { host, ...(options.session ? { session: options.session } : {}) };
+    let agentDisposers: Disposable[];
+    try {
+      agentDisposers = this.deps.extensions.apply(agent, config, agentContext);
+    } catch (error) {
+      controller.abort();
+      throw error;
+    }
+    const toolSandbox = this.deps.toolManager.sandboxFor(agent) ?? this.deps.sandbox;
+    agent.tools.setPermissionCheck(async request => {
+      const rule = this.deps.permissions.decide(permissionSession, request.toolName, request.target, request.alternates);
+      const decision = rule === "deny" || rule === "ask" ? rule : (await abortable(this.deps.events.waterfall("tool/permission", { toolName: request.toolName, target: request.target, decision: rule }), request.signal)).decision;
+      writeDiagnostic("permission.decision", JSON.stringify({ tool: request.toolName, decision }));
+      return decision;
+    });
+    const run = agent.run.bind(agent);
+    agent.run = async (prompt, runOptions) => {
+      if (running) throw new Error("Agent is already running.");
+      const signal = runOptions?.signal ? AbortSignal.any([controller.signal, runOptions.signal]) : controller.signal;
+      signal.throwIfAborted();
+      running = true;
+      try {
+        return await run(prompt, { signal });
       } catch (error) {
         await this.deps.events.parallel("run/error", { error }).catch(hookError => writeDiagnostic("runtime.hook", String(hookError)));
         throw error;
       } finally { running = false; }
     };
-    const close = (): void => {
-      for (const dispose of agentDisposers.reverse()) {
-        try {
-          const pending = dispose();
-          if (pending) void Promise.resolve(pending).catch(error => writeDiagnostic("runtime.contribution", String(error)));
-        } catch (error) {
-          writeDiagnostic("runtime.contribution", String(error));
+    let closing: Promise<void> | undefined;
+    const close = (): Promise<void> => {
+      if (closing) return closing;
+      closing = (async () => {
+        const errors: unknown[] = [];
+        try { controller.abort(); } catch (error) { errors.push(error); }
+        try { agent.jobs.cancelAll(); } catch (error) { errors.push(error); }
+        try { await agent.jobs.settle(); } catch (error) { errors.push(error); }
+        errors.push(...await disposeReverse(agentDisposers));
+        try { await agent.subagents?.close(); } catch (error) { errors.push(error); }
+        this.agents.delete(close);
+        if (errors.length > 0) {
+          for (const error of errors) writeDiagnostic("runtime.agent.close", String(error));
+          throw errors.length === 1 ? errors[0] : new AggregateError(errors, "Agent close failed.");
         }
-      }
-      controller.abort();
-      agent.jobs.cancelAll();
-      this.agents.delete(close);
+      })();
+      return closing;
     };
     this.agents.add(close);
     return { agent, close };
   }
 
-  /** Close every agent created by this factory. */
-  closeAll(): void {
+  /** Close every agent created by this factory and report every failure. */
+  async closeAll(): Promise<void> {
     this.closed = true;
-    for (const close of [...this.agents]) close();
+    const results = await Promise.allSettled([...this.agents].map(close => close()));
+    const errors = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+    if (errors.length > 0) throw errors.length === 1 ? errors[0] : new AggregateError(errors, "Agent factory close failed.");
   }
 }

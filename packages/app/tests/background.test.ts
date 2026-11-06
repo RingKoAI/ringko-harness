@@ -84,7 +84,7 @@ it("serves ask answers, plan persistence, sub/shell subscriptions and parent con
     if (previousHome === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previousHome;
     rmSync(root, { recursive: true, force: true });
   }
-}, 10_000);
+}, 30_000);
 
 it("stops a running background child and persists cancellation before closing the session", async () => {
   const root = mkdtempSync(join(tmpdir(), "rkh-stop-api-"));

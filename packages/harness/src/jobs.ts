@@ -81,7 +81,11 @@ export class JobManager {
   list(): JobSnapshot[] { return [...this.jobs.values()].map(job => structuredClone(job.snapshot)); }
   get(id: string): JobSnapshot { return structuredClone(this.require(id).snapshot); }
   private require(id: string): Job { const job = this.jobs.get(id); if (!job) throw new Error("Unknown job in this session."); return job; }
-  cancel(id: string): void { this.require(id).controller.abort(); }
+  cancel(id: string): void {
+    // Tag direct job cancellation so parents can distinguish it from a parent
+    // run abort; both otherwise surface as AbortError.
+    this.require(id).controller.abort(new DOMException("Job cancelled.", "JobCancelled"));
+  }
   cancelAll(): void { for (const job of this.jobs.values()) if (job.snapshot.status === "running") job.controller.abort(); }
   async settle(): Promise<void> { await Promise.all([...this.jobs.values()].map(job => job.done)); }
   detach(id: string): JobSnapshot {

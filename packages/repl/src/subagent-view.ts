@@ -43,7 +43,10 @@ function displayEvent(event: AgentEvent): AgentEvent {
 
 /** Build one independent, bounded transcript per delegated task. */
 export function applyTaskView(views: readonly SubagentView[], event: TaskEvent): SubagentView[] {
-  if (!event || typeof event.taskId !== "string" || !event.taskId || event.taskId.length > 128 ||
+  if (!event) return [...views];
+  // Follow-up status/message frames are catalog-only in this view.
+  if (event.type === "message" || event.type === "status") return [...views];
+  if (typeof event.taskId !== "string" || !event.taskId || event.taskId.length > 128 ||
     typeof event.description !== "string" || event.description.length > 120 ||
     typeof event.model !== "string" || event.model.length > 256 ||
     !["read", "write", "full"].includes(event.mode) ||

@@ -172,12 +172,14 @@ export class RuntimeManager {
     this.closed = true;
     this.stopTime();
     for (const task of this.scheduler.list()) this.scheduler.remove(task.id);
-    this.agentFactory.closeAll();
     this.permissions.clearSessions();
     this.closing = (async () => {
-      await this.extensions.dispose();
-      this.capabilityManager.close();
-      await this.mcp.close();
+      const errors: unknown[] = [];
+      try { await this.agentFactory.closeAll(); } catch (error) { errors.push(error); }
+      try { await this.extensions.dispose(); } catch (error) { errors.push(error); }
+      try { this.capabilityManager.close(); } catch (error) { errors.push(error); }
+      try { await this.mcp.close(); } catch (error) { errors.push(error); }
+      if (errors.length > 0) throw errors.length === 1 ? errors[0] : new AggregateError(errors, "Runtime close failed.");
     })();
     return this.closing;
   }

@@ -7,6 +7,57 @@ import { render } from "./render.ts";
 import { BackendClient, type SessionSnapshot } from "@ringko-ai/client";
 import { Repl } from "../src/app.tsx";
 
+it("ignores stale session refreshes and never reopens a dismissed picker", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rkh-picker-refresh-"));
+  const input = new PassThrough(), output = new PassThrough();
+  Object.assign(input, { isTTY: true, setRawMode: () => input, ref: () => input, unref: () => input });
+  Object.assign(output, { columns: 100, rows: 30, isTTY: true });
+  let text = ""; output.on("data", data => { text += data.toString(); });
+  const requests: Array<ReturnType<typeof Promise.withResolvers<Response>>> = [];
+  const watchers = new Set<Parameters<BackendClient["watch"]>[0]>();
+  const backend = new BackendClient({ fetch: async url => {
+    if (String(url) === "/api/sessions") {
+      const pending = Promise.withResolvers<Response>(); requests.push(pending); return pending.promise;
+    }
+    return Response.json({ tools: [], providers: [] });
+  } });
+  backend.watch = listener => { watchers.add(listener); return { close: () => { watchers.delete(listener); } }; };
+  let revision = 0;
+  const notify = (kind: "session" | "reset" = "session") => { for (const watcher of watchers) watcher({ instance: "fixture", revision: ++revision, kind }); };
+  const respond = (index: number, title: string) => requests[index]!.resolve(Response.json([{ id: "session", createdAt: 1, cwd: root, title }]));
+  const app = render(<Repl backend={backend} workspace={root} model={async () => ({ content: "", toolCalls: [] })} modelLabel="Remote" config={{}} />, { stdin: input as unknown as NodeJS.ReadStream, stdout: output as unknown as NodeJS.WriteStream, stderr: output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
+  try {
+    await Bun.sleep(100);
+    input.write("\x12"); await Bun.sleep(80);
+    respond(0, "Initial session"); await Bun.sleep(100);
+    notify(); await Bun.sleep(40);
+    notify(); await Bun.sleep(40);
+    expect(requests).toHaveLength(3);
+    respond(2, "Newest session"); await Bun.sleep(100);
+    text = "";
+    respond(1, "Stale session"); await Bun.sleep(100);
+    expect(text).not.toContain("Stale session");
+    notify(); await Bun.sleep(40);
+    input.write("\x1b"); await Bun.sleep(100);
+    text = "";
+    respond(3, "Reopened session"); await Bun.sleep(100);
+    expect(text).not.toContain("Select a session");
+    expect(text).not.toContain("Reopened session");
+    input.write("\x12"); await Bun.sleep(80);
+    respond(4, "Initial session"); await Bun.sleep(100);
+    notify("reset"); await Bun.sleep(40);
+    expect(requests).toHaveLength(6);
+    respond(5, "[*] Literal title"); await Bun.sleep(100);
+    text = "";
+    input.write("\x12"); await Bun.sleep(100);
+    expect(text).toContain("[*] Literal title");
+  } finally {
+    app.unmount();
+    for (const pending of requests) pending.resolve(Response.json([]));
+    input.destroy(); output.destroy(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it("keeps the session picker open after deleting a session", async () => {
   const root = mkdtempSync(join(tmpdir(), "rkh-remote-delete-"));
   const previous = process.env.RINGKO_HOME; process.env.RINGKO_HOME = root;

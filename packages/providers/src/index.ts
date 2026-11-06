@@ -1,6 +1,6 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { createGoogleGenerativeAI, google } from "@ai-sdk/google";
-import { openai } from "@ai-sdk/openai";
+import { createOpenAI, openai } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModel } from "ai";
 import type { ModelClient } from "@ringko-ai/harness";
@@ -35,7 +35,7 @@ export type ProviderName =
 export interface ProviderClientOptions extends AiSdkModelOptions {
   /** Provider kind, or a vendor id mapped by the caller. */
   provider: string;
-  /** Model id, e.g. "gpt-4o-mini" or "fktx/deepseek-v4-pro". */
+  /** Model id, e.g. "gpt-6.1-sol" or "fktx/deepseek-v4-pro". */
   model: string;
   /** Human-readable provider name (used by openai-compatible). */
   name?: string;
@@ -43,15 +43,26 @@ export interface ProviderClientOptions extends AiSdkModelOptions {
   baseURL?: string;
   apiKey?: string;
   headers?: Record<string, string>;
+  /** Specific OAuth account id; defaults to the domain's saved default. */
+  accountId?: string;
 }
 
 /** Resolve a provider + model id into an AI SDK language model. */
 export function resolveProviderModel(options: ProviderClientOptions): LanguageModel {
   switch (options.provider) {
-    case "openai":
+    case "openai": {
+      if (options.apiKey || options.baseURL) {
+        const provider = createOpenAI({
+          ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+          ...(options.baseURL ? { baseURL: options.baseURL } : {}),
+          ...(options.headers ? { headers: options.headers } : {}),
+        });
+        return provider(options.model);
+      }
       return openai(options.model);
+    }
     case "openai-oauth":
-      return resolveOpenAiOauthModel(options.model);
+      return resolveOpenAiOauthModel(options.model, options.accountId);
     case "github-copilot":
       return resolveGitHubCopilotModel(options.model);
     case "xai-oauth":

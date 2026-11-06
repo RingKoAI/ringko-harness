@@ -63,7 +63,7 @@ describe("RingKo SDK facade", () => {
         async execute(input) {
           const saved = store.open(session.id, "read").all();
           expect(saved.map((event) => event.type)).toEqual([
-            "user/message", "assistant/message", "tool/call",
+            "run/started", "user/message", "assistant/message", "tool/call",
           ]);
           return input.text;
         },
@@ -71,6 +71,7 @@ describe("RingKo SDK facade", () => {
       await ringko.run("run");
       session.close();
       expect(store.open(session.id, "read").all().map((event) => event.type)).toEqual([
+        "run/started",
         "user/message",
         "session/instructions",
         "assistant/message",
@@ -79,6 +80,61 @@ describe("RingKo SDK facade", () => {
         "assistant/message",
         "run/completed",
       ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("settles a failed run as failed and releases the run guard", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ringko-run-failed-"));
+    try {
+      const store = new SessionStore({ root });
+      const session = store.create();
+      const ringko = createRingKo({ session, model: async () => { throw new Error("fixture model failure"); } });
+      await expect(ringko.run("fail")).rejects.toThrow("fixture model failure");
+      const events = store.open(session.id, "read").all();
+      expect(events.some(event => event.type === "run/failed" && (event.data as { status?: string }).status === "failed")).toBe(true);
+      expect(events.some(event => event.type === "run/completed")).toBe(false);
+      await expect(ringko.run("again")).rejects.toThrow("fixture model failure");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("distinguishes cancellation from failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ringko-run-cancelled-"));
+    try {
+      const store = new SessionStore({ root });
+      const session = store.create();
+      const ringko = createRingKo({ session, model: async () => ({ content: "ok", toolCalls: [] }) });
+      const controller = new AbortController();
+      controller.abort();
+      await expect(ringko.run("cancel", { signal: controller.signal })).rejects.toThrow();
+      const events = store.open(session.id, "read").all();
+      expect(events.some(event => event.type === "run/cancelled" && (event.data as { status?: string }).status === "cancelled")).toBe(true);
+      expect(events.some(event => event.type === "run/failed")).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("runs cleanup and resets the guard when terminal persistence fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ringko-run-persist-"));
+    try {
+      const store = new SessionStore({ root });
+      const session = store.create();
+      const original = session.appendEvent.bind(session);
+      let failed = false;
+      session.appendEvent = ((type: string, data?: unknown, options?: { time?: number; ignorable?: boolean }) => {
+        if (!failed && type === "run/completed") {
+          failed = true;
+          throw new Error("fixture persistence failure");
+        }
+        return original(type, data, options);
+      }) as typeof session.appendEvent;
+      const ringko = createRingKo({ session, model: async () => ({ content: "ok", toolCalls: [] }) });
+      await expect(ringko.run("one")).rejects.toThrow("fixture persistence failure");
+      expect(await ringko.run("two")).toMatchObject({ content: "ok" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -110,6 +166,59 @@ describe("RingKo SDK facade", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("records cleanup failure instead of a successful terminal state", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ringko-cleanup-failed-"));
+    const session = new SessionStore({ root }).create();
+    try {
+      const ringko = createRingKo({ session, model: async () => ({ content: "ok", toolCalls: [] }) });
+      const settle = ringko.jobs.settle.bind(ringko.jobs);
+      ringko.jobs.settle = async () => { throw new Error("fixture cleanup failure"); };
+      await expect(ringko.run("one")).rejects.toThrow("fixture cleanup failure");
+      expect(session.all().filter(event => event.type.startsWith("run/")).map(event => event.type)).toEqual(["run/started", "run/failed"]);
+      ringko.jobs.settle = settle;
+      expect((await ringko.run("two")).content).toBe("ok");
+    } finally { session.close(); rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("preserves undefined model rejections", async () => {
+    const ringko = createRingKo({ model: async () => { throw undefined; } });
+    const result = await ringko.run("fail").then(() => ({ rejected: false, error: undefined as unknown }), error => ({ rejected: true, error }));
+    expect(result).toEqual({ rejected: true, error: undefined });
+  });
+
+  it("retains the primary error and attaches cleanup failures", async () => {
+    const primary = new Error("fixture model failure");
+    const cleanup = new Error("fixture cleanup failure");
+    const ringko = createRingKo({ model: async () => { throw primary; } });
+    ringko.jobs.cancelAll = () => { throw cleanup; };
+    let settled = false;
+    ringko.jobs.settle = async () => { settled = true; };
+    const result = await ringko.run("fail").catch(error => error);
+    expect(result).toBe(primary);
+    expect(result.cleanupErrors).toEqual([cleanup]);
+    expect(settled).toBe(true);
+  });
+
+  it("does not append contradictory terminal events after a failed flush", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ringko-terminal-flush-"));
+    const session = new SessionStore({ root }).create();
+    const flush = session.flush.bind(session);
+    try {
+      let injected = false;
+      session.flush = () => {
+        if (!injected && session.all().at(-1)?.type === "run/completed") {
+          injected = true;
+          throw new Error("fixture terminal flush");
+        }
+        flush();
+      };
+      const ringko = createRingKo({ session, model: async () => ({ content: "ok", toolCalls: [] }) });
+      await expect(ringko.run("one")).rejects.toThrow("fixture terminal flush");
+      expect(session.all().filter(event => event.type.startsWith("run/")).map(event => event.type)).toEqual(["run/started", "run/completed"]);
+      expect((await ringko.run("two")).content).toBe("ok");
+    } finally { session.flush = flush; session.close(); rmSync(root, { recursive: true, force: true }); }
   });
 
   it("rejects a missing model client", () => {

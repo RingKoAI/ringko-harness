@@ -32,7 +32,8 @@ function terminal() {
 const settle = () => new Promise(resolve => setTimeout(resolve, 50));
 
 async function waitForRender(predicate: () => boolean, description: string): Promise<void> {
-  const deadline = Date.now() + 2_000;
+  // Sandbox helper startup can exceed 2s on a loaded Windows host.
+  const deadline = Date.now() + 5_000;
   while (!predicate() && Date.now() < deadline) await settle();
   if (!predicate()) throw new Error(`Timed out waiting for terminal render: ${description}`);
 }

@@ -6,7 +6,8 @@
   "license": "Apache-2.0",
   "exports": {
     ".": "./src/index.ts",
-    "./runtime": "./src/runtime.ts"
+    "./runtime": "./src/runtime.ts",
+    "./subagents": "./src/subagents.ts"
   },
   "scripts": {
     "test": "bun test tests"
@@ -14,6 +15,7 @@
   "dependencies": {
     "@ringko-ai/config": "workspace:*",
     "@ringko-ai/mcp": "workspace:*",
+    "@ringko-ai/providers": "workspace:*",
     "@ringko-ai/tools": "workspace:*",
     "@ringko-ai/workflow": "workspace:*",
     "@ringko-ai/harness": "workspace:*",
