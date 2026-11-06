@@ -30,7 +30,7 @@ bundle, so Bun is not optional.
 ```sh
 npm install -g @ringko-ai/rkh
 ringko          # terminal UI (default)
-ringko serve    # browser UI, prints its per-workspace URL
+ringko web      # browser UI, prints its per-workspace URL
 ```
 
 `ringko help` lists all commands. `npx @ringko-ai/rkh` runs the terminal UI
@@ -48,8 +48,8 @@ pnpm build      # code, tui and webui
 ## Features
 
 - **Tools.** `read`, `write`, `edit`, `glob`, `grep`, `tree`, `shell`,
-  `webfetch`, `websearch`, `ask`, `plan`, `update_plan`, `task` and `job`.
-  `read` handles text, images, PDFs and notebooks.
+  `webfetch`, `websearch`, `ask`, `plan`, `update_plan`, `task`, `task_control`
+  and `job`. `read` handles text, images, PDFs and notebooks.
 - **Approval.** Every tool call is risk-classified, and risky calls wait for the
   host. With no approval handler they are denied. Network and shell tools are
   registered separately from workspace tools.
@@ -59,8 +59,10 @@ pnpm build      # code, tui and webui
   trajectory view. Usage statistics are available in the Web UI; see
   [Usage statistics](docs/usage-statistics.md) for data semantics and limits.
 - **Delegation.** Subagents run in `read`, `write` or `full` mode with separate
-  context and an optional model. They can run in the background, be cancelled,
-  and report progress in the TUI, Web UI and `ringko run`.
+  context and an optional model. Named providers add Claude Code, Codex, ACP and
+  generic CLI backends; in-process and CLI children accept follow-ups and cold
+  resume. They can run in the background, be cancelled, and report progress in
+  the TUI, Web UI and `ringko run`.
 - **Context.** Automatic and manual compaction, `AGENTS.md` instructions
   reloaded before every request, skills, and MCP servers.
 - **Providers.** Any AI SDK model. Thinking levels map to each provider's own
@@ -68,11 +70,11 @@ pnpm build      # code, tui and webui
 
 ## Shared sessions
 
-`ringko` and `ringko serve` start or reuse one backend per workspace/config pair
+`ringko` and `ringko web` start or reuse one backend per workspace/config pair
 and register it under `~/.ringko/backends/`. Open the printed URL in a browser,
 then select the same session in both clients with `ringko -s <id>`. Messages,
 tool activity, approvals, questions, plans and running state stay in sync. A
-second `serve` for the same pair prints the existing URL; a concurrent submit to
+second `web` for the same pair prints the existing URL; a concurrent submit to
 a busy session returns HTTP 409. Disconnecting a client does not cancel a run.
 
 `ringko run`, `ringko loop` and embedded REPL hosts still execute locally. Do not
@@ -127,7 +129,7 @@ with the CLI; a custom module is imported at run time. Custom OpenAI-compatible
 endpoints use the same file:
 
 ```json
-{ "provider": { "name": "openai", "model": "gpt-4o-mini" } }
+{ "provider": { "name": "openai", "model": "gpt-6.1-sol" } }
 ```
 
 Thinking levels map to Anthropic `thinking`/`effort`, Google `thinkingConfig`,
@@ -164,6 +166,7 @@ terminal uses `node-pty`. See [unreleased changes](CHANGELOG/unreleased.md).
 - [Plugins](docs/plugins.md)
 - [Providers](docs/providers.md)
 - [Skills](docs/skills.md)
+- [Subagents](docs/subagents.md)
 - [Sandbox](SANDBOX.md)
 - [Usage statistics](docs/usage-statistics.md)
 

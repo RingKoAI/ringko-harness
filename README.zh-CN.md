@@ -29,7 +29,7 @@ RingKo 是一套 Agent Harness。它通过受审批门约束的工具注册表�
 ```sh
 npm install -g @ringko-ai/rkh
 ringko          # 终端界面（默认）
-ringko serve    # 浏览器界面，打印按 workspace 派生的访问地址
+ringko web      # 浏览器界面，打印按 workspace 派生的访问地址
 ```
 
 `ringko help` 列出全部命令。不想全局安装时，`npx @ringko-ai/rkh` 会启动终端界面。
@@ -46,7 +46,8 @@ pnpm build      # code、tui 与 webui
 ## 功能
 
 - **工具。** `read`、`write`、`edit`、`glob`、`grep`、`tree`、`shell`、
-  `webfetch`、`websearch`、`ask`、`plan`、`update_plan`、`task` 与 `job`。
+  `webfetch`、`websearch`、`ask`、`plan`、`update_plan`、`task`、`task_control`
+  与 `job`。
   `read` 支持文本、图片、PDF 和 Notebook。
 - **审批。** 每次工具调用都会做风险评估，有风险的调用等待宿主审批；没有审批处理器
   时直接拒绝。网络与 shell 工具独立于工作区工具注册。
@@ -54,18 +55,20 @@ pnpm build      # code、tui 与 webui
   使用 bubblewrap，macOS 使用 Seatbelt，Windows 使用受限令牌与 Job Object。
 - **会话。** 只追加的 JSONL。可以续接、分叉，或在轨迹视图里检查事件；Web UI 提供
   使用统计，数据口径与限制见[使用统计说明](docs/usage-statistics.md)。
-- **委派。** 子代理以 `read`、`write` 或 `full` 模式运行，拥有独立上下文和可选模型，
-  支持后台执行、取消，以及 TUI、Web UI 和 `ringko run` 中的进度显示。
+- **委派。** 子代理以 `read`、`write` 或 `full` 模式运行，拥有独立上下文和可选模型。
+  命名 provider 可接入 Claude Code、Codex、ACP 和通用 CLI 后端；进程内与 CLI 子代理
+  支持追加回合和冷恢复。支持后台执行、取消，以及 TUI、Web UI 和 `ringko run` 中的
+  进度显示。
 - **上下文。** 自动与手动压缩；每次请求前重新加载 `AGENTS.md`；技能；MCP server。
 - **供应商。** 任意 AI SDK 模型。思考档位映射到各供应商自己的字段，缺失的模型限制
   由 Models.dev 补全。
 
 ## 共享会话
 
-`ringko` 与 `ringko serve` 会为同一组 workspace/配置启动或复用一个后端，并登记在
+`ringko` 与 `ringko web` 会为同一组 workspace/配置启动或复用一个后端，并登记在
 `~/.ringko/backends/`。用浏览器打开打印出的地址，然后在两个客户端里用
 `ringko -s <id>` 选中同一个会话。消息、工具活动、审批、提问、计划和运行状态保持
-同步。同一组配置再执行一次 `serve` 只会打印已有地址；向忙碌会话并发提交会返回
+同步。同一组配置再执行一次 `web` 只会打印已有地址；向忙碌会话并发提交会返回
 HTTP 409。断开客户端不会取消正在进行的运行。
 
 `ringko run`、`ringko loop` 和嵌入式 REPL 仍在本地执行。不要把它们指向另一个后端
@@ -116,7 +119,7 @@ JSONL 中。
 OpenAI 兼容端点也使用同一份配置：
 
 ```json
-{ "provider": { "name": "openai", "model": "gpt-4o-mini" } }
+{ "provider": { "name": "openai", "model": "gpt-6.1-sol" } }
 ```
 
 思考档位映射到 Anthropic 的 `thinking`/`effort`、Google 的 `thinkingConfig`、
@@ -150,6 +153,7 @@ npm 包内含 CLI、内置供应商与 WebUI。浏览器终端使用 `node-pty`�
 - [插件](docs/plugins.zh-CN.md)
 - [供应商](docs/providers.zh-CN.md)
 - [技能](docs/skills.zh-CN.md)
+- [子代理](docs/subagents.zh-CN.md)
 - [沙盒](SANDBOX.md)
 - [使用统计](docs/usage-statistics.md)
 
