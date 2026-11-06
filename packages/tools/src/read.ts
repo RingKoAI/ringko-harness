@@ -1,7 +1,8 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
 import { FileTracker } from "./file-tracker.ts";
-import type { Workspace } from "./workspace.ts";
+import { pathRisk } from "./path-access.ts";
+import { resolvePathTarget, type Workspace } from "./workspace.ts";
 
 /** Maximum text characters returned in one read. */
 const MAX_BYTES = 1_000_000;
@@ -225,14 +226,13 @@ export function createReadTool(workspace: Workspace, tracker: FileTracker = new 
       additionalProperties: false,
     },
     parseInput: parseRead,
-    assessRisk({ path }) {
-      const target = workspace.resolve(path);
-      return target.insideWorkspace
-        ? { kind: "workspace_file", reason: `Read workspace path ${target.relative}.`, target: target.absolute }
-        : { kind: "external_file", reason: `Read outside the workspace: ${target.absolute}.`, target: target.absolute };
+    async assessRisk({ path }) {
+      return pathRisk(await resolvePathTarget(workspace, path), "Read");
     },
     async execute({ path, offset, limit }, context) {
-      const target = workspace.resolve(path);
+      const target = await resolvePathTarget(workspace, path);
+      if (!target.resolved) throw new TypeError(`Cannot resolve ${target.absolute} safely; retry the call.`);
+      if (context?.approvedTarget && context.approvedTarget !== target.absolute) throw new Error("Read target changed after approval; retry the call.");
       const shown = target.insideWorkspace ? (target.relative || ".") : target.absolute;
       const info = await stat(target.absolute);
       context?.signal?.throwIfAborted();
@@ -240,6 +240,7 @@ export function createReadTool(workspace: Workspace, tracker: FileTracker = new 
       if (info.isDirectory()) {
         const all = (await readdir(target.absolute)).sort();
         context?.signal?.throwIfAborted();
+        if ((await resolvePathTarget(workspace, path)).absolute !== target.absolute) throw new Error("Read target changed while listing; retry the call.");
         return {
           path: shown,
           entries: all.slice(0, MAX_ENTRIES),
@@ -253,6 +254,7 @@ export function createReadTool(workspace: Workspace, tracker: FileTracker = new 
       }
       const buffer = await readFile(target.absolute, { signal: context?.signal });
       context?.signal?.throwIfAborted();
+      if ((await resolvePathTarget(workspace, path)).absolute !== target.absolute) throw new Error("Read target changed while reading; retry the call.");
       tracker.record(target.absolute, info);
 
       const mediaType = imageMediaType(buffer);

@@ -28,6 +28,14 @@ it("prioritizes deny and ask over allow and isolates targets and sessions", asyn
   expect(manager.decide("one", "shell", "echo hello")).toBe("deny");
 }));
 
+it("matches restrictive rules against every target spelling but allows only the canonical target", async () => isolated(async root => {
+  const manager = new PermissionManager(root);
+  manager.add("one", { tool: "read", target: "/workspace/link/secret", behavior: "deny" }, "session");
+  expect(manager.decide("one", "read", "/outside/secret", ["/workspace/link/secret"])).toBe("deny");
+  manager.add("one", { tool: "read", target: "/workspace/alias", behavior: "allow" }, "session");
+  expect(manager.decide("one", "read", "/outside/target", ["/workspace/alias"])).toBe("default");
+}));
+
 it("persists workspace rules and fails closed on corrupted policy", async () => isolated(async root => {
   const manager = new PermissionManager(root);
   manager.add("one", { tool: "browser__navigate", target: "browser/navigate", behavior: "allow" }, "saved");

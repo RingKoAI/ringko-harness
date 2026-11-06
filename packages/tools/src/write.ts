@@ -2,7 +2,7 @@ import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
 import { FileTracker } from "./file-tracker.ts";
-import { resolveWriteTarget, type Workspace } from "./workspace.ts";
+import { alternateSpellings, resolveWriteTarget, type Workspace } from "./workspace.ts";
 import { Sandbox } from "./sandbox.ts";
 
 export interface WriteInput {
@@ -60,13 +60,15 @@ export function createWriteTool(workspace: Workspace, tracker: FileTracker = new
     parseInput: parseWrite,
     async assessRisk({ path }) {
       const target = await resolveWriteTarget(workspace, path);
+      const alternates = alternateSpellings(target);
+      const extra = alternates.length > 0 ? { alternates } : {};
       if (!target.insideWorkspace) {
-        return { kind: "external_file", reason: `Write outside the workspace: ${target.absolute}.`, target: target.absolute };
+        return { kind: "external_file", reason: `Write outside the workspace: ${target.absolute}.`, target: target.absolute, ...extra };
       }
       if (await exists(target.absolute)) {
-        return { kind: "workspace_write", level: "medium", reason: `Overwrite ${target.relative}.`, target: target.absolute };
+        return { kind: "workspace_write", level: "medium", reason: `Overwrite ${target.relative}.`, target: target.absolute, ...extra };
       }
-      return { kind: "workspace_write", level: "low", reason: `Create ${target.relative}.`, target: target.absolute };
+      return { kind: "workspace_write", level: "low", reason: `Create ${target.relative}.`, target: target.absolute, ...extra };
     },
     async execute({ path, content }, context) {
       const target = await resolveWriteTarget(workspace, path);

@@ -1,7 +1,7 @@
 import { lstat, opendir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
-import { resolveWriteTarget, type Workspace } from "./workspace.ts";
+import { alternateSpellings, resolveWriteTarget, type Workspace } from "./workspace.ts";
 
 export const TREE_LIMITS = Object.freeze({ defaultDepth: 3, maxDepth: 16, defaultEntries: 500, maxEntries: 2000, scannedEntries: 20_000, outputCharacters: 131_072, footerCharacters: 160, entryOverhead: 160, excludeNames: 64, nameCharacters: 255, pathCharacters: 32768 });
 export const TREE_DEFAULT_EXCLUDES = [".git", "node_modules", "dist", "build", "coverage", "target", ".next", ".cache", ".venv", "venv", "__pycache__"] as const;
@@ -101,7 +101,13 @@ export function createTreeTool(workspace: Workspace): ToolDefinition<TreeInput, 
     parseInput: parseTree,
     async assessRisk(input) {
       const target = await resolveWriteTarget(workspace, input.path ?? ".");
-      return { kind: target.insideWorkspace ? "workspace_file" : "external_file", reason: `List directory tree ${target.insideWorkspace ? target.relative || "." : target.absolute}.`, target: target.absolute };
+      const alternates = alternateSpellings(target);
+      return {
+        kind: target.insideWorkspace ? "workspace_file" : "external_file",
+        reason: `List directory tree ${target.insideWorkspace ? target.relative || "." : target.absolute}.`,
+        target: target.absolute,
+        ...(alternates.length > 0 ? { alternates } : {}),
+      };
     },
     async execute(input, context) {
       context?.signal?.throwIfAborted();

@@ -1,7 +1,7 @@
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
 import { FileTracker } from "./file-tracker.ts";
-import { resolveWriteTarget, type Workspace } from "./workspace.ts";
+import { alternateSpellings, resolveWriteTarget, type Workspace } from "./workspace.ts";
 import { Sandbox } from "./sandbox.ts";
 
 export interface EditInput {
@@ -73,9 +73,11 @@ export function createEditTool(workspace: Workspace, tracker: FileTracker = new 
     parseInput: parseEdit,
     async assessRisk({ path }) {
       const target = await resolveWriteTarget(workspace, path);
+      const alternates = alternateSpellings(target);
+      const extra = alternates.length > 0 ? { alternates } : {};
       return target.insideWorkspace
-        ? { kind: "workspace_write", reason: `Edit ${target.relative}.`, target: target.absolute }
-        : { kind: "external_file", reason: `Edit outside the workspace: ${target.absolute}.`, target: target.absolute };
+        ? { kind: "workspace_write", reason: `Edit ${target.relative}.`, target: target.absolute, ...extra }
+        : { kind: "external_file", reason: `Edit outside the workspace: ${target.absolute}.`, target: target.absolute, ...extra };
     },
     async execute({ path, old_string, new_string, replace_all }, context) {
       const target = await resolveWriteTarget(workspace, path);

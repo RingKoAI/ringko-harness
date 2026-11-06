@@ -27,6 +27,11 @@ export interface ToolRiskAssessment {
   level?: RiskLevel;
   reason: string;
   target?: string;
+  /**
+   * Other absolute spellings of the same target (for example the lexical path
+   * before resolving a link). Restrictive rules may match any spelling.
+   */
+  alternates?: readonly string[];
 }
 
 export interface ToolApprovalRequest {
@@ -42,7 +47,7 @@ export interface ToolApprovalRequest {
 }
 
 export type ApprovalHandler = (request: ToolApprovalRequest) => Promise<boolean>;
-export type PermissionCheck = (request: { toolName: string; target?: string; input: unknown; signal?: AbortSignal }) => Promise<"allow" | "deny" | "ask" | "default">;
+export type PermissionCheck = (request: { toolName: string; target?: string; alternates?: readonly string[]; input: unknown; signal?: AbortSignal }) => Promise<"allow" | "deny" | "ask" | "default">;
 
 /** How a tool participates in same-turn scheduling. */
 export type ToolConcurrency = "parallel" | "exclusive";
@@ -273,12 +278,14 @@ async function executeToolUnlocked<Input, Output>(
     (risk.level !== undefined && !RISK_LEVELS.has(risk.level)) ||
     typeof risk.reason !== "string" ||
     risk.reason.trim().length === 0 ||
-    (risk.target !== undefined && typeof risk.target !== "string")
+    (risk.target !== undefined && typeof risk.target !== "string") ||
+    (risk.alternates !== undefined && (!Array.isArray(risk.alternates) || risk.alternates.length > 16 ||
+      risk.alternates.some(alternate => typeof alternate !== "string" || alternate.length === 0 || alternate.length > 8192)))
   ) {
     throw new TypeError(`Tool "${tool.name}" returned an invalid risk assessment.`);
   }
   const policy = context?.permissionCheck
-    ? await context.permissionCheck({ toolName: tool.name, target: risk.target, input, signal: context.signal })
+    ? await context.permissionCheck({ toolName: tool.name, target: risk.target, alternates: risk.alternates, input, signal: context.signal })
     : "default";
   context?.signal?.throwIfAborted();
   if (policy === "deny") throw new ToolApprovalRejectedError(tool.name);
@@ -318,7 +325,7 @@ async function executeToolUnlocked<Input, Output>(
 
   context?.signal?.throwIfAborted();
   if (context?.permissionCheck) {
-    const current = await context.permissionCheck({ toolName: tool.name, target: risk.target, input, signal: context.signal });
+    const current = await context.permissionCheck({ toolName: tool.name, target: risk.target, alternates: risk.alternates, input, signal: context.signal });
     if (current !== "allow" && current !== "deny" && current !== "ask" && current !== "default") throw new TypeError("Invalid permission decision.");
     // A policy change that introduces an unmet approval must be retried, never executed under stale authorization.
     if (current === "deny" || (current === "ask" && policy !== "ask") ||

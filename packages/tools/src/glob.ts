@@ -1,5 +1,8 @@
+import { lstat } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
-import type { Workspace } from "./workspace.ts";
+import { pathRisk } from "./path-access.ts";
+import { resolvePathTarget, type Workspace } from "./workspace.ts";
 
 const MAX_RESULTS = 1000;
 
@@ -45,25 +48,32 @@ export function createGlobTool(workspace: Workspace): ToolDefinition<GlobInput, 
       additionalProperties: false,
     },
     parseInput: parseGlob,
-    assessRisk({ path }) {
-      const target = workspace.resolve(path ?? ".");
-      return target.insideWorkspace
-        ? { kind: "workspace_file", reason: `Glob ${target.relative}.`, target: target.absolute }
-        : { kind: "external_file", reason: `Glob outside the workspace: ${target.absolute}.`, target: target.absolute };
+    async assessRisk({ path }) {
+      return pathRisk(await resolvePathTarget(workspace, path ?? "."), "Glob");
     },
     async execute({ pattern, path }, context) {
-      const target = workspace.resolve(path ?? ".");
+      const source = path ?? ".";
+      const target = await resolvePathTarget(workspace, source);
+      if (!target.resolved) throw new TypeError(`Cannot resolve ${target.absolute} safely; retry the call.`);
+      if (context?.approvedTarget && context.approvedTarget !== target.absolute) throw new Error("Glob target changed after approval; retry the call.");
       const matches: string[] = [];
       let truncated = false;
-      for await (const match of new Bun.Glob(pattern).scan({ cwd: target.absolute, dot: false })) {
+      for await (const match of new Bun.Glob(pattern).scan({ cwd: target.absolute, dot: false, followSymlinks: false })) {
         context?.signal?.throwIfAborted();
+        const display = match.replace(/\\/g, "/");
+        try {
+          if ((await lstat(isAbsolute(match) ? match : join(target.absolute, match))).isSymbolicLink()) continue;
+        } catch {
+          continue;
+        }
         if (matches.length >= MAX_RESULTS) {
           truncated = true;
           break;
         }
-        matches.push(match.replace(/\\/g, "/"));
+        matches.push(display);
       }
       matches.sort();
+      if ((await resolvePathTarget(workspace, source)).absolute !== target.absolute) throw new Error("Glob target changed while scanning; retry the call.");
       return {
         base: target.insideWorkspace ? target.relative || "." : target.absolute,
         matches,

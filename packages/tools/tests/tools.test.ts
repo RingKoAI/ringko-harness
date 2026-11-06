@@ -58,6 +58,32 @@ describe("read", () => {
     expect(output.entries).toEqual(["b.txt", "sub"]);
   });
 
+  it("requires approval for a junction pointing outside and rejects target changes", async () => {
+    const workspaceRoot = join(dir, "workspace"), externalA = join(dir, "a"), externalB = join(dir, "b");
+    await Promise.all([mkdir(workspaceRoot), mkdir(externalA), mkdir(externalB)]);
+    await writeFile(join(externalA, "target.txt"), "original A");
+    await writeFile(join(externalB, "target.txt"), "original B");
+    const link = join(workspaceRoot, "linked");
+    const kind = process.platform === "win32" ? "junction" : "dir";
+    await symlink(externalA, link, kind);
+    const tool = createReadTool(createWorkspace(workspaceRoot));
+    await expect(executeTool(tool, { path: "linked/target.txt" })).rejects.toBeInstanceOf(ApprovalHandlerUnavailableError);
+    await expect(executeTool(tool, { path: "linked/target.txt" }, async request => {
+      expect(request.riskKind).toBe("external_file");
+      await rm(link); await symlink(externalB, link, kind);
+      return true;
+    })).rejects.toThrow("target changed after approval");
+  });
+
+  it("reads through an in-workspace junction without approval", async () => {
+    await mkdir(join(dir, "real"));
+    await writeFile(join(dir, "real", "a.txt"), "inside");
+    await symlink(join(dir, "real"), join(dir, "alias"), process.platform === "win32" ? "junction" : "dir");
+    const tool = createReadTool(createWorkspace(dir));
+    const output = await executeTool(tool, { path: "alias/a.txt" }, never);
+    expect(output.content).toBe("     1→inside");
+  });
+
   it("warns when the file changed since it was last read", async () => {
     const tracker = new FileTracker();
     const read = createReadTool(createWorkspace(dir), tracker);
@@ -137,6 +163,23 @@ describe("glob", () => {
     const output = await executeTool(createGlobTool(createWorkspace(dir)), { pattern: "**/*.ts" }, never);
     expect(output.matches).toEqual(["src/index.ts"]);
   });
+
+  it("does not follow junctions out of the workspace", async () => {
+    const workspaceRoot = join(dir, "workspace"), external = join(dir, "external");
+    await Promise.all([mkdir(workspaceRoot), mkdir(external)]);
+    await writeFile(join(external, "secret.txt"), "");
+    await symlink(external, join(workspaceRoot, "escape"), process.platform === "win32" ? "junction" : "dir");
+    const output = await executeTool(createGlobTool(createWorkspace(workspaceRoot)), { pattern: "**/*.txt" }, never);
+    expect(output.matches).toEqual([]);
+  });
+
+  it("requires approval for an external search root", async () => {
+    const workspaceRoot = join(dir, "workspace"), external = join(dir, "external");
+    await Promise.all([mkdir(workspaceRoot), mkdir(external)]);
+    await symlink(external, join(workspaceRoot, "linked"), process.platform === "win32" ? "junction" : "dir");
+    const tool = createGlobTool(createWorkspace(workspaceRoot));
+    await expect(executeTool(tool, { pattern: "**/*.txt", path: "linked" })).rejects.toBeInstanceOf(ApprovalHandlerUnavailableError);
+  });
 });
 
 describe("grep", () => {
@@ -180,5 +223,50 @@ describe("grep", () => {
     expect(limited.truncated).toBe(true);
     await expect(executeTool(tool, { pattern: "(" }, never)).rejects.toThrow("Invalid regular expression");
     await expect(executeTool(tool, { pattern: "x", path: "missing.txt" }, never)).rejects.toThrow("Path not found");
+  });
+
+  it("reports truncation only when another page exists and pages with offset", async () => {
+    await writeFile(join(dir, "a.txt"), "hit\nhit\nhit");
+    const tool = createGrepTool(createWorkspace(dir));
+    const exact = await executeTool(tool, { pattern: "hit", head_limit: 3 }, never);
+    expect(exact.matches).toHaveLength(3);
+    expect(exact.truncated).toBeUndefined();
+    expect(exact.next_offset).toBeUndefined();
+
+    const first = await executeTool(tool, { pattern: "hit", head_limit: 2 }, never);
+    expect(first.matches?.map(match => match.line)).toEqual([1, 2]);
+    expect(first.truncated).toBe(true);
+    expect(first.next_offset).toBe(2);
+
+    const second = await executeTool(tool, { pattern: "hit", offset: first.next_offset, head_limit: 2 }, never);
+    expect(second.matches?.map(match => match.line)).toEqual([3]);
+    expect(second.truncated).toBeUndefined();
+  });
+
+  it("does not follow a junction out of the workspace while searching", async () => {
+    const workspaceRoot = join(dir, "workspace"), external = join(dir, "external");
+    await Promise.all([mkdir(workspaceRoot), mkdir(external)]);
+    await writeFile(join(workspaceRoot, "inside.txt"), "needle");
+    await writeFile(join(external, "secret.txt"), "needle");
+    await symlink(external, join(workspaceRoot, "escape"), process.platform === "win32" ? "junction" : "dir");
+    const output = await executeTool(createGrepTool(createWorkspace(workspaceRoot)), { pattern: "needle" }, never);
+    expect(output.matches?.map(match => match.file)).toEqual(["inside.txt"]);
+  });
+
+  it("requires approval for an external search target and rejects target changes", async () => {
+    const workspaceRoot = join(dir, "workspace"), externalA = join(dir, "a"), externalB = join(dir, "b");
+    await Promise.all([mkdir(workspaceRoot), mkdir(externalA), mkdir(externalB)]);
+    await writeFile(join(externalA, "file.txt"), "needle");
+    await writeFile(join(externalB, "file.txt"), "needle");
+    const link = join(workspaceRoot, "linked");
+    const kind = process.platform === "win32" ? "junction" : "dir";
+    await symlink(externalA, link, kind);
+    const tool = createGrepTool(createWorkspace(workspaceRoot));
+    await expect(executeTool(tool, { pattern: "needle", path: "linked" })).rejects.toBeInstanceOf(ApprovalHandlerUnavailableError);
+    await expect(executeTool(tool, { pattern: "needle", path: "linked" }, async request => {
+      expect(request.riskKind).toBe("external_file");
+      await rm(link); await symlink(externalB, link, kind);
+      return true;
+    })).rejects.toThrow("target changed after approval");
   });
 });

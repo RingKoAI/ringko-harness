@@ -46,8 +46,16 @@ export class PermissionManager {
     if (parsed.version !== 1) throw new Error("Unsupported permission file version.");
     return validateRules(parsed.rules);
   }
-  decide(session: string, tool: string, target?: string): "allow" | "deny" | "ask" | "default" {
-    const rules = [...this.saved(), ...(this.sessions.get(session) ?? [])].filter(rule => canonicalToolName(rule.tool) === canonicalToolName(tool) && (rule.target === undefined || rule.target === target));
+  decide(session: string, tool: string, target?: string, alternates: readonly string[] = []): "allow" | "deny" | "ask" | "default" {
+    // Deny and ask rules match every spelling of a target, so a link or an
+    // alternate path cannot dodge a restrictive rule. Allow rules only match
+    // the canonical target: an old allow for a link must not silently approve
+    // wherever that link points now.
+    const alternatives = new Set(alternates);
+    const rules = [...this.saved(), ...(this.sessions.get(session) ?? [])].filter(rule =>
+      canonicalToolName(rule.tool) === canonicalToolName(tool) &&
+      (rule.target === undefined || rule.target === target ||
+        (rule.behavior !== "allow" && alternatives.has(rule.target!))));
     for (const behavior of ["deny", "ask", "allow"] as const) if (rules.some(rule => rule.behavior === behavior)) return behavior;
     return "default";
   }
