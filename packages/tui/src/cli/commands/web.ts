@@ -9,7 +9,7 @@ import type { CliIo, ParsedArgs } from "../types.ts";
 const REUSE_WAIT_MS = 5_000;
 const REUSE_POLL_MS = 200;
 
-export async function serveCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
+export async function webCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   const { startServer } = await import("@ringko-ai/app");
   const config = readConfig(parsed, io);
   if (!config) return 2;
@@ -24,7 +24,7 @@ export async function serveCommand(parsed: ParsedArgs, io: CliIo): Promise<numbe
   const envPort = process.env.RINGKO_PORT ? Number(process.env.RINGKO_PORT) : undefined;
   const port = parsed.port ?? (Number.isInteger(envPort) && envPort! > 0 && envPort! <= 65_535 ? envPort! : sharedPort(workspace, configPath));
 
-  // One backend owns each workspace/config pair; a second `serve` attaches to it.
+  // One backend owns each workspace/config pair; a second `web` attaches to it.
   const existing = await findLiveBackend({ workspace, configPath });
   if (existing) {
     io.out(`RingKo backend / WebUI: ${existing.url}`);
@@ -55,9 +55,12 @@ export async function serveCommand(parsed: ParsedArgs, io: CliIo): Promise<numbe
   io.out(`RingKo backend / WebUI: ${server.url}`);
   await new Promise<void>(finish => {
     const shutdown = () => {
-      process.off("SIGINT", shutdown); process.off("SIGTERM", shutdown); server.stop();
-      const bounded = Promise.race([runtimeHost.close(), new Promise<void>(resolve => setTimeout(resolve, 2_000))]);
-      void bounded.finally(finish);
+      process.off("SIGINT", shutdown); process.off("SIGTERM", shutdown);
+      void server.stop().then(result => {
+        if (result.timedOut) io.err(`Shutdown timed out; still settling: ${result.pendingRuns.join(", ") || "(runtime resources)"}`);
+        if (result.errors.length > 0) io.err(`Shutdown completed with ${result.errors.length} error(s).`);
+        finish();
+      }).catch(error => { io.err(`Shutdown failed: ${String(error)}`); finish(); });
     };
     process.once("SIGINT", shutdown); process.once("SIGTERM", shutdown);
   });

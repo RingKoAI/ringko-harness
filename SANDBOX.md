@@ -51,7 +51,7 @@ forwarding connector headers to a different endpoint.
 Local stdio servers run through the process runner and default to their
 workspace directory when no `cwd` is configured. A local connection records
 its actual sandbox mode; a writable or unconfined process cannot be reused as a
-read-only connection. Restart `ringko serve` after changing sandbox or remote
+read-only connection. Restart `ringko web` after changing sandbox or remote
 authorization settings so existing MCP processes use the new policy.
 
 ## Runners

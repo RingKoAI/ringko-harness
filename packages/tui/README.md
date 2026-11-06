@@ -20,7 +20,7 @@ ringko                       # interactive terminal UI (Ink; requires a TTY; def
 ringko service start         # automatically start/reuse the workspace backend
 ringko service status        # print backend URL
 ringko service stop          # refuses while a session is running
-ringko serve --shared --port 8787  # manually managed foreground server
+ringko web --shared --port 8787    # manually managed foreground server
 ```
 
 `run` reads `~/.ringko/settings.local.json` and `~/.ringko/provider.json` (or

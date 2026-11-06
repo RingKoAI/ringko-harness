@@ -102,7 +102,7 @@ export async function connectBackend(options: ConnectOptions): Promise<LiveBacke
     const executable = process.execPath;
     const script = process.argv[1];
     const compiled = script?.includes("$bunfs") || script?.includes("~BUN") || script === executable;
-    const args = [...(!compiled && script ? [resolve(script)] : []), "serve", "--shared", "--port", String(port), "--workspace", workspace, ...(configPath ? ["--config", configPath] : [])];
+    const args = [...(!compiled && script ? [resolve(script)] : []), "web", "--shared", "--port", String(port), "--workspace", workspace, ...(configPath ? ["--config", configPath] : [])];
     const child = spawn(executable, args, { cwd: workspace, env: process.env, detached: true, stdio: "ignore", windowsHide: true });
     const spawned = new Promise<void>((ready, reject) => { child.once("spawn", ready); child.once("error", reject); });
     child.unref();
@@ -115,5 +115,5 @@ export async function connectBackend(options: ConnectOptions): Promise<LiveBacke
     const client = clientFor(url, workspace);
     if ((await probe(client, workspace, configPath)).status === "ok") return { client, url, workspace };
   }
-  throw new Error(`Shared backend did not start at ${url}. Run ${cliCommand()} serve --port ${port} --workspace "${workspace}" --shared to inspect the error.`);
+  throw new Error(`Shared backend did not start at ${url}. Run ${cliCommand()} web --port ${port} --workspace "${workspace}" --shared to inspect the error.`);
 }

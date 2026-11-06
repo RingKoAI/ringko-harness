@@ -25,9 +25,10 @@ import { configCommand } from "./cli/commands/config.ts";
 import { mcpCommand } from "./cli/commands/mcp.ts";
 import { pluginsCommand } from "./cli/commands/plugins.ts";
 import { modelsCommand } from "./cli/commands/models.ts";
-import { serveCommand } from "./cli/commands/serve.ts";
+import { webCommand } from "./cli/commands/web.ts";
 import { sessionCommand } from "./cli/commands/session.ts";
 import { skillsCommand } from "./cli/commands/skills.ts";
+import { subagentsCommand } from "./cli/commands/subagents.ts";
 import { tuiCommand } from "./cli/commands/tui.ts";
 import { readConfig } from "./cli/shared.ts";
 import type { CliIo, ParsedArgs } from "./cli/types.ts";
@@ -46,7 +47,7 @@ Usage:
 Commands:
   run <prompt>         Run the agent
   loop <prompt>        Repeat a prompt until --completion-promise or --max-iterations
-  serve                Start the local backend and browser UI
+  web                  Start the local backend and browser UI
   service start|status|stop  Manage the shared backend of this workspace
   tools                List the registered tools
   skills               List installed skills (~/.ringko/skills, ~/.agents/skills)
@@ -58,6 +59,7 @@ Commands:
   plugins              List plugin directories and trust state
   plugins trust <name> Trust a plugin (from user settings)
   plugins untrust <name> Stop trusting a plugin
+  subagents            List configured subagent providers
   session list         List stored sessions (~/.ringko/sessions)
   models [provider]    Discover a provider's models and save them
   auth login [provider]  Sign in via OAuth (openai | github-copilot; --device for headless)
@@ -80,8 +82,8 @@ Options:
   -s, --session [id]   Continue a session; omit the id for the session picker
   --workspace <dir>    Workspace root for file tools (default: current directory)
   --server <url>       Connect to an existing local backend (or RINGKO_SERVER)
-  --port <number>      (serve) HTTP port (default: per-workspace shared port)
-  --shared             (serve) Pin the backend to the launch workspace
+  --port <number>      (web) HTTP port (default: per-workspace shared port)
+  --shared             (web) Pin the backend to the launch workspace
   --max-iterations <n>   (loop) Stop after n iterations; 0 = unlimited (default)
   --completion-promise <text>  (loop) Stop when a reply contains <promise>text</promise>
 
@@ -337,7 +339,7 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       try {
         const preview = runtime.previewTools(config);
         try { for (const tool of preview.agent.tools.list()) io.out(tool.name); }
-        finally { preview.close(); }
+        finally { await preview.close(); }
         return 0;
       } finally {
         await runtime.close();
@@ -349,14 +351,16 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       return mcpCommand(parsed, io);
     case "plugins":
       return pluginsCommand(parsed, io);
+    case "subagents":
+      return subagentsCommand(parsed, io);
     case "session":
       return sessionCommand(io);
     case "models":
       return modelsCommand(parsed, io);
     case "auth":
       return authCommand(parsed, io);
-    case "serve":
-      return serveCommand(parsed, io);
+    case "web":
+      return webCommand(parsed, io);
     case "service": {
       const action = parsed.positionals[0] ?? "status";
       if (action !== "start" && action !== "status" && action !== "stop") { io.err(`Usage: ${cliCommand()} service start|status|stop`); return 2; }

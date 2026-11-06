@@ -11,7 +11,7 @@ host-facing SDK.
 
 `@ringko-ai/rkh` installs the built-in `ringko` command over those facilities: an
 interactive terminal UI (plain `ringko`, the default) and a browser UI
-(`ringko serve`, which prints the URL to open). Both run the same tool registry,
+(`ringko web`, which prints the URL to open). Both run the same tool registry,
 the same approval gate and the same event-sourced session log. The executable is a
 Bun bundle, so Node.js 24+ **and** [Bun](https://bun.sh/) 1.2+ must be on `PATH` —
 Bun is not optional.
@@ -19,7 +19,7 @@ Bun is not optional.
 ```sh
 npm install -g @ringko-ai/rkh
 ringko          # terminal interface (default)
-ringko serve    # local backend + browser interface, prints its URL
+ringko web      # local backend + browser interface, prints its URL
 ```
 
 `ringko help` lists every command. Without a global install, `npx @ringko-ai/rkh tui`

@@ -24,7 +24,7 @@ interface ReplModule {
 
 export async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
   if (!process.stdout.isTTY) {
-    io.err(`${cliCommand()} requires an interactive terminal; use ${cliCommand()} serve for the browser UI.`);
+    io.err(`${cliCommand()} requires an interactive terminal; use ${cliCommand()} web for the browser UI.`);
     return 1;
   }
   const config = readConfig(parsed, io);
