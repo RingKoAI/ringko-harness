@@ -154,6 +154,10 @@ export interface ServerOptions {
   shared?: boolean;
   /** Process-level runtime owner; the server creates one when omitted. */
   runtimeHost?: RuntimeSupervisor;
+  /** Product version reported to the WebUI; omitted when the host is unversioned. */
+  version?: string;
+  /** Product license identifier reported to the WebUI. */
+  license?: string;
 }
 
 export interface ServerCloseResult {
@@ -283,18 +287,24 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   function activateProject(id: string | undefined): void {
     if (options.shared) throw new Error("This shared backend is pinned to its workspace. Start a client in the other workspace instead.");
     if (activeRuns.size) throw new Error("Cannot switch workspace while sessions are running.");
-    projects = id ? { projects: projects.projects, current: id } : { projects: projects.projects };
-    saveProjects(projects);
     const active = id ? projects.projects.find((entry) => entry.id === id) : undefined;
     const nextWorkspace = active ? resolve(active.path) : baseWorkspace;
     if (nextWorkspace !== workspace && shouldRegisterOwner) {
-      // Claim the new owner before publishing it; a live owner rejects the switch.
+      // Claim the new owner before persisting or publishing it; a live owner
+      // rejects the switch and leaves the current workspace untouched.
       claimOwnership(nextWorkspace, actualPort);
       removeBackendRegistration(workspace, ownerConfigPath, sync.instance);
     }
+    projects = id ? { projects: projects.projects, current: id } : { projects: projects.projects };
+    saveProjects(projects);
     workspace = nextWorkspace;
     store = new SessionStore({ cwd: workspace });
     resetMcp();
+    // The startup pass belongs to the launch workspace; a switched project
+    // must load its own skills and MCP servers before its first run.
+    try { runtimeFor(workspace).reloadCapabilities(); }
+    catch (error) { writeDiagnostic("capabilities.reload", String(error)); }
+    startRuntimeFor(workspace);
     sync.publish("workspace");
   }
 
@@ -311,10 +321,14 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   // Runtime event log + a time source; the model watches them via `subscribe`.
   const eventLog = runtimeHost.log;
   const stopTimeSource = createTimeSource(eventLog, { intervalMs: 60_000 });
-  const startupConfig = readConfig();
-  const startupSandbox = typeof startupConfig === "string" ? undefined : new Sandbox({ workspace, mode: startupConfig.sandbox?.mode ?? "workspace-write", additionalWritableRoots: startupConfig.sandbox?.additionalWritableRoots });
-  void runtimeFor(workspace).start(startupSandbox, typeof startupConfig === "string" ? undefined : startupConfig.sandbox?.mcp)
-    .then(() => sync.publish("config"), error => writeDiagnostic("mcp.start", String(error)));
+  /** Open MCP connections for a workspace before its first model run. */
+  function startRuntimeFor(target: string): void {
+    const config = readConfig();
+    const sandbox = typeof config === "string" ? undefined : new Sandbox({ workspace: target, mode: config.sandbox?.mode ?? "workspace-write", additionalWritableRoots: config.sandbox?.additionalWritableRoots });
+    void runtimeFor(target).start(sandbox, typeof config === "string" ? undefined : config.sandbox?.mcp)
+      .then(() => sync.publish("config"), error => writeDiagnostic("mcp.start", String(error)));
+  }
+  startRuntimeFor(workspace);
 
   function readConfig(): RingkoConfig | string {
     try {
@@ -347,6 +361,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     const active = activeId ? projects.projects.find((entry) => entry.id === activeId) : undefined;
     return json({
       backend: { protocol: PROTOCOL_VERSION, instance: sync.instance },
+      version: options.version ?? null,
+      license: options.license ?? null,
       workspace,
       project: active ? { id: active.id, name: active.name } : null,
       auth: { required: Boolean(options.authToken) },
@@ -400,15 +416,23 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       return json({ error: "path does not exist." }, 400);
     }
     const existing = projects.projects.find((entry) => resolve(entry.path) === target);
+    const added = existing ?? {
+      id: `proj-${randomUUID().slice(0, 8)}`,
+      name: typeof body?.name === "string" && body.name.trim().length > 0 ? body.name.trim() : basename(target),
+      path: target,
+    };
     if (!existing) {
-      const id = `proj-${randomUUID().slice(0, 8)}`;
-      const name = typeof body?.name === "string" && body.name.trim().length > 0 ? body.name.trim() : basename(target);
-      projects = { projects: [...projects.projects, { id, name, path: target }], ...(projects.current ? { current: projects.current } : {}) };
-      if (!projects.current) {
-        activateProject(id);
-        return handleProjects();
-      }
+      projects = { projects: [...projects.projects, added], ...(projects.current ? { current: projects.current } : {}) };
+    }
+    // Adding a working directory makes it the active project, so its skills and
+    // MCP servers appear in this Web session without a separate switch.
+    try {
+      activateProject(added.id);
+    } catch (error) {
+      // A pinned backend or a running session keeps its workspace; the project
+      // stays registered and can be activated later.
       saveProjects(projects);
+      writeDiagnostic("project.activate", error instanceof Error ? error.message : String(error));
     }
     return handleProjects();
   }

@@ -3,6 +3,7 @@ import { defaultProjectWorkspace } from "@ringko-ai/config";
 import { canonicalWorkspace, sharedPort } from "@ringko-ai/client/local";
 import { RuntimeSupervisor } from "@ringko-ai/sdk/runtime";
 import { findLiveBackend } from "../../backend.ts";
+import { LICENSE, VERSION } from "../../version.ts";
 import { readConfig } from "../shared.ts";
 import type { CliIo, ParsedArgs } from "../types.ts";
 
@@ -34,7 +35,7 @@ export async function webCommand(parsed: ParsedArgs, io: CliIo): Promise<number>
   let server;
   const runtimeHost = new RuntimeSupervisor({ ...(configPath ? { configPath } : {}) });
   try {
-    server = startServer({ workspace, port, configPath, shared: parsed.shared, authToken: process.env.RINGKO_WEB_TOKEN?.trim(), runtimeHost });
+    server = startServer({ workspace, port, configPath, shared: parsed.shared, authToken: process.env.RINGKO_WEB_TOKEN?.trim(), runtimeHost, version: VERSION, license: LICENSE });
   } catch (error) {
     void runtimeHost.close();
     // A client may be starting the same owner right now; wait for it instead

@@ -42,6 +42,8 @@ export interface ProjectsResponse {
 
 export interface Info {
   workspace: string;
+  version: string | null;
+  license: string | null;
   project: { id: string; name: string } | null;
   auth: { required: boolean };
   access: Access;

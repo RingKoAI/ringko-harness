@@ -1,7 +1,7 @@
 import { useTheme } from 'next-themes'
 import { useEffect, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { fetchPermissionRules, removePermissionRule, setModel, type PermissionRule } from '@/api'
+import { fetchPermissionRules, removePermissionRule, type PermissionRule } from '@/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,7 +22,6 @@ const PAGES: { slug: string; label: MessageKey }[] = [
   { slug: 'projects', label: 'settings.projects' },
   { slug: 'providers', label: 'settings.providers' },
   { slug: 'oauth', label: 'settings.oauth' },
-  { slug: 'models', label: 'settings.models' },
   { slug: 'connectors', label: 'settings.connectors' },
   { slug: 'skills', label: 'settings.skills' },
   { slug: 'permissions', label: 'settings.permissions' },
@@ -91,62 +90,6 @@ function GeneralPage() {
   )
 }
 
-function ModelsPage() {
-  const { t } = useI18n()
-  const app = useApp()
-  const providers = app.info?.providers ?? []
-  const current = app.info?.modelId ?? ''
-
-  function choose(value: string): void {
-    if (value === current) return
-    setModel(value)
-      .then(() => {
-        app.refreshInfo()
-        toast.success(t('model.switched'))
-      })
-      .catch((cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)))
-  }
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('settings.models')}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {providers.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t('settings.noProviders')}</p>
-        ) : (
-          providers.map((provider) => (
-            <div key={provider.name} className="rounded-lg border p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">{provider.name}</span>
-                <Badge variant="secondary">{provider.type ?? '—'}</Badge>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {provider.models.map((id) => {
-                  const value = `${provider.name}/${id}`
-                  const active = value === current
-                  return (
-                    <Button
-                      key={value}
-                      size="sm"
-                      variant={active ? 'default' : 'outline'}
-                      className="font-mono text-xs"
-                      onClick={() => choose(value)}
-                    >
-                      {id}
-                    </Button>
-                  )
-                })}
-              </div>
-            </div>
-          ))
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
 function PermissionsPage() {
   const { t } = useI18n()
   const workspace = useApp().info?.workspace
@@ -209,14 +152,25 @@ function PermissionsPage() {
 
 function AboutPage() {
   const { t } = useI18n()
+  const app = useApp()
+  const license = app.info?.license ?? null
   return (
     <Card>
       <CardHeader>
         <CardTitle>{t('settings.about')}</CardTitle>
       </CardHeader>
       <CardContent className="divide-y">
-        <Row label={t('settings.version')}>{site.version}</Row>
-        <Row label={t('nav.settings')}>
+        <Row label={t('settings.version')}>{app.info?.version ?? '—'}</Row>
+        <Row label={t('settings.license')}>
+          {license ? (
+            <a href={`${site.repo}/blob/HEAD/LICENSE`} className="text-primary hover:underline" target="_blank" rel="noreferrer">
+              {license}
+            </a>
+          ) : (
+            '—'
+          )}
+        </Row>
+        <Row label={t('settings.repository')}>
           <a href={site.repo} className="text-primary hover:underline" target="_blank" rel="noreferrer">
             {site.repo.replace(/^https?:\/\//, '')}
           </a>
@@ -245,8 +199,6 @@ export function SettingsPanel({
       <OAuthPage />
     ) : active === 'usage' ? (
       <UsagePage />
-    ) : active === 'models' ? (
-      <ModelsPage />
     ) : active === 'connectors' ? (
       <ConnectorsPage />
     ) : active === 'skills' ? (
