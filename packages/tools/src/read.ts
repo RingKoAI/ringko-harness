@@ -61,13 +61,13 @@ function parseRead(value: unknown): ReadInput {
   }
   const input: ReadInput = { path: record.path };
   if (record.offset !== undefined) {
-    if (typeof record.offset !== "number" || !Number.isInteger(record.offset) || record.offset < 0) {
+    if (typeof record.offset !== "number" || !Number.isSafeInteger(record.offset) || record.offset < 0) {
       throw new TypeError("'offset' must be a non-negative integer.");
     }
     input.offset = record.offset;
   }
   if (record.limit !== undefined) {
-    if (typeof record.limit !== "number" || !Number.isInteger(record.limit) || record.limit < 1) {
+    if (typeof record.limit !== "number" || !Number.isSafeInteger(record.limit) || record.limit < 1) {
       throw new TypeError("'limit' must be a positive integer.");
     }
     input.limit = record.limit;
@@ -297,13 +297,31 @@ export function createReadTool(workspace: Workspace, tracker: FileTracker = new 
         };
       }
 
-      const truncatedByBytes = raw.length > MAX_BYTES;
-      const text = truncatedByBytes ? raw.slice(0, MAX_BYTES) : raw;
-      const lines = text.split("\n");
       const start = offset ?? 0;
       const count = limit ?? DEFAULT_LIMIT;
-      const slice = lines.slice(start, start + count);
-      const truncated = truncatedByBytes || lines.length > start + count;
+      // Locate the requested page before applying the output budget. A bounded
+      // source scan avoids allocating an array for every line of a large file.
+      let position = 0, skipped = 0;
+      while (skipped < start && position <= raw.length) {
+        const newline = raw.indexOf("\n", position);
+        position = newline < 0 ? raw.length + 1 : newline + 1;
+        skipped++;
+      }
+      const slice: string[] = [];
+      let characters = 0, truncated = false;
+      while (position <= raw.length && slice.length < count) {
+        const newline = raw.indexOf("\n", position);
+        const end = newline < 0 ? raw.length : newline;
+        const prefixCharacters = String(start + slice.length + 1).padStart(6, " ").length + "→".length;
+        const room = MAX_BYTES - characters - prefixCharacters;
+        const length = end - position;
+        if (room <= 0) { truncated = true; break; }
+        slice.push(raw.slice(position, Math.min(end, position + room)));
+        characters += Math.min(length, room) + prefixCharacters + 1;
+        if (length > room) { truncated = true; break; }
+        position = newline < 0 ? raw.length + 1 : newline + 1;
+      }
+      truncated ||= position <= raw.length;
       return {
         path: shown,
         content: addLineNumbers(slice, start),

@@ -25,6 +25,19 @@ const never = async (): Promise<boolean> => {
 };
 
 describe("read", () => {
+  it("pages beyond the first million characters and handles EOF and long lines", async () => {
+    await writeFile(join(dir, "long.txt"), "line\n".repeat(210_000) + "TAIL_MARKER");
+    const tool = createReadTool(createWorkspace(dir));
+    const tail = await executeTool(tool, { path: "long.txt", offset: 210_000, limit: 1 }, never);
+    expect(tail.content).toContain("210001→TAIL_MARKER"); expect(tail.truncated).toBeUndefined();
+    const beyond = await executeTool(tool, { path: "long.txt", offset: Number.MAX_SAFE_INTEGER }, never);
+    expect(beyond.content).toBe(""); expect(beyond.truncated).toBeUndefined();
+    await writeFile(join(dir, "single.txt"), "x".repeat(1_000_001));
+    const single = await executeTool(tool, { path: "single.txt" }, never);
+    expect(single.truncated).toBe(true); expect(single.content!.length).toBeLessThan(1_000_020);
+    await writeFile(join(dir, "empty.txt"), "");
+    expect((await executeTool(tool, { path: "empty.txt" }, never)).truncated).toBeUndefined();
+  });
   it("returns an image part for a supported raster image", async () => {
     await writeFile(join(dir, "pixel.png"), PNG);
     const tool = createReadTool(createWorkspace(dir));
