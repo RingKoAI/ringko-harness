@@ -71,6 +71,41 @@ ringko info
 | `compaction` | Automatic context compaction. Enabled by default at 80% of the window, keeping six recent messages. |
 | `workflow` | Active workflow id from `~/.ringko/workflows.json`. |
 | `subagents` | Delegated-provider registry: `default`, `maxActive`, `maxPerRun` and `providers`. See [Subagents](subagents.md). |
+| `updates.checkOnStartup` | Check the latest stable CLI release on startup. Defaults to `true`. |
+| `updates.autoUpdate` | Install an available update during a startup check. Defaults to `false`. |
+
+## Version updates
+
+```json
+{
+  "updates": { "checkOnStartup": true, "autoUpdate": false }
+}
+```
+
+```sh
+ringko update --check
+ringko update
+ringko config set updates.checkOnStartup false
+ringko config set updates.autoUpdate true
+```
+
+Startup checks apply to the terminal UI, `web`, `run`, `loop` and `service start`.
+Help, version, configuration commands and backend workers do not check. Setting
+`checkOnStartup` to `false` also disables automatic installation on startup;
+manual `update` remains available. Explicit `--config` files are honored. Invalid
+values produce a warning and use the defaults above. Checks time out after five
+seconds; a failed check or installation is reported without blocking the command.
+
+The npm registry's `latest` version is used; prereleases and downgrades are not
+installed automatically. Global npm installations update their owning global
+prefix. Local/npx installations must use their original package manager; source
+checkouts must be pulled and rebuilt. Standalone installations download the
+matching official GitHub release, verify SHA-256 and the executable's version,
+then replace the binary and WebUI together with rollback on failure. The install
+directory must be writable; the updater never elevates privileges. A successful
+startup installation ends the launch; restart RingKo and any shared backend to
+use the new version. On Windows, backups of an executable still in use may need
+to be removed after exit; their location is reported.
 
 Project-level files can also carry an `mcpServers` map; see
 [MCP servers](mcp.md) for the exact lookup order.

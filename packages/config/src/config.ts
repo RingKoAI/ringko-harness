@@ -55,6 +55,8 @@ export type PluginTrust = string | PluginTrustEntry;
 
 export interface RingkoConfig {
   workspace?: string;
+  /** CLI updates: startup checks default to true, installation defaults to false. */
+  updates?: { checkOnStartup?: boolean; autoUpdate?: boolean };
   capabilities?: {
     network?: boolean;
     /** Permit direct local/private network targets for webfetch. Off by default. */
@@ -375,4 +377,3 @@ export function parseConfigValue(raw: string): unknown {
     return raw;
   }
 }
-

@@ -70,6 +70,35 @@ ringko info
 | `compaction` | 自动上下文压缩。默认在窗口 80% 时触发，保留最近六条消息。 |
 | `workflow` | 当前工作流 id，来自 `~/.ringko/workflows.json`。 |
 | `subagents` | 委派 provider 注册表：`default`、`maxActive`、`maxPerRun`、`providers`。见[子代理](subagents.zh-CN.md)。 |
+| `updates.checkOnStartup` | 启动时检查 CLI 最新稳定版，默认 `true`。 |
+| `updates.autoUpdate` | 启动检测发现新版本后自动安装，默认 `false`。 |
+
+## 版本更新
+
+```json
+{
+  "updates": { "checkOnStartup": true, "autoUpdate": false }
+}
+```
+
+```sh
+ringko update --check
+ringko update
+ringko config set updates.checkOnStartup false
+ringko config set updates.autoUpdate true
+```
+
+启动检测适用于终端 UI、`web`、`run`、`loop` 和 `service start`；帮助、版本、配置命令
+及后台服务进程不会检测。关闭 `checkOnStartup` 也会关闭启动时自动安装，手动 `update`
+仍可使用。支持显式 `--config`。无效配置会提示并回退到上述默认值；检测最多等待 5 秒，
+检测或安装失败会报告原因，随后继续原命令。
+
+以 npm registry 的 `latest` 为稳定版来源，不自动安装预发布版或降级。全局 npm 安装更新
+其所属的全局目录；本地/npx 安装需通过原包管理器更新，源码运行需拉取代码并重新构建。
+独立版下载对应平台的官方 GitHub Release，验证 SHA-256 与可执行文件版本，并在替换
+程序和 WebUI 失败时回滚。安装目录需要可写，更新器不会提权。启动时成功安装会结束本次
+启动，请重新启动 RingKo 及共享后端以使用新版本。Windows 上仍在使用的旧可执行文件
+可能暂时无法清理，程序会报告其路径，退出后即可删除。
 
 项目级文件也可以带 `mcpServers`；查找顺序见 [MCP server](mcp.zh-CN.md)。
 

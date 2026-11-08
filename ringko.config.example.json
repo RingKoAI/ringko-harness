@@ -1,5 +1,9 @@
 {
   "workspace": ".",
+  "updates": {
+    "checkOnStartup": true,
+    "autoUpdate": false
+  },
   "provider": {
     "name": "echo"
   },

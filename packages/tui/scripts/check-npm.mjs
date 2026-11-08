@@ -34,6 +34,7 @@ try {
   const [catalogModel] = Object.values(catalogEntry.models);
   const configRoot = join(env.RINGKO_HOME, ".ringko");
   mkdirSync(configRoot, { recursive: true });
+  writeFileSync(join(configRoot, "settings.local.json"), JSON.stringify({ updates: { checkOnStartup: false } }));
   writeFileSync(join(configRoot, "provider.json"), JSON.stringify({
     model: "Smoke/alias",
     providers: [{ name: "Smoke", type: "echo", models: [{ id: "alias", name: "Offline model", catalogId: `${catalogProvider}/${catalogModel.id}` }] }],
@@ -56,7 +57,7 @@ try {
   const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
   const port = probe.port;
   probe.stop(true);
-  server = Bun.spawn([process.execPath, cli, "serve", "--shared", "--port", String(port)], {
+  server = Bun.spawn([process.execPath, cli, "web", "--shared", "--port", String(port)], {
     cwd: root, env, stdout: "pipe", stderr: "pipe",
   });
   const stderr = new Response(server.stderr).text();

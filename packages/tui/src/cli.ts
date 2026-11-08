@@ -33,9 +33,10 @@ import { tuiCommand } from "./cli/commands/tui.ts";
 import { readConfig } from "./cli/shared.ts";
 import type { CliIo, ParsedArgs } from "./cli/types.ts";
 
-import { version } from "../package.json";
+import { VERSION } from "./version.ts";
+import { startupUpdate, updateCommand } from "./updates/index.ts";
 
-export const VERSION = version;
+export { VERSION } from "./version.ts";
 export type { CliIo, ParsedArgs } from "./cli/types.ts";
 
 const USAGE = `${cliCommand()} - RingKo agent harness
@@ -72,6 +73,7 @@ Commands:
   config set <k> <v>   Set a dotted config key (e.g. provider.model)
   config unset <k>     Remove a dotted config key
   version              Print the version
+  update [--check]     Check for a new stable version or install it
   help                 Show this help
 
 Options:
@@ -302,7 +304,7 @@ async function loopCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
 }
 
 /** Run the CLI and resolve with a process exit code. */
-export async function runCli(argv: readonly string[], io: CliIo): Promise<number> {
+export async function runCli(argv: readonly string[], io: CliIo, options: { startupUpdates?: boolean } = {}): Promise<number> {
   applyProxyEnv();
   let parsed: ParsedArgs;
   try {
@@ -311,6 +313,8 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
     io.err(error instanceof Error ? error.message : "Invalid arguments.");
     return 2;
   }
+
+  if (options.startupUpdates && await startupUpdate(parsed, io)) return 0;
 
   switch (parsed.command) {
     case undefined:
@@ -331,6 +335,8 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
       io.out(mode.summary);
       return 0;
     }
+    case "update":
+      return updateCommand(parsed, io);
     case "tools": {
       const config = readConfig(parsed, io);
       if (!config) return 2;
@@ -389,7 +395,7 @@ if (import.meta.main) {
   void runCli(process.argv.slice(2), {
     out: (line) => process.stdout.write(`${line}\n`),
     err: (line) => process.stderr.write(`${line}\n`),
-  }).then(async (code) => {
+  }, { startupUpdates: true }).then(async (code) => {
     // Flush the resume hint before process.exit can discard pending output.
     await Promise.all([process.stdout, process.stderr].map(stream => new Promise<void>(resolve => {
       if (stream.destroyed) resolve(); else stream.write("", () => resolve());

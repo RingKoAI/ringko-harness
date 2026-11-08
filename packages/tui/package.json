@@ -21,13 +21,14 @@
   },
   "dependencies": {
     "@ringko-ai/app": "workspace:*",
-    "@ringko-ai/client": "workspace:*",
     "@ringko-ai/auth": "workspace:*",
+    "@ringko-ai/client": "workspace:*",
     "@ringko-ai/config": "workspace:*",
     "@ringko-ai/providers": "workspace:*",
     "@ringko-ai/repl": "workspace:*",
     "@ringko-ai/sdk": "workspace:*",
-    "@ringko-ai/session": "workspace:*"
+    "@ringko-ai/session": "workspace:*",
+    "fflate": "^0.8.3",
+    "tar": "^7.5.22"
   }
 }
-

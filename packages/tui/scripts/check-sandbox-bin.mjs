@@ -16,6 +16,8 @@ const workspace = join(temporary, "workspace");
 const outside = join(temporary, "outside");
 const home = join(temporary, "home");
 for (const path of [workspace, outside, home]) mkdirSync(path);
+mkdirSync(join(home, ".ringko"));
+writeFileSync(join(home, ".ringko", "settings.local.json"), JSON.stringify({ updates: { checkOnStartup: false } }));
 // Archive extraction creates a new executable with the destination's security
 // descriptor. Do not inherit a development workspace's Low-integrity label.
 const relocatedBinary = join(temporary, "ringko.exe");
@@ -26,7 +28,7 @@ listener.stop(true);
 assert.ok(port);
 const origin = `http://127.0.0.1:${port}`;
 const token = "isolated-sandbox-smoke-token";
-const child = Bun.spawn([relocatedBinary, "serve", "--shared", "--workspace", workspace, "--port", String(port)], {
+const child = Bun.spawn([relocatedBinary, "web", "--shared", "--workspace", workspace, "--port", String(port)], {
   cwd: temporary,
   env: { ...process.env, RINGKO_HOME: home, AGENTS_HOME: home, RINGKO_WEB_TOKEN: token },
   stdout: "ignore", stderr: "pipe",
