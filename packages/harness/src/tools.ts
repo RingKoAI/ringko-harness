@@ -11,6 +11,8 @@ import type { JobManager } from "./jobs.ts";
 import type { MessagePart, ToolMessageContent } from "./agent.ts";
 
 export interface ToolExecutionContext {
+  /** Host-owned child working directory; never taken from model arguments. */
+  cwd?: string;
   permissionCheck?: PermissionCheck;
   signal?: AbortSignal;
   callId?: string;

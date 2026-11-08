@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -21,6 +21,15 @@ const echo = "echo ringko";
 const PROCESS_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 5_000;
 
 describe("shell tool", () => {
+  it("uses the host-owned child cwd while preserving shell approval", async () => {
+    const child = join(cwd, "child"); mkdirSync(child);
+    let approvals = 0;
+    const output = await executeTool(createShellTool({ cwd, sandbox: new Sandbox({ workspace: cwd, mode: "danger-full-access" }) }),
+      { command: "pwd" }, async () => { approvals++; return true; }, "approval", { cwd: child });
+    expect(approvals).toBe(1);
+    if (!("stdout" in output)) throw new Error("Expected a foreground result.");
+    expect(output.exitCode).toBe(0); expect(output.stdout).toContain("child");
+  }, PROCESS_TEST_TIMEOUT_MS);
   it("streams background output and retrieves its result by job id", async () => {
     const jobs = new JobManager();
     const output = await executeTool(createShellTool({ cwd }), { command: echo, background: true }, async () => true, "approval", { jobs });

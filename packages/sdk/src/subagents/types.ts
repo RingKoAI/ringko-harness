@@ -147,6 +147,8 @@ export interface SubagentProviderContext {
 }
 
 export interface SubagentRunHandle {
+  /** Effective model selected by this provider, including its default. */
+  readonly modelId?: string;
   readonly childId: string;
   readonly provider: string;
   readonly sessionId?: string;

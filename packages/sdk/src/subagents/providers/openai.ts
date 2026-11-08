@@ -110,6 +110,7 @@ export class OpenAiProvider implements SubagentProvider {
     return this.inner.start(input, {
       ...context,
       model: await this.client(modelId),
+      modelId,
       models: this.modelIds,
       resolveModel: id => this.client(id),
     });
@@ -119,6 +120,7 @@ export class OpenAiProvider implements SubagentProvider {
     return this.inner.resume(entry, {
       ...context,
       model: await this.client(entry.model ?? this.options.model),
+      modelId: entry.model ?? this.options.model,
       models: this.modelIds,
       resolveModel: id => this.client(id),
     });

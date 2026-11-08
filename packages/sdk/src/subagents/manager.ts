@@ -147,7 +147,6 @@ export class SubagentManager {
     this.active += 1;
     this.launched += 1;
     const cwd = resolve(this.options.workspace, input.cwd ?? ".");
-    const modelId = input.model ?? base.modelId ?? "current";
     const context: SubagentProviderContext = {
       ...base,
       workspace: this.options.workspace,
@@ -163,12 +162,13 @@ export class SubagentManager {
       this.active -= 1;
       throw error;
     }
+    const modelId = handle.modelId ?? input.model ?? base.modelId ?? "current";
     const entry: SubagentCatalogEntry = {
       childId: handle.childId,
       provider: providerName,
       description: input.description,
       mode: input.mode,
-      ...(input.model ? { model: input.model } : {}),
+      model: modelId,
       status: "running",
       startedAt: Date.now(),
       completedAt: null,

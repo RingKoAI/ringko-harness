@@ -49,7 +49,7 @@ export function createShellTool(options: ShellOptions): ToolDefinition<ShellInpu
         await sandbox.prepare();
         return await new Promise<ShellOutput>((resolve, reject) => {
         signal?.throwIfAborted();
-        const invocation: SandboxedProcess = sandbox.shell(input.command, options.cwd);
+        const invocation: SandboxedProcess = sandbox.shell(input.command, context?.cwd ?? options.cwd);
         const proc = spawn(invocation.executable, invocation.args, { cwd: invocation.cwd, env: invocation.env, windowsVerbatimArguments: invocation.windowsVerbatimArguments, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
         let stdout = "", stderr = "", truncated = false, timedOut = false, chunks = 0, stopping = false, eventsTruncated = false;
         let failure: unknown;

@@ -1,9 +1,11 @@
 import { expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ToolRegistry, defineTool, type ChatMessage, type ModelClient } from "@ringko-ai/harness";
 import { SessionStore } from "@ringko-ai/session";
+import { createGlobTool, createGrepTool, createReadTool, createWriteTool, createWorkspace } from "@ringko-ai/tools";
+import { buildChildTools } from "../src/subagents/child-tools.ts";
 import { buildSubagentProviders } from "../src/subagents/config.ts";
 import { SubagentManager } from "../src/subagents/manager.ts";
 import { AcpProvider } from "../src/subagents/providers/acp.ts";
@@ -18,6 +20,46 @@ function echoModel(seen: string[] = []): ModelClient {
     return { content: `echo:${last?.content ?? ""}`, toolCalls: [] };
   };
 }
+
+it("uses the child cwd for relative reads and writes while retaining parent approval rules", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rkh-child-cwd-"));
+  const cwd = join(root, "child"); mkdirSync(cwd);
+  writeFileSync(join(root, "marker.txt"), "parent"); writeFileSync(join(cwd, "marker.txt"), "child");
+  const tools = new ToolRegistry(); tools.register(createReadTool(createWorkspace(root))); tools.register(createWriteTool(createWorkspace(root)));
+  let turn = 0;
+  const model: ModelClient = async request => {
+    if (turn++ === 0) return { content: "", toolCalls: [
+      { id: "read", name: "read", arguments: { path: "marker.txt" } },
+      { id: "write", name: "write", arguments: { path: "marker.txt", content: "updated child" } },
+    ] };
+    return { content: request.messages.find(message => message.role === "tool" && message.toolCallId === "read")?.content ?? "", toolCalls: [] };
+  };
+  const manager = new SubagentManager({ workspace: root, providers: [new InProcessProvider()], context: { workspace: root, tools, model } });
+  try {
+    const managed = await manager.start({ description: "cwd", prompt: "Read then write marker.txt", mode: "write", cwd: "child" });
+    const result = await managed.result;
+    expect(result.status).toBe("completed"); expect(result.content).toContain("1→child");
+    expect(readFileSync(join(root, "marker.txt"), "utf8")).toBe("parent");
+    expect(readFileSync(join(cwd, "marker.txt"), "utf8")).toBe("updated child");
+  } finally { await manager.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+it("rebases optional file paths without accepting null or bypassing external-file approval", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rkh-child-path-gate-"));
+  const workspace = join(root, "parent"), cwd = join(workspace, "child"); mkdirSync(cwd, { recursive: true });
+  writeFileSync(join(root, "external.txt"), "private"); writeFileSync(join(cwd, "inside.txt"), "inside");
+  const tools = new ToolRegistry(); tools.register(createReadTool(createWorkspace(workspace))); tools.register(createGlobTool(createWorkspace(workspace))); tools.register(createGrepTool(createWorkspace(workspace)));
+  const child = buildChildTools(tools, "read", { cwd, workspace, signal: new AbortController().signal });
+  try {
+    expect(await child.call("glob", { pattern: "*.txt" })).toMatchObject({ base: cwd, matches: ["inside.txt"] });
+    const target = join(cwd, "inside.txt");
+    expect(await child.call("grep", { pattern: "inside", path: "inside.txt" })).toMatchObject({ matches: [{ file: target }] });
+    writeFileSync(join(cwd, "child"), "inside");
+    expect(await child.call("grep", { pattern: "inside", output_mode: "files_with_matches" })).toMatchObject({ files: expect.arrayContaining([join(cwd, "child"), target]) });
+    await expect(child.call("glob", { pattern: "*", path: null })).rejects.toThrow("non-empty string");
+    await expect(child.call("read", { path: "../../external.txt" })).rejects.toThrow("requires approval");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 function toolsWithFixture(exposed: string[]): ToolRegistry {
   const tools = new ToolRegistry();
@@ -263,16 +305,28 @@ it("supports both OpenAI transports (Responses and Chat Completions)", async () 
   } });
   const root = mkdtempSync(join(tmpdir(), "rkh-subagent-openai-"));
   try {
-    const store = new SessionStore({ cwd: root });
+    const store = new SessionStore({ cwd: root, root: join(root, "sessions") });
     const session = store.create();
     for (const protocol of ["responses", "chat"] as const) {
-      const provider = new OpenAiProvider({ name: `oa-${protocol}`, model: "gpt-test", protocol, baseURL: `http://127.0.0.1:${server.port}/v1`, apiKey: "test" });
-      const manager = new SubagentManager({ workspace: root, providers: [provider], defaultProvider: provider.name, session, context: context(root, store, echoModel(), new ToolRegistry(), session.id) });
+      const provider = new OpenAiProvider({ name: `oa-${protocol}`, model: "gpt-test", models: ["gpt-test", "gpt-override"], protocol, baseURL: `http://127.0.0.1:${server.port}/v1`, apiKey: "test" });
+      const options = { workspace: root, providers: [provider], defaultProvider: provider.name, session, context: context(root, store, echoModel(), new ToolRegistry(), session.id) };
+      const manager = new SubagentManager(options);
       const started = await manager.start({ description: "API", prompt: "hello", mode: "read" });
       const result = await started.result;
       expect(result).toMatchObject({ status: "completed", content: `${protocol} answer` });
+      expect(started.entry.model).toBe("gpt-test");
+      const explicit = await manager.start({ description: "Override", prompt: "hello", mode: "read", model: "gpt-override" });
+      await explicit.result; expect(explicit.entry.model).toBe("gpt-override");
       await manager.close();
+      const resumed = new SubagentManager(options);
+      try {
+        await resumed.send(started.entry.childId, "continue default");
+        await resumed.send(explicit.entry.childId, "continue override");
+        expect(resumed.listChildren().find(entry => entry.childId === started.entry.childId)?.model).toBe("gpt-test");
+        expect(resumed.listChildren().find(entry => entry.childId === explicit.entry.childId)?.model).toBe("gpt-override");
+      } finally { await resumed.close(); }
     }
+    session.close();
     expect(paths.some(path => path.endsWith("/responses"))).toBe(true);
     expect(paths.some(path => path.endsWith("/chat/completions"))).toBe(true);
   } finally {

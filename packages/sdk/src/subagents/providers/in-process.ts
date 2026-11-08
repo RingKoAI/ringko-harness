@@ -55,8 +55,8 @@ interface LocalChild {
   result: PromiseWithResolvers<SubagentResult>;
 }
 
-function instructions(mode: SubagentMode): string {
-  return `You are a ${mode} subagent working on a delegated task. Your context is independent of the parent. Follow the supplied task; report findings, changes, verification and limitations. Do not claim an unavailable capability. Return a concise final answer.`;
+function instructions(mode: SubagentMode, cwd: string): string {
+  return `You are a ${mode} subagent working on a delegated task. Your working directory is ${JSON.stringify(cwd)}; relative file paths resolve there. Tool result roots are absolute paths. Your context is independent of the parent. Follow the supplied task; report findings, changes, verification and limitations. Do not claim an unavailable capability. Return a concise final answer.`;
 }
 
 function clip(text: string, limit: number): { content: string; truncated: boolean } {
@@ -129,6 +129,7 @@ export class InProcessProvider implements SubagentProvider {
     return {
       childId: child.id,
       provider: this.name,
+      ...(child.modelId ? { modelId: child.modelId } : {}),
       ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
       capabilities: this.capabilities,
       result,
@@ -173,6 +174,7 @@ export class InProcessProvider implements SubagentProvider {
     return {
       childId: child.id,
       provider: this.name,
+      ...(child.modelId ? { modelId: child.modelId } : {}),
       ...(child.sessionId ? { sessionId: child.sessionId } : {}),
       capabilities: this.capabilities,
       result: child.result.promise,
@@ -254,7 +256,7 @@ export class InProcessProvider implements SubagentProvider {
     if (parentSignal?.aborted) onParent();
     const timer = setTimeout(() => controller.abort(new DOMException("Subagent deadline exceeded.", "TimeoutError")), this.timeoutMs);
     child.controller = controller;
-    const instructionsText = instructions(child.mode);
+    const instructionsText = instructions(child.mode, child.cwd);
     try {
       context.onEvent?.({ childId: child.id, provider: this.name, type: "status", status: "running", time: Date.now() });
       const history = child.session ? toChatMessages(child.session.all()) : child.memory;
@@ -265,6 +267,8 @@ export class InProcessProvider implements SubagentProvider {
       }
       context.onEvent?.({ childId: child.id, provider: this.name, type: "message", message: { role: "user", content: pending.content }, time: Date.now() });
       const tools = buildChildTools(context.tools, child.mode, {
+        cwd: child.cwd,
+        workspace: context.workspace,
         ...(context.requestApproval ? { requestApproval: context.requestApproval } : {}),
         ...(context.accessMode ? { accessMode: context.accessMode } : {}),
         ...(context.jobs ? { jobs: context.jobs } : {}),
