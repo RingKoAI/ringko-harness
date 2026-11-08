@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import { ToolRegistry } from "@ringko-ai/harness";
 import { EventLog, Scheduler, createScheduleTool, nextOccurrence } from "../src/index.ts";
 
@@ -38,6 +38,30 @@ describe("nextOccurrence", () => {
 });
 
 describe("Scheduler", () => {
+  it("chunks long waits without firing early or shifting a recurring deadline", () => {
+    let now = 1_000;
+    const callbacks: (() => void)[] = [], delays: number[] = [];
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const timers = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay: number) => {
+      callbacks.push(callback); delays.push(delay); return { unref() {} };
+    }) as unknown as typeof setTimeout);
+    const clear = spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    try {
+      const interval = 30 * 24 * 60 * 60 * 1000;
+      for (const rule of [{ kind: "at", at: now + interval }, { kind: "every", everyMs: interval }] as const) {
+        const log = new EventLog(), scheduler = new Scheduler(log);
+        const task = scheduler.create(rule), due = task.next!;
+        expect(delays.at(-1)).toBe(2_147_483_647);
+        now += 2_147_483_647; callbacks.shift()!();
+        expect(log.all()).toHaveLength(0); expect(task.next).toBe(due);
+        expect(delays.at(-1)).toBe(due - now);
+        now = due; callbacks.shift()!();
+        expect(log.all()).toHaveLength(1);
+        if (rule.kind === "every") { expect(task.next).toBe(due + interval); scheduler.remove(task.id); callbacks.length = 0; }
+        else expect(scheduler.list()).toHaveLength(0);
+      }
+    } finally { clock.mockRestore(); timers.mockRestore(); clear.mockRestore(); }
+  });
   it("rejects a one-shot time in the past without leaving a dead task", () => {
     const scheduler = new Scheduler(new EventLog());
     expect(() => scheduler.create({ kind: "at", at: Date.now() - 1_000 })).toThrow("must be in the future");

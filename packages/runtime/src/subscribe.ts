@@ -87,7 +87,7 @@ export function createSubscribeTool(log: EventLog, options: SubscribeToolOptions
     name,
     concurrency: "exclusive",
     description:
-      'Subscribe to runtime events by topic: "time" ticks, "job" events, or "session" (model/tool) events. Reads events after a cursor; pass waitMs to long-poll. Pass every (e.g. "10s") for an interval subscription that returns the next tick. Returns the events, the latest sequence (use it as the next "after"), and whether events were missed.',
+      'Subscribe to runtime events by topic: "time" ticks, "job" events, or "session" (model/tool) events. Reads events after a cursor; pass waitMs to long-poll. Pass every (e.g. "10s") for an interval subscription that returns the next tick. Returns the events, a continuation cursor in lastSeq (use it as the next "after"), and whether events were missed.',
     inputSchema: {
       type: "object",
       properties: {

@@ -24,7 +24,7 @@ export interface SubscribeOptions {
 
 export interface SubscribeResult {
   events: RuntimeEvent[];
-  /** The log's latest seq (a good `after` for the next call). */
+  /** Safe continuation cursor; never advances past an undelivered matching event. */
   lastSeq: number;
   /** True when `after` predates the retained window (events were dropped). */
   missed: boolean;
@@ -77,7 +77,7 @@ export class EventLog {
     const oldest = this.events[0]?.seq;
     const after = typeof options.after === "number" ? options.after : -1;
     const missed = oldest !== undefined && after >= 0 && after < oldest - 1;
-    return { events: matched, lastSeq: this.lastSeq, missed };
+    return { events: matched, lastSeq: matched.at(-1)?.seq ?? this.lastSeq, missed };
   }
 
   private waitForChange(ms: number): Promise<void> {

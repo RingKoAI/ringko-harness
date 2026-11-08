@@ -15,6 +15,7 @@ export type ScheduleRule =
 
 const WEEKDAYS: Record<string, number> = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
 const DAY_MS = 86_400_000;
+const MAX_TIMER_MS = 2_147_483_647;
 
 /** Parse a `HH:MM` local time. */
 function parseTime(value: string): { hour: number; minute: number } | undefined {
@@ -216,8 +217,16 @@ export class Scheduler {
       return;
     }
     entry.task.next = next;
+    this.waitUntil(id, next);
+  }
+
+  /** Preserve the due time across timer chunks, especially for recurring rules. */
+  private waitUntil(id: string, next: number): void {
+    const entry = this.tasks.get(id);
+    if (!entry) return;
     const timer = setTimeout(() => {
       if (!this.tasks.has(id)) return;
+      if (Date.now() < next) { this.waitUntil(id, next); return; }
       this.log.append(entry.task.topic, {
         scheduled: true,
         id,
@@ -228,7 +237,7 @@ export class Scheduler {
       // One-shot `at` fires once; recurring rules re-arm.
       if (entry.task.rule.kind === "at") this.tasks.delete(id);
       else this.arm(id);
-    }, Math.max(0, next - Date.now()));
+    }, Math.min(MAX_TIMER_MS, Math.max(0, next - Date.now())));
     timer.unref?.();
     entry.timer = timer;
   }

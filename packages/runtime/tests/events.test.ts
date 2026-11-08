@@ -3,6 +3,20 @@ import { ToolRegistry } from "@ringko-ai/harness";
 import { EventLog, createSubscribeTool, createTimeSource, parseDuration } from "../src/index.ts";
 
 describe("EventLog", () => {
+  it("delivers the entire backlog across cursors even with interleaved topics", async () => {
+    const log = new EventLog();
+    for (let index = 0; index < 205; index++) { log.append("job", index); log.append("other", index); }
+    const received: number[] = [];
+    let after = -1;
+    for (;;) {
+      const page = await log.subscribe({ topics: ["job"], after });
+      received.push(...page.events.map(event => event.data as number));
+      after = page.lastSeq;
+      if (!page.events.length) break;
+    }
+    expect(received).toEqual(Array.from({ length: 205 }, (_, index) => index));
+    expect(after).toBe(log.lastSeq);
+  });
   it("assigns monotonic seq and reads after a cursor", async () => {
     const log = new EventLog();
     log.append("time", { tick: 1 });
