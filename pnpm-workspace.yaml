@@ -7,4 +7,5 @@ overrides:
   dompurify: ">=3.4.17"
   lodash-es: ">=4.18.1"
   undici: "^8.12.3"
+  katex: "^0.18.2"
   zod@>=4.0.0: 4.6.6
