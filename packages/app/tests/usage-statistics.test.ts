@@ -2,7 +2,7 @@ import { expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SessionStore, recordUserMessage, type SessionEvent, type SessionHeader } from "@ringko-ai/session";
+import { SessionStore, legacyProjectDirName, serializeHeader, serializeEvent, recordUserMessage, type SessionEvent, type SessionHeader } from "@ringko-ai/session";
 import type { UsageStatistics } from "@ringko-ai/protocol";
 import { startServer } from "../src/server.ts";
 import { parseUsageStatisticsQuery, usageStatistics, UsageStatisticsService, USAGE_STATISTICS_LIMITS } from "../src/services/usage-statistics.ts";
@@ -17,6 +17,22 @@ function source(id: string, events: SessionEvent[], header: Partial<SessionHeade
   return { header: { id, version: 1, createdAt: NOW - 10 * DAY, ...header }, title: id, events };
 }
 const loaded = (...sources: ReturnType<typeof source>[]) => ({ sources, skipped: 0, limited: false });
+
+it("includes legacy usage alongside new logs without mixing colliding workspaces", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rkh-legacy-usage-"));
+  const workspace = join(root, "a-b", "c"), foreign = join(root, "a", "b-c");
+  try {
+    const store = new SessionStore({ root: join(root, "sessions"), cwd: workspace });
+    for (const [id, cwd] of [["legacy", workspace], ["foreign", foreign]]) {
+      const dir = join(store.root, legacyProjectDirName(cwd), id!); mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "session.jsonl"), serializeHeader({ id: id!, cwd, version: 1, createdAt: NOW }) + serializeEvent(usage(0, NOW, 10, 5)));
+    }
+    const fresh = store.create(); fresh.append([usage(0, NOW, 20, 5)]); fresh.close();
+    const result = await new UsageStatisticsService().read(store.root, workspace, {});
+    expect(result.summary?.inputTokens).toBe(30);
+    expect(result.sessions).toBe(2);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 it("aggregates reported input once and computes weighted cache ratios across every view", () => {
   const records = loaded(source("a", [usage(0, NOW - DAY, 100, 20, { usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 100, cacheWriteTokens: 0 } })]),

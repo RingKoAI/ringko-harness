@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { appendFileSync, closeSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sessionLogPath } from "../src/paths.ts";
+import { legacyProjectDirName, sessionDir, sessionLogPath } from "../src/paths.ts";
+import { serializeHeader } from "../src/format.ts";
 import { SessionStore } from "../src/store.ts";
 
 let root: string;
@@ -25,7 +26,7 @@ describe("SessionStore", () => {
   it("materializes lazily on flush", () => {
     const session = store().create({ id: "s1" });
     expect(session.id).toBe("s1");
-    expect(existsSync(join(root, "--" + cwd.replace(/\\/g, "/").replace(/^([A-Za-z]):/, "$1").replace(/[/]+/g, "-") + "--", "s1"))).toBe(
+    expect(existsSync(sessionDir(root, cwd, "s1"))).toBe(
       false,
     );
 
@@ -142,5 +143,29 @@ describe("SessionStore", () => {
 
   it("throws for an unknown session", () => {
     expect(() => store().open("missing")).toThrow("No session with id");
+  });
+
+  it("round-trips special ids and rejects a duplicate without corrupting the log", () => {
+    const ids = ["..", ".", "\u{1f600}", "\u1f60" + "0", "a", "A", "con"];
+    for (const id of ids) { const session = store().create({ id }); session.appendEvent("probe", { id }); session.close(); }
+    for (const id of ids) { const session = store().open(id); expect(session.all()[0]?.data).toEqual({ id }); session.close(); }
+    const duplicate = store().create({ id: ids[0] }); duplicate.appendEvent("duplicate");
+    expect(() => duplicate.flush()).toThrow(); expect(() => duplicate.close()).toThrow();
+    expect(store().open(ids[0]!).all()).toHaveLength(1);
+  });
+
+  it("reads legacy layouts while separating colliding workspace names", () => {
+    const firstCwd = join(root, "a-b", "c"), secondCwd = join(root, "a", "b-c");
+    const first = new SessionStore({ root, cwd: firstCwd }), second = new SessionStore({ root, cwd: secondCwd });
+    expect(legacyProjectDirName(firstCwd)).toBe(legacyProjectDirName(secondCwd));
+    for (const [id, cwd] of [["legacy-one", firstCwd], ["legacy-two", secondCwd]]) {
+      const dir = join(root, legacyProjectDirName(cwd), id!); mkdirSync(dir, { recursive: true });
+      writeFileSync(sessionLogPath(dir), serializeHeader({ id: id!, cwd, version: 1, createdAt: Date.now() }));
+    }
+    const fresh = first.create({ id: "new-one" }); fresh.appendEvent("new"); fresh.close();
+    expect(first.list().map(s => s.id).sort()).toEqual(["legacy-one", "new-one"]);
+    expect(second.list().map(s => s.id)).toEqual(["legacy-two"]);
+    const reopened = first.open("legacy-one", "write"); reopened.appendEvent("continued"); reopened.close();
+    expect(first.open("legacy-one").all()).toHaveLength(1);
   });
 });

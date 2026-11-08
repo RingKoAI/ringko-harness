@@ -22,6 +22,7 @@ import { acquireLock, type SessionLock } from "./lock.ts";
 import {
   NO_CWD_DIR_NAME,
   projectDirName,
+  projectDirNames,
   sessionDir,
   sessionLockPath,
   sessionLogPath,
@@ -136,6 +137,7 @@ export class SessionStore {
         const text = readFileSync(path, "utf8");
         const header = parseHeaderOnly(text);
         if (!header) continue;
+        if (this.cwd !== undefined && projectDirName(header.cwd) !== projectDirName(this.cwd)) continue;
         metas.push({ id: header.id, header, dir, path, sizeBytes: statSync(path).size });
       } catch {
         // skip unreadable logs
@@ -156,10 +158,10 @@ export class SessionStore {
     }
     // Scoped listings (list) stay within the workspace; unscoped flips (open by
     // id) search every project so deep links resolve across workspaces.
-    const target = scoped && this.cwd !== undefined ? projectDirName(this.cwd) : undefined;
+    const targets = scoped && this.cwd !== undefined ? new Set(projectDirNames(this.cwd)) : undefined;
     for (const project of projects) {
       if (!project.startsWith("--") && project !== NO_CWD_DIR_NAME) continue;
-      if (target !== undefined && project !== target) continue;
+      if (targets !== undefined && !targets.has(project)) continue;
       const base = join(this.root, project);
       let sessions: string[];
       try {
@@ -323,7 +325,7 @@ export class SessionHandle {
       if (!this.materialized) {
         mkdirSync(this.dir, { recursive: true, mode: 0o700 });
         this.lock = acquireLock(sessionLockPath(this.dir));
-        this.fd = openSync(this.path, "a");
+        this.fd = openSync(this.path, "wx", 0o600);
         writeSync(this.fd, serializeHeader(this.header));
         this.materialized = true;
       }

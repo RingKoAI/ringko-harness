@@ -7,7 +7,7 @@ history is derived from it.
 ## Layout
 
 ```
-<root>/--<normalized-cwd>--/<encoded-id>/session.jsonl
+<root>/--<workspace-key>--/<encoded-id>/session.jsonl
                                         session.lock
 ```
 
@@ -15,6 +15,14 @@ history is derived from it.
 (`{ type: "session", id, version, createdAt, cwd?, parentSession? }`); every
 later line is an event (`{ type, seq, time, data?, ignorable? }`) with a
 monotonic, contiguous `seq`.
+
+New workspace directories use the canonical workspace's SHA-256 key. Session
+ids use a device-safe prefix and fixed-width UTF-16 escapes (at most 255 encoded
+characters), including case escapes for case-insensitive filesystems. Existing
+human-readable workspace directories and their original id encodings remain
+discoverable and writable in place; no logs are migrated or rewritten. Scoped
+listings also verify the header's workspace so colliding legacy folder names
+cannot mix projects.
 
 ## Properties
 

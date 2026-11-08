@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { lstat, open, opendir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { backendKey, isPathInside } from "@ringko-ai/config";
-import { parseLog, projectDirName, SESSION_LOG_NAME, sessionTitle, sessionUsage, type SessionEvent, type SessionHeader } from "@ringko-ai/session";
+import { parseLog, projectDirNames, SESSION_LOG_NAME, sessionTitle, sessionUsage, type SessionEvent, type SessionHeader } from "@ringko-ai/session";
 import type { UsageCallKind, UsageRequest, UsageStatistics, UsageStatisticsBucket, UsageStatisticsQuery } from "@ringko-ai/protocol";
 
 export const USAGE_STATISTICS_LIMITS = {
@@ -49,54 +49,57 @@ export function parseUsageStatisticsQuery(params: URLSearchParams): UsageStatist
 /** Only read bounded regular logs beneath the selected workspace's session directory. */
 async function loadUsage(root: string, workspace: string): Promise<LoadedUsage> {
   const loaded: LoadedUsage = { sources: [], skipped: 0, limited: false };
-  const project = join(root, projectDirName(workspace));
-  let directory;
-  try {
-    if ((await lstat(project)).isSymbolicLink()) throw new Error("Linked session directory is unsupported.");
-    if (!isPathInside(await realpath(root), await realpath(project))) throw new Error("Invalid session directory.");
-    directory = await opendir(project);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return loaded;
-    throw error;
-  }
-  const base = await realpath(project);
   let bytes = 0, sessions = 0, calls = 0;
   const identities = new Set<string>();
   const workspaceKey = backendKey(workspace);
-  for await (const entry of directory) {
-    if (++sessions > USAGE_STATISTICS_LIMITS.sessions) { loaded.limited = true; break; }
-    if (!entry.isDirectory() || entry.isSymbolicLink()) { loaded.skipped++; continue; }
+  for (const projectName of projectDirNames(workspace)) {
+    const project = join(root, projectName);
+    let directory;
     try {
-      const path = join(project, entry.name, SESSION_LOG_NAME);
-      if (!isPathInside(base, await realpath(path)) || (await lstat(path)).isSymbolicLink()) throw new Error("Linked session log is unsupported.");
-      const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-      let text: string;
+      if ((await lstat(project)).isSymbolicLink()) throw new Error("Linked session directory is unsupported.");
+      if (!isPathInside(await realpath(root), await realpath(project))) throw new Error("Invalid session directory.");
+      directory = await opendir(project);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    const base = await realpath(project);
+    for await (const entry of directory) {
+      if (++sessions > USAGE_STATISTICS_LIMITS.sessions) { loaded.limited = true; break; }
+      if (!entry.isDirectory() || entry.isSymbolicLink()) { loaded.skipped++; continue; }
       try {
-        const info = await file.stat();
-        if (!info.isFile() || info.size > USAGE_STATISTICS_LIMITS.fileBytes) throw new Error("Session log exceeds the supported size.");
-        if (bytes + info.size > USAGE_STATISTICS_LIMITS.totalBytes) { loaded.limited = true; break; }
-        bytes += info.size;
-        const buffer = Buffer.alloc(info.size);
-        let read = 0;
-        while (read < buffer.length) {
-          const chunk = await file.read(buffer, read, buffer.length - read, read);
-          if (!chunk.bytesRead) break;
-          read += chunk.bytesRead;
+        const path = join(project, entry.name, SESSION_LOG_NAME);
+        if (!isPathInside(base, await realpath(path)) || (await lstat(path)).isSymbolicLink()) throw new Error("Linked session log is unsupported.");
+        const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+        let text: string;
+        try {
+          const info = await file.stat();
+          if (!info.isFile() || info.size > USAGE_STATISTICS_LIMITS.fileBytes) throw new Error("Session log exceeds the supported size.");
+          if (bytes + info.size > USAGE_STATISTICS_LIMITS.totalBytes) { loaded.limited = true; break; }
+          bytes += info.size;
+          const buffer = Buffer.alloc(info.size);
+          let read = 0;
+          while (read < buffer.length) {
+            const chunk = await file.read(buffer, read, buffer.length - read, read);
+            if (!chunk.bytesRead) break;
+            read += chunk.bytesRead;
+          }
+          text = buffer.subarray(0, read).toString("utf8");
+        } finally { await file.close(); }
+        const parsed = parseLog(text);
+        if (!parsed.header.cwd || backendKey(parsed.header.cwd) !== workspaceKey) throw new Error("Session belongs to a different workspace.");
+        const events = parsed.events.filter(event => event.type === "model/usage");
+        for (const event of events) {
+          const model = (event.data as { model?: unknown } | null)?.model;
+          if (typeof model === "string") identities.add(model);
         }
-        text = buffer.subarray(0, read).toString("utf8");
-      } finally { await file.close(); }
-      const parsed = parseLog(text);
-      if (!parsed.header.cwd || backendKey(parsed.header.cwd) !== workspaceKey) throw new Error("Session belongs to a different workspace.");
-      const events = parsed.events.filter(event => event.type === "model/usage");
-      for (const event of events) {
-        const model = (event.data as { model?: unknown } | null)?.model;
-        if (typeof model === "string") identities.add(model);
-      }
-      if (identities.size > USAGE_STATISTICS_LIMITS.identities) { loaded.limited = true; break; }
-      if (calls + events.length > USAGE_STATISTICS_LIMITS.calls) { loaded.limited = true; break; }
-      calls += events.length;
-      loaded.sources.push({ header: parsed.header, title: sessionTitle(parsed.events)?.slice(0, 256) ?? null, events });
-    } catch { loaded.skipped++; }
+        if (identities.size > USAGE_STATISTICS_LIMITS.identities) { loaded.limited = true; break; }
+        if (calls + events.length > USAGE_STATISTICS_LIMITS.calls) { loaded.limited = true; break; }
+        calls += events.length;
+        loaded.sources.push({ header: parsed.header, title: sessionTitle(parsed.events)?.slice(0, 256) ?? null, events });
+      } catch { loaded.skipped++; }
+    }
+    if (loaded.limited) break;
   }
   return loaded;
 }

@@ -1,11 +1,11 @@
 // Session storage locations.
 //
 // Layout under the session root (default `~/.ringko/sessions`):
-//   <root>/--<normalized-cwd>--/<encoded-id>/session.jsonl
+//   <root>/--<workspace-key>--/<encoded-id>/session.jsonl
 // The per-project directory keeps sessions scannable per workspace; the session
 // id is encoded so it can never escape its directory.
 import { join } from "node:path";
-import { ringkoRoot } from "@ringko-ai/config";
+import { backendKey, ringkoRoot } from "@ringko-ai/config";
 
 export const SESSIONS_DIR_NAME = "sessions";
 export const SESSION_LOG_NAME = "session.jsonl";
@@ -17,8 +17,8 @@ export function sessionsRoot(env: NodeJS.ProcessEnv = process.env): string {
   return join(ringkoRoot(env), SESSIONS_DIR_NAME);
 }
 
-/** Human-readable, filesystem-safe directory name for a working directory. */
-export function projectDirName(cwd: string | undefined): string {
+/** Previous layout, retained for discovery of existing logs. */
+export function legacyProjectDirName(cwd: string | undefined): string {
   if (!cwd || cwd.trim().length === 0) return NO_CWD_DIR_NAME;
   const normalized = cwd
     .replace(/\\/g, "/")
@@ -28,18 +28,32 @@ export function projectDirName(cwd: string | undefined): string {
   return `--${normalized.replace(/\/+/g, "-")}--`;
 }
 
-const SAFE_SEGMENT = /^[A-Za-z0-9._-]$/;
+/** Collision-resistant workspace identity; old human-readable folders remain readable. */
+export function projectDirName(cwd: string | undefined): string {
+  return !cwd || !cwd.trim() ? NO_CWD_DIR_NAME : `--${backendKey(cwd)}--`;
+}
+
+export function projectDirNames(cwd: string | undefined): string[] {
+  return [...new Set([projectDirName(cwd), legacyProjectDirName(cwd)])];
+}
+
+const SAFE_SEGMENT = /^[a-z0-9_-]$/;
+const MAX_SEGMENT_CHARACTERS = 255;
 
 /** Injective encoding of a session id into a single path segment. */
 export function encodeSegment(id: string): string {
-  if (id.length === 0) throw new TypeError("Session id must not be empty.");
-  let out = "";
-  for (const char of id) {
+  if (typeof id !== "string" || id.length === 0) throw new TypeError("Session id must not be empty.");
+  // A prefix avoids Windows device names; fixed-width UTF-16 escapes also
+  // distinguish case on case-insensitive filesystems and preserve lone surrogates.
+  let out = "s-";
+  for (let index = 0; index < id.length; index++) {
+    const char = id[index]!;
     if (SAFE_SEGMENT.test(char)) {
       out += char;
     } else {
-      out += `~${char.codePointAt(0)!.toString(16).padStart(4, "0")}`;
+      out += `~${id.charCodeAt(index).toString(16).padStart(4, "0")}`;
     }
+    if (out.length > MAX_SEGMENT_CHARACTERS) throw new TypeError("Encoded session id exceeds the filesystem segment limit.");
   }
   return out;
 }
