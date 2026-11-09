@@ -1,8 +1,9 @@
 import { lstat } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
 import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
 import { pathRisk } from "./path-access.ts";
 import { resolvePathTarget, type Workspace } from "./workspace.ts";
+import { searchCandidate, validateSearchGlob, withinSearchRoot } from "./search-path.ts";
+import { SEARCH_LIMITS } from "./limits.ts";
 
 const MAX_RESULTS = 1000;
 
@@ -32,7 +33,7 @@ function parseGlob(value: unknown): GlobInput {
     }
     base = record.path;
   }
-  return { pattern: record.pattern, ...(base !== undefined ? { path: base } : {}) };
+  return { pattern: validateSearchGlob(record.pattern), ...(base !== undefined ? { path: base } : {}) };
 }
 
 /** Find files by glob pattern. Targets outside the workspace require approval. */
@@ -58,12 +59,19 @@ export function createGlobTool(workspace: Workspace): ToolDefinition<GlobInput, 
       if (context?.approvedTarget && context.approvedTarget !== target.absolute) throw new Error("Glob target changed after approval; retry the call.");
       const matches: string[] = [];
       let truncated = false;
+      let scanned = 0;
+      const deadline = Date.now() + SEARCH_LIMITS.totalMs;
       for await (const match of new Bun.Glob(pattern).scan({ cwd: target.absolute, dot: false, followSymlinks: false })) {
         context?.signal?.throwIfAborted();
+        if (++scanned > SEARCH_LIMITS.files || Date.now() > deadline) throw new Error("Glob exceeded its scan budget; narrow path or pattern.");
         const display = match.replace(/\\/g, "/");
+        const absolute = searchCandidate(target.absolute, match);
         try {
-          if ((await lstat(isAbsolute(match) ? match : join(target.absolute, match))).isSymbolicLink()) continue;
+          if ((await lstat(absolute)).isSymbolicLink()) continue;
+          const resolved = await resolvePathTarget(workspace, absolute);
+          if (!resolved.resolved || !withinSearchRoot(target.absolute, resolved.absolute)) throw new Error("Glob entry moved outside its approved root.");
         } catch {
+          context?.signal?.throwIfAborted();
           continue;
         }
         if (matches.length >= MAX_RESULTS) {

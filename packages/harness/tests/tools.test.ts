@@ -49,6 +49,23 @@ function makeTool(
 }
 
 describe("tool approval boundary", () => {
+  it("bounds model-rendered text while preserving the raw tool result", async () => {
+    const registry = new ToolRegistry(), large = "x".repeat(2_000_001);
+    registry.register(makeTool("safe", () => large));
+    const result = await registry.call("sample_tool", { value: "fixture" });
+    expect(result).toBe(large);
+    const rendered = registry.renderResult("sample_tool", result);
+    expect(rendered.content.length).toBe(2_000_000);
+    expect(rendered.content).toContain("Tool result text truncated");
+    registry.unregister("sample_tool");
+    expect(registry.renderResult("sample_tool", result).content.length).toBe(2_000_000);
+  });
+
+  it("enforces aggregate structured text in addition to each individual part", () => {
+    const registry = new ToolRegistry(), text = "x".repeat(1_000_000);
+    registry.register({ ...makeTool("safe", () => ""), toMessage: () => ({ content: "fixture", parts: Array.from({ length: 3 }, () => ({ type: "text" as const, text })) }) });
+    expect(() => registry.renderResult("sample_tool", "")).toThrow("aggregate text");
+  });
   it("serializes assessment and execution across registries sharing a write group", async () => {
     let state = 0;
     const observed: number[] = [];

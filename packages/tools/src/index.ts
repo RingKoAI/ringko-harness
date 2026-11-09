@@ -15,6 +15,10 @@ import { createWorkspace, type ResolvedTarget, type Workspace } from "./workspac
 import { Sandbox, SandboxDeniedError, SandboxUnavailableError, type SandboxMode, type SandboxRunner } from "./sandbox.ts";
 
 export { createWorkspace, FileTracker, Sandbox, SandboxDeniedError, SandboxUnavailableError };
+export { externalProcessEnvironment } from "./sandbox-environment.ts";
+export { safeFileOperation } from "./file-operation.ts";
+export { acquireFileLock } from "./file-lock.ts";
+export { resolveWriteTarget } from "./workspace.ts";
 export type { SandboxMode, SandboxRunner };
 export { findGitBash, interactiveShell, shellCommand, GIT_BASH_PATH_ENV } from "./shell-resolver.ts";
 export type { ShellInvocation, ShellKind } from "./shell-resolver.ts";

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ApprovalHandlerUnavailableError, executeTool, type ToolApprovalRequest } from "@ringko-ai/harness";
@@ -112,6 +112,7 @@ describe("write", () => {
     );
     expect(asked).toBe(false);
     expect(output).toMatchObject({ bytes: 2, created: true });
+    expect(await readdir(dir)).toContain("new.txt");
     expect(await readFile(join(dir, "new.txt"), "utf8")).toBe("hi");
   });
 

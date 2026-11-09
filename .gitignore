@@ -1,6 +1,7 @@
 node_modules/
 dist/
 out/
+packages/tools/native/bin/
 *.log
 .DS_Store
 .env

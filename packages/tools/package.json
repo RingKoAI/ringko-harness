@@ -7,7 +7,9 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "imports": { "#ringko-file-binding": "./src/native-file-binding.ts" },
   "scripts": {
+    "build:native": "bun scripts/build-native.mjs",
     "test": "bun test tests --timeout 30000"
   },
   "dependencies": {
@@ -18,6 +20,7 @@
     "unpdf": "^2.1.0"
   },
   "devDependencies": {
-    "@types/turndown": "^5.0.6"
+    "@types/turndown": "^5.0.6",
+    "node-api-headers": "^1.9.0"
   }
 }

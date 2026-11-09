@@ -1,8 +1,8 @@
-import { readFile, stat, writeFile } from "node:fs/promises";
 import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
 import { FileTracker } from "./file-tracker.ts";
 import { alternateSpellings, resolveWriteTarget, type Workspace } from "./workspace.ts";
 import { Sandbox } from "./sandbox.ts";
+import { safeFileOperation, validateFileOperation } from "./file-operation.ts";
 
 export interface EditInput {
   path: string;
@@ -32,22 +32,13 @@ function parseEdit(value: unknown): EditInput {
   if (typeof record.new_string !== "string") {
     throw new TypeError("Expected a string 'new_string'.");
   }
+  validateFileOperation({ kind: "edit", oldString: record.old_string, newString: record.new_string, replaceAll: false });
   let replaceAll = false;
   if (record.replace_all !== undefined) {
     if (typeof record.replace_all !== "boolean") throw new TypeError("'replace_all' must be a boolean.");
     replaceAll = record.replace_all;
   }
   return { path: record.path, old_string: record.old_string, new_string: record.new_string, replace_all: replaceAll };
-}
-
-function countOccurrences(haystack: string, needle: string): number {
-  let count = 0;
-  let index = haystack.indexOf(needle);
-  while (index !== -1) {
-    count += 1;
-    index = haystack.indexOf(needle, index + needle.length);
-  }
-  return count;
 }
 
 /** Replace an exact string in a file, subject to sandbox and approval boundaries. */
@@ -58,7 +49,7 @@ export function createEditTool(workspace: Workspace, tracker: FileTracker = new 
     taskAccess: "write",
     concurrency: "exclusive",
     description:
-      "Replace an exact string in a file. `old_string` must appear; set `replace_all` to change every occurrence. External targets require both sandbox authorization and approval.",
+      "Atomically replace a literal string in a regular file. Source and output are limited to 64 MiB; old/new arguments to 1,000,000 UTF-8 bytes and replacements to 1,000,000. `old_string` must appear; set `replace_all` to change every occurrence. External targets require sandbox authorization and approval.",
     inputSchema: {
       type: "object",
       properties: {
@@ -83,23 +74,12 @@ export function createEditTool(workspace: Workspace, tracker: FileTracker = new 
       const target = await resolveWriteTarget(workspace, path);
       if (context?.approvedTarget && context.approvedTarget !== target.absolute) throw new Error("Edit target changed after approval; retry the call.");
       sandbox.assertWrite(target.absolute);
-      const content = await readFile(target.absolute, "utf8");
-      const occurrences = countOccurrences(content, old_string);
-      if (occurrences === 0) {
-        throw new Error(`'old_string' was not found in ${target.insideWorkspace ? target.relative : target.absolute}.`);
-      }
-      if (occurrences > 1 && !replace_all) {
-        throw new Error(`'old_string' occurs ${occurrences} times; set replace_all or provide a more specific string.`);
-      }
-      const updated = replace_all
-        ? content.split(old_string).join(new_string)
-        : content.replace(old_string, new_string);
       context?.signal?.throwIfAborted();
-      await writeFile(target.absolute, updated, "utf8");
-      tracker.record(target.absolute, await stat(target.absolute));
+      const result = await safeFileOperation(target.absolute, { kind: "edit", oldString: old_string, newString: new_string, replaceAll: replace_all === true }, context?.signal);
+      tracker.record(target.absolute, result);
       return {
         path: target.insideWorkspace ? target.relative : target.absolute,
-        replacements: replace_all ? occurrences : 1,
+        replacements: result.replacements,
         changed: true,
       };
     },

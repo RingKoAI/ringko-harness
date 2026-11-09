@@ -3,11 +3,12 @@ import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
 import { FileTracker } from "./file-tracker.ts";
 import { pathRisk } from "./path-access.ts";
 import { resolvePathTarget, type Workspace } from "./workspace.ts";
+import { FILE_LIMITS } from "./limits.ts";
 
 /** Maximum text characters returned in one read. */
 const MAX_BYTES = 1_000_000;
 /** Hard cap on a source file, so a huge file cannot exhaust memory. */
-const MAX_SOURCE_BYTES = 64 * 1024 * 1024;
+const MAX_SOURCE_BYTES = FILE_LIMITS.sourceBytes;
 /** Vision providers receive the bytes inline; larger images are rejected. */
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 /** Raw PDF size; extraction happens in memory, so keep it well below the source cap. */

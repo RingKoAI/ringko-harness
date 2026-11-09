@@ -318,6 +318,7 @@ export async function runCli(argv: readonly string[], io: CliIo, options: { star
 
   switch (parsed.command) {
     case undefined:
+    case "tui":
       return tuiCommand(parsed, io);
     case "help":
     case "--help":
@@ -391,15 +392,16 @@ export async function runCli(argv: readonly string[], io: CliIo, options: { star
   }
 }
 
-if (import.meta.main) {
-  void runCli(process.argv.slice(2), {
+export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
+  const code = await runCli(argv, {
     out: (line) => process.stdout.write(`${line}\n`),
     err: (line) => process.stderr.write(`${line}\n`),
-  }, { startupUpdates: true }).then(async (code) => {
-    // Flush the resume hint before process.exit can discard pending output.
-    await Promise.all([process.stdout, process.stderr].map(stream => new Promise<void>(resolve => {
-      if (stream.destroyed) resolve(); else stream.write("", () => resolve());
-    })));
-    process.exit(code);
-  });
+  }, { startupUpdates: true });
+  // Flush the resume hint before process.exit can discard pending output.
+  await Promise.all([process.stdout, process.stderr].map(stream => new Promise<void>(resolve => {
+    if (stream.destroyed) resolve(); else stream.write("", () => resolve());
+  })));
+  process.exit(code);
 }
+
+if (import.meta.main) void main();

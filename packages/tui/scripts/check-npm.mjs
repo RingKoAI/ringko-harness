@@ -13,7 +13,9 @@ try {
   // Exercise relocation outside the monorepo, without workspace dependencies.
   cpSync(source, installed, { recursive: true });
   const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
-  assert.equal(manifest.private, undefined);
+  if (manifest.private === true) {
+    assert.deepEqual(manifest.os, [process.platform]); assert.deepEqual(manifest.cpu, [process.arch]);
+  } else assert.equal(manifest.private, undefined);
   assert.equal(manifest.name, "@ringko-ai/rkh");
   assert.equal(manifest.bin.ringko, "bin/ringko.mjs");
   assert.ok(manifest.dependencies["node-pty"]);
@@ -84,6 +86,11 @@ try {
   assert.match(script.headers.get("content-type") ?? "", /javascript/);
   await script.body?.cancel();
   const info = await (await fetch(`${url}/api/info`, { signal })).json();
+  const upload = new FormData(); upload.append("file", new File(["native-package-smoke"], "native.txt"));
+  const uploaded = await fetch(`${url}/api/upload`, { method: "POST", body: upload, signal });
+  assert.equal(uploaded.status, 200, "Relocated package's native file module is unavailable");
+  const saved = await uploaded.json();
+  assert.equal(readFileSync(join(root, saved.files[0].path), "utf8"), "native-package-smoke");
   assert.equal(info.context.limit, catalogModel.limit.context, "Bundled offline model metadata was not restored");
   assert.ok(info.tools.includes("plan") && info.tools.includes("update_plan"), "Plan tools are missing from the packaged backend");
   assert.ok(!info.tools.includes("todoread") && !info.tools.includes("todowrite"), "Legacy todo names must not be offered to models");

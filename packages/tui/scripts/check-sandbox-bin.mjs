@@ -47,6 +47,11 @@ try {
     await Bun.sleep(100);
   }
   assert.ok(ready, "Standalone backend did not become ready.");
+  const form = new FormData(); form.append("file", new File(["embedded-native-smoke"], "native.txt"));
+  const uploaded = await fetch(`${origin}/api/upload`, { method: "POST", headers: { origin, authorization: `Bearer ${token}` }, body: form });
+  assert.equal(uploaded.status, 200, "Compiled executable's embedded native file module is unavailable");
+  const saved = await uploaded.json();
+  assert.equal(readFileSync(join(workspace, saved.files[0].path), "utf8"), "embedded-native-smoke");
   const response = await fetch(`${origin}/api/terminal`, {
     method: "POST",
     headers: { origin, authorization: `Bearer ${token}`, "content-type": "application/json" },

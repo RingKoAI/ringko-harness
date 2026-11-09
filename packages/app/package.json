@@ -13,11 +13,12 @@
     "test": "bun test tests --timeout 30000"
   },
   "dependencies": {
-    "@ringko-ai/client": "workspace:*",
-    "@ringko-ai/protocol": "workspace:*",
+    "@fastify/busboy": "^3.2.5",
     "@ringko-ai/auth": "workspace:*",
+    "@ringko-ai/client": "workspace:*",
     "@ringko-ai/config": "workspace:*",
     "@ringko-ai/mcp": "workspace:*",
+    "@ringko-ai/protocol": "workspace:*",
     "@ringko-ai/providers": "workspace:*",
     "@ringko-ai/runtime": "workspace:*",
     "@ringko-ai/sdk": "workspace:*",

@@ -22,9 +22,12 @@ export interface ToolExecutionContext {
   jobs?: JobManager;
   /** Exact target assessed by the approval gate, for dispatch-time revalidation. */
   approvedTarget?: string;
+  /** Existence observed during risk assessment, for exclusive file creation. */
+  approvedTargetExists?: boolean;
 }
 
 export interface ToolRiskAssessment {
+  targetExists?: boolean;
   kind: RiskKind;
   level?: RiskLevel;
   reason: string;
@@ -179,6 +182,8 @@ export function validateToolDefinition(tool: ToolDefinition<unknown, unknown>): 
 /** Bounds applied to structured tool results before they reach a model provider. */
 const MAX_MESSAGE_PARTS = 8;
 const MAX_PART_TEXT_CHARACTERS = 1_000_000;
+const MAX_MESSAGE_TEXT_CHARACTERS = 2_000_000;
+const TRUNCATED_TOOL_TEXT = "\n[Tool result text truncated at the model-output limit; narrow the request or page the source.]";
 /** Base64 characters; roughly 6 MiB of raw image data. */
 const MAX_IMAGE_DATA_CHARACTERS = 8_000_000;
 const MESSAGE_IMAGE_TYPES: ReadonlySet<string> = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
@@ -189,6 +194,10 @@ export function serializeToolOutput(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
+function boundedMessageText(text: string): string {
+  return text.length <= MAX_MESSAGE_TEXT_CHARACTERS ? text : text.slice(0, MAX_MESSAGE_TEXT_CHARACTERS - TRUNCATED_TOOL_TEXT.length) + TRUNCATED_TOOL_TEXT;
+}
+
 /**
  * Produce the model-facing message for a successful tool result. A definition
  * without `toMessage` keeps the historical JSON-text behavior. Structured parts
@@ -196,16 +205,17 @@ export function serializeToolOutput(value: unknown): string {
  * provider request and the session log.
  */
 function renderToolOutput(tool: ToolDefinition<unknown, unknown>, output: unknown): ToolMessageContent {
-  if (!tool.toMessage) return { content: serializeToolOutput(output) };
+  if (!tool.toMessage) return { content: boundedMessageText(serializeToolOutput(output)) };
   const rendered = tool.toMessage(output);
   if (!rendered || typeof rendered !== "object" || typeof rendered.content !== "string") {
     throw new TypeError(`Tool "${tool.name}" returned an invalid message.`);
   }
-  if (rendered.parts === undefined) return { content: rendered.content };
+  if (rendered.parts === undefined) return { content: boundedMessageText(rendered.content) };
   if (!Array.isArray(rendered.parts) || rendered.parts.length > MAX_MESSAGE_PARTS) {
     throw new TypeError(`Tool "${tool.name}" returned too many message parts.`);
   }
   const parts: MessagePart[] = [];
+  let textCharacters = 0;
   for (const part of rendered.parts) {
     if (!part || typeof part !== "object") {
       throw new TypeError(`Tool "${tool.name}" returned an invalid message part.`);
@@ -214,6 +224,8 @@ function renderToolOutput(tool: ToolDefinition<unknown, unknown>, output: unknow
       if (typeof part.text !== "string" || part.text.length > MAX_PART_TEXT_CHARACTERS) {
         throw new TypeError(`Tool "${tool.name}" returned an invalid text part.`);
       }
+      textCharacters += part.text.length;
+      if (textCharacters > MAX_MESSAGE_TEXT_CHARACTERS) throw new TypeError(`Tool "${tool.name}" returned too much aggregate text.`);
       parts.push({ type: "text", text: part.text });
       continue;
     }
@@ -234,7 +246,7 @@ function renderToolOutput(tool: ToolDefinition<unknown, unknown>, output: unknow
     }
     throw new TypeError(`Tool "${tool.name}" returned an unknown message part.`);
   }
-  return { content: rendered.content, ...(parts.length > 0 ? { parts } : {}) };
+  return { content: boundedMessageText(rendered.content), ...(parts.length > 0 ? { parts } : {}) };
 }
 
 /**
@@ -281,6 +293,7 @@ async function executeToolUnlocked<Input, Output>(
     typeof risk.reason !== "string" ||
     risk.reason.trim().length === 0 ||
     (risk.target !== undefined && typeof risk.target !== "string") ||
+    (risk.targetExists !== undefined && typeof risk.targetExists !== "boolean") ||
     (risk.alternates !== undefined && (!Array.isArray(risk.alternates) || risk.alternates.length > 16 ||
       risk.alternates.some(alternate => typeof alternate !== "string" || alternate.length === 0 || alternate.length > 8192)))
   ) {
@@ -334,7 +347,7 @@ async function executeToolUnlocked<Input, Output>(
       (current === "default" && policy === "allow" && decision.approvalRequired)) throw new ToolApprovalRejectedError(tool.name);
   }
   context?.signal?.throwIfAborted();
-  return tool.execute(input, { ...context, requestApproval, accessMode: mode, approvedTarget: risk.target });
+  return tool.execute(input, { ...context, requestApproval, accessMode: mode, approvedTarget: risk.target, approvedTargetExists: risk.targetExists });
 }
 
 /**
@@ -418,7 +431,7 @@ export class ToolRegistry {
    */
   renderResult(toolName: string, output: unknown): ToolMessageContent {
     const tool = this.tools.get(toolName);
-    return tool ? tool.render(output) : { content: serializeToolOutput(output) };
+    return tool ? tool.render(output) : { content: boundedMessageText(serializeToolOutput(output)) };
   }
 
   list(): readonly ToolMetadata[] {

@@ -1,14 +1,15 @@
-import { lstat, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
-import { defineTool, type ToolDefinition } from "@ringko-ai/harness";
+import { stat } from "node:fs/promises";
+import type { Stats } from "node:fs";
+import { abortable, defineTool, type ToolDefinition } from "@ringko-ai/harness";
 import { pathRisk } from "./path-access.ts";
 import { resolvePathTarget, type Workspace } from "./workspace.ts";
+import { GrepMatcher } from "./grep-matcher.ts";
+import { SEARCH_LIMITS } from "./limits.ts";
+import { searchCandidate, validateSearchGlob, withinSearchRoot } from "./search-path.ts";
+import { SearchBudget } from "./search-budget.ts";
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 1000;
-const MAX_FILES = 20_000;
-const MAX_FILE_BYTES = 1_000_000;
-const MAX_LINE_CHARACTERS = 2_000;
 /** Directory names skipped while walking, so bundled/vendored trees are not scanned. */
 export const GREP_IGNORED_DIRECTORIES = new Set([
   "node_modules", ".git", ".hg", ".svn", "dist", "build", "out", ".next", ".nuxt",
@@ -63,7 +64,7 @@ function parseGrep(value: unknown): GrepInput {
   if (Object.keys(record).some(key => !["pattern", "path", "glob", "case_insensitive", "output_mode", "offset", "head_limit"].includes(key))) {
     throw new TypeError("Unexpected grep field.");
   }
-  if (typeof record.pattern !== "string" || record.pattern.length === 0) throw new TypeError("Expected a non-empty 'pattern'.");
+  if (typeof record.pattern !== "string" || record.pattern.length === 0 || record.pattern.length > SEARCH_LIMITS.patternCharacters) throw new TypeError("Expected a non-empty pattern up to 4096 characters.");
   const input: GrepInput = { pattern: record.pattern };
   if (record.path !== undefined) {
     if (typeof record.path !== "string" || record.path.trim().length === 0) throw new TypeError("'path' must be a non-empty string.");
@@ -71,7 +72,7 @@ function parseGrep(value: unknown): GrepInput {
   }
   if (record.glob !== undefined) {
     if (typeof record.glob !== "string" || record.glob.trim().length === 0) throw new TypeError("'glob' must be a non-empty string.");
-    input.glob = record.glob;
+    input.glob = validateSearchGlob(record.glob);
   }
   if (record.case_insensitive !== undefined) {
     if (typeof record.case_insensitive !== "boolean") throw new TypeError("'case_insensitive' must be a boolean.");
@@ -105,10 +106,6 @@ function isIgnored(relativePath: string): boolean {
   return false;
 }
 
-function clampLine(text: string): string {
-  return text.length > MAX_LINE_CHARACTERS ? `${text.slice(0, MAX_LINE_CHARACTERS)}…` : text;
-}
-
 /** Search file contents with a regular expression; file or directory targets, ripgrep-style output modes. */
 export function createGrepTool(workspace: Workspace): ToolDefinition<GrepInput, GrepOutput> {
   return defineTool<GrepInput, GrepOutput>({
@@ -118,7 +115,7 @@ export function createGrepTool(workspace: Workspace): ToolDefinition<GrepInput, 
       "Search file contents with a regular expression. `path` may be a file or directory (default: workspace root). " +
       "`glob` limits scanned files for directory targets. `output_mode` selects content (default), files_with_matches, or count. " +
       "`offset` skips results and `head_limit` caps the page; `next_offset` and `truncated` are set only when more results exist. " +
-      "Vendor/build directories (node_modules, .git, dist, …), symlinked entries, binary files and files over 1 MiB are skipped. External targets require approval.",
+      "Vendor/build directories (node_modules, .git, dist, …), symlinked entries, binary files and files over 1,000,000 bytes are skipped. Matching runs in an interruptible worker with a 1-second per-file deadline; the scan has a 15-second / 64 MiB cumulative budget. Narrow path or pattern on a budget error. External targets require approval.",
     inputSchema: {
       type: "object",
       properties: {
@@ -138,6 +135,7 @@ export function createGrepTool(workspace: Workspace): ToolDefinition<GrepInput, 
       return pathRisk(await resolvePathTarget(workspace, path ?? "."), "Grep");
     },
     async execute({ pattern, path, glob, case_insensitive, output_mode, offset, head_limit }, context) {
+      const signal = AbortSignal.any([AbortSignal.timeout(SEARCH_LIMITS.totalMs), ...(context?.signal ? [context.signal] : [])]);
       const source = path ?? ".";
       const target = await resolvePathTarget(workspace, source);
       if (!target.resolved) throw new TypeError(`Cannot resolve ${target.absolute} safely; retry the call.`);
@@ -145,14 +143,11 @@ export function createGrepTool(workspace: Workspace): ToolDefinition<GrepInput, 
       const mode = output_mode ?? "content";
       const skip = offset ?? 0;
       const limit = Math.min(head_limit ?? DEFAULT_LIMIT, MAX_LIMIT);
-      let regex: RegExp;
+      const matcher = new GrepMatcher(pattern, case_insensitive === true, signal);
       try {
-        regex = new RegExp(pattern, case_insensitive ? "i" : "");
-      } catch (error) {
-        throw new Error(`Invalid regular expression: ${(error as Error).message}`);
-      }
+      await matcher.initialized();
 
-      let info;
+      let info: Stats;
       try {
         info = await stat(target.absolute);
       } catch {
@@ -161,41 +156,30 @@ export function createGrepTool(workspace: Workspace): ToolDefinition<GrepInput, 
       const base = target.insideWorkspace ? (target.relative || ".") : target.absolute;
 
       // A file target is searched directly; a directory target is walked with the glob filter.
-      const files: string[] = [];
-      if (info.isFile()) {
-        files.push(base);
-      } else if (info.isDirectory()) {
-        const scanner = new Bun.Glob(glob ?? "**/*").scan({ cwd: target.absolute, dot: false, onlyFiles: true, followSymlinks: false });
-        for await (const relative of scanner) {
-          context?.signal?.throwIfAborted();
-          const display = relative.replace(/\\/g, "/");
-          if (isIgnored(display)) continue;
-          files.push(display);
-          if (files.length >= MAX_FILES) break;
-        }
-      } else {
-        throw new Error("Path is neither a file nor a directory.");
-      }
-
-      const readAndScan = async (display: string): Promise<{ matches: GrepMatch[]; count: number } | undefined> => {
-        const absolute = info.isFile() ? target.absolute : join(target.absolute, display);
-        let text: string;
+      if (!info.isFile() && !info.isDirectory()) throw new Error("Path is neither a file nor a directory.");
+      async function* candidates(): AsyncGenerator<string> {
+        if (info.isFile()) { yield base; return; }
+        const iterator = new Bun.Glob(glob ?? "**/*").scan({ cwd: target.absolute, dot: false, onlyFiles: true, followSymlinks: false })[Symbol.asyncIterator]();
         try {
-          const entry = await lstat(absolute);
-          if (!entry.isFile()) return undefined;
-          const raw = await readFile(absolute, { encoding: "utf8", signal: context?.signal });
-          if (raw.length > MAX_FILE_BYTES || raw.includes("\u0000")) return undefined;
-          text = raw;
-        } catch {
-          context?.signal?.throwIfAborted();
-          return undefined;
-        }
-        const lines = text.split("\n");
-        const found: GrepMatch[] = [];
-        for (let index = 0; index < lines.length; index += 1) {
-          if (regex.test(lines[index])) found.push({ file: display, line: index + 1, text: clampLine(lines[index]) });
-        }
-        return { matches: found, count: found.length };
+          for (;;) {
+            const next = await abortable(iterator.next(), signal); if (next.done) break;
+            const display = next.value.replace(/\\/g, "/");
+            if (!isIgnored(display)) yield display;
+          }
+        } finally { await iterator.return?.(undefined); }
+      }
+      const budget = new SearchBudget();
+
+      const readAndScan = async (display: string, remainingSkip = 0, remainingLimit = 1): Promise<{ matches: GrepMatch[]; skipped: number; count: number } | undefined> => {
+        signal.throwIfAborted();
+        budget.file();
+        const absolute = info.isFile() ? target.absolute : searchCandidate(target.absolute, display);
+        const candidate = await resolvePathTarget(workspace, absolute);
+        if (!candidate.resolved || candidate.absolute !== absolute || (!info.isFile() && !withinSearchRoot(target.absolute, candidate.absolute))) return undefined;
+        const found = await matcher.match(absolute, remainingSkip, remainingLimit, mode === "content", budget.remainingBytes);
+        budget.consume(found.bytes);
+        if (found.skipFile) return undefined;
+        return { matches: found.matches.map(match => ({ ...match, file: display })), skipped: found.skipped, count: found.count };
       };
 
       const revalidate = async () => {
@@ -208,12 +192,11 @@ export function createGrepTool(workspace: Workspace): ToolDefinition<GrepInput, 
         const matches: GrepMatch[] = [];
         let seen = 0;
         let truncated = false;
-        scan: for (const display of files) {
-          context?.signal?.throwIfAborted();
-          const scanned = await readAndScan(display);
+        scan: for await (const display of candidates()) {
+          const scanned = await readAndScan(display, Math.max(0, skip - seen), limit - matches.length + 1);
           if (!scanned) continue;
+          seen += scanned.skipped;
           for (const match of scanned.matches) {
-            if (seen < skip) { seen += 1; continue; }
             if (matches.length >= limit) { truncated = true; break scan; }
             matches.push(match);
             seen += 1;
@@ -231,8 +214,7 @@ export function createGrepTool(workspace: Workspace): ToolDefinition<GrepInput, 
       const counts: GrepCount[] = [];
       let seen = 0;
       let truncated = false;
-      for (const display of files) {
-        context?.signal?.throwIfAborted();
+      for await (const display of candidates()) {
         const scanned = await readAndScan(display);
         if (!scanned || scanned.count === 0) continue;
         if (seen < skip) { seen += 1; continue; }
@@ -246,6 +228,7 @@ export function createGrepTool(workspace: Workspace): ToolDefinition<GrepInput, 
         return { base, output_mode: mode, files: counts.map(entry => entry.file), ...page };
       }
       return { base, output_mode: mode, counts, ...page };
+      } finally { await matcher.close(); }
     },
   });
 }
