@@ -89,6 +89,14 @@ Provider 在 `~/.ringko/settings.local.json`（或 `--config` 指定文件）的
 - `resumeArgs`：续接时的 argv，需要包含 `{sessionId}`。
 - `continuable` / `resume`：声明是否支持后续输入与冷恢复。
 - `env`：显式追加到子进程环境的键值。
+- `inheritEnv`：额外允许继承的宿主变量名，例如 API key 的变量名；缺失会明确报错。
+- `timeoutMs`：外部进程截止时间，默认 120,000 毫秒。
+
+CLI/ACP 默认仅继承系统、语言、终端、代理和配置目录等白名单变量，不再全量复制
+宿主环境。`NODE_OPTIONS`、`LD_*` 等 loader 覆盖会被拒绝。stdout/stderr 各限制
+2 MiB，stdout 单行 256 KiB、最多 2,048 帧；超限会失败，不会报告截断后的成功。
+Windows 批处理参数中的引号、百分号、感叹号、脱字符和换行会被拒绝；需要这些参数
+时请配置原生可执行文件或明确的解释器。详见[加固说明](hardening.zh-CN.md)。
 
 ### OpenAI 两种传输
 

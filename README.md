@@ -41,6 +41,7 @@ From a checkout:
 
 ```sh
 pnpm install
+pnpm build:native # source development requires a C/C++ compiler
 pnpm dev:tui    # terminal UI
 pnpm build      # code, tui and webui
 ```

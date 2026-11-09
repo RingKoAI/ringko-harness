@@ -5,6 +5,11 @@ on:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
+      build_only:
+        description: Build and verify all platforms without publishing
+        type: boolean
+        default: true
+        required: false
       release_tag:
         description: Existing tag to backfill (requires artifact_run_id)
         type: string
@@ -32,19 +37,22 @@ jobs:
           - os: ubuntu-latest
             target: bun-linux-x64
             artifact: ringko-linux-x64
-          - os: ubuntu-latest
+            native_container: quay.io/pypa/manylinux_2_28_x86_64
+          - os: ubuntu-24.04-arm
             target: bun-linux-arm64
             artifact: ringko-linux-arm64
+            native_container: quay.io/pypa/manylinux_2_28_aarch64
           - os: macos-latest
             target: bun-darwin-arm64
             artifact: ringko-darwin-arm64
-          - os: macos-latest
+          - os: macos-15-intel
             target: bun-darwin-x64
             artifact: ringko-darwin-x64
           - os: windows-latest
             target: bun-windows-x64
             artifact: ringko-windows-x64.exe
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.native_container }}
     steps:
       - uses: actions/checkout@v7
 
@@ -59,8 +67,21 @@ jobs:
 
       - uses: pnpm/action-setup@v6
 
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+
+      - name: Select Windows native compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"CXX=cl" | Out-File -FilePath $env:GITHUB_ENV -Append'
+
       - name: Install
         run: pnpm install --frozen-lockfile
+
+      - name: Verify native file module on target host
+        run: |
+          pnpm build:native
+          bun test packages/tools/tests/file-operation.test.ts packages/tools/tests/native-file-binding.test.ts packages/tools/tests/native-metadata.test.ts
 
       - name: Build WebUI
         run: pnpm --filter @ringko-ai/webui build
@@ -74,16 +95,16 @@ jobs:
           path: |
             dist/${{ matrix.artifact }}
             dist/webui/
+            dist/native/
           if-no-files-found: error
 
   npm:
-    name: Publish npm package
+    name: Verify complete npm package
     needs: binaries
-    if: startsWith(github.ref, 'refs/tags/v') && !inputs.artifact_run_id
+    if: (startsWith(github.ref, 'refs/tags/v') || inputs.build_only) && !inputs.artifact_run_id
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v7
 
@@ -101,6 +122,7 @@ jobs:
       - uses: pnpm/action-setup@v6
 
       - name: Validate release version
+        if: ${{ !inputs.build_only }}
         id: version
         run: |
           node --input-type=module <<'NODE'
@@ -122,6 +144,20 @@ jobs:
           sudo apt-get install -y bubblewrap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
+      - uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/native-artifacts
+
+      - name: Collect platform native modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p packages/tools/native/bin
+          for artifact in "$RUNNER_TEMP"/native-artifacts/*; do
+            test -d "$artifact/native"
+            cp -R "$artifact/native/"* packages/tools/native/bin/
+          done
+
       - name: Test
         run: pnpm test
 
@@ -133,6 +169,45 @@ jobs:
 
       - name: Verify npm package
         run: pnpm test:npm
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-package
+          path: dist/npm-tui/
+          if-no-files-found: error
+
+  npm-publish:
+    name: Publish npm package
+    needs: npm
+    if: startsWith(github.ref, 'refs/tags/v') && !inputs.build_only && !inputs.artifact_run_id
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          check-latest: true
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-package
+          path: dist/npm-tui
+
+      - name: Validate package version
+        id: version
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const { version, private: localOnly } = JSON.parse(readFileSync('dist/npm-tui/package.json', 'utf8'));
+          if (localOnly || process.env.GITHUB_REF_NAME !== `v${version}`) throw new Error('Expected a complete package matching the release tag.');
+          appendFileSync(process.env.GITHUB_OUTPUT, `tag=${version.includes('-') ? 'next' : 'latest'}\n`);
+          NODE
 
       - name: Install OIDC-capable npm
         run: npm install --global npm@12
@@ -147,10 +222,10 @@ jobs:
 
   github-release:
     name: Publish GitHub Release
-    needs: [binaries, npm]
+    needs: [binaries, npm-publish]
     if: >-
-      ${{ always() &&
-          ((startsWith(github.ref, 'refs/tags/v') && needs.binaries.result == 'success' && needs.npm.result == 'success') ||
+      ${{ always() && !inputs.build_only &&
+          ((startsWith(github.ref, 'refs/tags/v') && needs.binaries.result == 'success' && needs.npm-publish.result == 'success') ||
            (github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && inputs.artifact_run_id != '')) }}
     runs-on: ubuntu-latest
     permissions:

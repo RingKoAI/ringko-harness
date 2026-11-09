@@ -91,7 +91,19 @@ Windows for safe argument handling.
 - `parser`: `text`, `claude-stream-json` or `codex-jsonl`.
 - `resumeArgs`: argv used when continuing; include `{sessionId}`.
 - `continuable` / `resume`: advertise follow-up support.
-- `env`: explicit child environment entries layered over the parent.
+- `env`: explicit host-owned child environment entries.
+- `inheritEnv`: names of additional ambient variables explicitly authorized for
+  this provider (for example an API-key variable). Missing names fail clearly.
+- `timeoutMs`: external process deadline, default 120,000 milliseconds.
+
+CLI/ACP children retain only allowlisted OS, locale, terminal, proxy and profile
+configuration by default. Arbitrary parent environment variables are no longer
+copied. Loader overrides such as `NODE_OPTIONS` and `LD_*` are rejected. stdout
+and stderr each have a 2 MiB lifetime budget; stdout lines are capped at 256 KiB
+and 2,048 frames. Limits fail the task rather than returning truncated success.
+Windows batch shims reject quote/percent/exclamation/caret/newline arguments;
+configure a native executable or explicit interpreter when those are needed.
+See [the hardening notes](hardening.zh-CN.md) for resource and file boundaries.
 
 ### OpenAI transports
 

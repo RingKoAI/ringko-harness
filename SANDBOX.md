@@ -109,6 +109,12 @@ workspace boundary; full host writes require an explicit full-access policy.
 File target resolution follows existing aliases, checks nearest existing
 parents for new files, and handles Windows long/8.3 directory identity aliases.
 
+Write/edit tools and grep file reads additionally use Node-API transactions in a worker: POSIX directory
+descriptors and no-follow operations, or Windows directory-chain handles and
+handle-based atomic replacement. Published executables embed the target module;
+source checkouts build it with `pnpm build:native`. See
+[the hardening notes](docs/hardening.zh-CN.md) for budgets and platform limits.
+
 Confined processes omit ambient token/key/secret/password/auth/cookie variables
 and credential-agent variables. Temporary environment paths point to isolated
 storage. Explicit MCP `env` entries are authorized connector inputs and can

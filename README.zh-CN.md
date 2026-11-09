@@ -39,6 +39,7 @@ ringko web      # 浏览器界面，打印按 workspace 派生的访问地址
 
 ```sh
 pnpm install
+pnpm build:native # 源码运行先构建 Node-API 文件模块，需要 C/C++ 编译器
 pnpm dev:tui    # 终端界面
 pnpm build      # code、tui 与 webui
 ```

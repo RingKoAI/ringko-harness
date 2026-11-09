@@ -2,8 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/runtime-lifecycle]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -26,6 +27,14 @@ jobs:
           bun-version: latest
 
       - uses: pnpm/action-setup@v6
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+
+      - name: Select Windows native compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '"CXX=cl" | Out-File -FilePath $env:GITHUB_ENV -Append'
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -51,7 +60,7 @@ jobs:
         run: pnpm test:sandbox:bin
 
       - name: Build npm package
-        run: bun packages/tui/scripts/pack-npm.mjs
+        run: bun packages/tui/scripts/pack-npm.mjs --local-native
 
       - name: Verify npm package
         run: pnpm test:npm
