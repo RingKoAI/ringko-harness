@@ -337,6 +337,14 @@ export class SessionHandle {
     } catch (error) {
       // A torn write is recovered on reopen. Retrying the same buffered prefix could duplicate committed events.
       this.writeFailure = error;
+      if (!this.materialized) {
+        const failures: unknown[] = [error];
+        try { if (this.fd !== undefined) closeSync(this.fd); } catch (failure) { failures.push(failure); }
+        this.fd = undefined;
+        try { this.lock?.release(); } catch (failure) { failures.push(failure); }
+        this.lock = undefined;
+        if (failures.length > 1) throw new AggregateError(failures, "Session materialization and cleanup failed.");
+      }
       throw error;
     }
   }

@@ -154,6 +154,15 @@ describe("SessionStore", () => {
     expect(store().open(ids[0]!).all()).toHaveLength(1);
   });
 
+  it("releases a new handle's lock immediately when materialization hits EEXIST", () => {
+    const original = store().create({ id: "exists" }); original.appendEvent("persisted"); original.close();
+    const duplicate = store().create({ id: "exists" }); duplicate.appendEvent("must-not-persist");
+    expect(() => duplicate.flush()).toThrow();
+    const writer = store().open("exists", "write"); writer.close();
+    expect(() => duplicate.close()).toThrow();
+    expect(store().open("exists").all()).toHaveLength(1);
+  });
+
   it("reads legacy layouts while separating colliding workspace names", () => {
     const firstCwd = join(root, "a-b", "c"), secondCwd = join(root, "a", "b-c");
     const first = new SessionStore({ root, cwd: firstCwd }), second = new SessionStore({ root, cwd: secondCwd });
