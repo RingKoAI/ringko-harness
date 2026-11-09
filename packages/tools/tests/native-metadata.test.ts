@@ -25,11 +25,14 @@ it.skipIf(process.platform !== "win32")("preserves Windows hidden/system attribu
 }, 30_000);
 
 const python = Bun.which("python3") ?? Bun.which("python");
-it.skipIf(process.platform === "win32" || !python)("preserves bounded POSIX user attributes during atomic replacement", async () => {
+it.skipIf(process.platform === "win32" || (process.platform !== "darwin" && !python))("preserves bounded POSIX user attributes during atomic replacement", async () => {
   const path = join(root, "attributes.txt"); await writeFile(path, "original");
-  await execute(python!, ["-c", "import os,sys; os.setxattr(sys.argv[1], b'user.rkh_metadata', b'preserved')", path]);
+  if (process.platform === "darwin") await execute("/usr/bin/xattr", ["-w", "user.rkh_metadata", "preserved", path]);
+  else await execute(python!, ["-c", "import os,sys; os.setxattr(sys.argv[1], b'user.rkh_metadata', b'preserved')", path]);
   await safeFileOperation(path, { kind: "edit", oldString: "original", newString: "updated", replaceAll: false });
-  const result = await execute(python!, ["-c", "import os,sys; print(os.getxattr(sys.argv[1], b'user.rkh_metadata').decode())", path]);
+  const result = process.platform === "darwin"
+    ? await execute("/usr/bin/xattr", ["-p", "user.rkh_metadata", path])
+    : await execute(python!, ["-c", "import os,sys; print(os.getxattr(sys.argv[1], b'user.rkh_metadata').decode())", path]);
   expect(result.stdout.trim()).toBe("preserved");
   expect(await readFile(path, "utf8")).toBe("updated");
 });
