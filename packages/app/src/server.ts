@@ -91,6 +91,7 @@ import {
 import { discoverModels } from "@ringko-ai/providers";
 import { listWorkflows, resolveWorkflow } from "@ringko-ai/workflow";
 import { createTimeSource } from "@ringko-ai/runtime";
+import { UploadError, UploadManager, type UploadLimits } from "./services/uploads.ts";
 import {
   SessionStore,
   forkSession,
@@ -133,6 +134,8 @@ import { RunStateManager } from "./services/runs.ts";
 import { parseUsageStatisticsQuery, UsageStatisticsService } from "./services/usage-statistics.ts";
 
 export interface ServerOptions {
+  /** Host-owned upload budgets; omitted values use the bounded defaults. */
+  uploadLimits?: Partial<UploadLimits>;
   port?: number;
   host?: string;
   workspace?: string;
@@ -182,6 +185,7 @@ const META_TIMEOUT_MS = 30_000;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 const MAX_TERMINAL_SESSIONS = 4;
 const TERMINAL_SESSION_TTL_MS = 30 * 60 * 1000;
+class BackendClosingError extends Error {}
 
 interface TerminalSocketData {
   terminalId: string;
@@ -213,10 +217,12 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   const webuiDir = resolve(options.webuiDir ?? process.env.RINGKO_WEBUI_DIR ?? (existsSync(join(DEFAULT_WEBUI_DIR, "index.html")) ? DEFAULT_WEBUI_DIR : existsSync(join(bundledWebuiDir, "index.html")) ? bundledWebuiDir : join(dirname(process.execPath), "webui")));
   let store = new SessionStore({ cwd: workspace });
   const usageStatisticsService = new UsageStatisticsService();
+  const uploads = new UploadManager(options.uploadLimits);
   const approvals = new Map<string, (approved: boolean, scope?: "session" | "saved") => void>();
   const questions = new Map<string, AskManager>();
   const activeAgents = new Map<string, RingKo>();
   const activeRuns = new Map<string, AbortController>();
+  let admissionClosed = false;
   const activeHandles = new Map<string, SessionHandle>();
   const runDrains = new Map<string, PromiseWithResolvers<void>>();
   const sync = new SyncManager();
@@ -256,7 +262,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
   // Single-threaded reservation: persistence validation and ownership happen without an await boundary.
   function beginRun(session: SessionHandle, record: () => void): AbortController {
-    try { record(); session.flush(); }
+    try { if (admissionClosed) throw new BackendClosingError("Backend is closing."); record(); session.flush(); }
     catch (error) {
       try { session.close(); } catch (failure) { writeDiagnostic("session.close", String(failure)); }
       throw error;
@@ -287,6 +293,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   function activateProject(id: string | undefined): void {
     if (options.shared) throw new Error("This shared backend is pinned to its workspace. Start a client in the other workspace instead.");
     if (activeRuns.size) throw new Error("Cannot switch workspace while sessions are running.");
+    if (uploads.busy) throw new Error("Cannot switch workspace while uploads are active.");
     const active = id ? projects.projects.find((entry) => entry.id === id) : undefined;
     const nextWorkspace = active ? resolve(active.path) : baseWorkspace;
     if (nextWorkspace !== workspace && shouldRegisterOwner) {
@@ -510,6 +517,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
 
   function handleSetCurrentProject(id: string): Response {
     if (!projects.projects.some((entry) => entry.id === id)) return json({ error: "Unknown project." }, 404);
+    if (options.shared || activeRuns.size || uploads.busy) return json({ error: "Workspace is pinned or busy; finish active work before switching." }, 409);
     activateProject(id);
     return handleProjects();
   }
@@ -1047,24 +1055,12 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
   async function handleUpload(request: Request): Promise<Response> {
-    let form: FormData;
     try {
-      form = await request.formData();
-    } catch {
-      return json({ error: "expected multipart/form-data." }, 400);
+      return json({ files: await uploads.receive(request, workspace) });
+    } catch (error) {
+      if (error instanceof UploadError) return json({ error: error.message }, error.status);
+      throw error;
     }
-    const files = form.getAll("file").filter((value): value is File => value instanceof File);
-    if (files.length === 0) return json({ error: "no files." }, 400);
-    const dir = join(workspace, ".ringko", "uploads");
-    mkdirSync(dir, { recursive: true });
-    const saved: { name: string; path: string }[] = [];
-    for (const file of files) {
-      const safe = file.name.replace(/[^A-Za-z0-9._-]/g, "_");
-      const stored = `${Date.now()}-${safe}`;
-      await Bun.write(join(dir, stored), file);
-      saved.push({ name: file.name, path: `.ringko/uploads/${stored}` });
-    }
-    return json({ files: saved });
   }
 
   async function handleSetThinking(request: Request): Promise<Response> {
@@ -1784,6 +1780,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     async fetch(request) {
       const url = new URL(request.url);
       const handleRequest = async (): Promise<Response | undefined> => {
+      if (admissionClosed) return json({ error: "Backend is closing." }, 503);
       // Local UI APIs must not be reachable from an unrelated browser origin (CSRF/DNS rebinding).
       const allowedHosts = new Set([host, "localhost", "127.0.0.1", "[::1]"]);
       if (loopback && url.pathname.startsWith("/api/") && !allowedHosts.has(url.hostname)) return json({ error: "Invalid backend host." }, 403);
@@ -1806,8 +1803,9 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       }
       if (url.pathname === "/api/backend" && request.method === "GET") return json({ protocol: PROTOCOL_VERSION, instance: sync.instance, workspace, configPath: options.configPath ? resolve(options.configPath) : null });
       if (url.pathname === "/api/backend/stop" && request.method === "POST") {
-        if (activeRuns.size) return json({ error: "Stop active sessions before stopping the backend." }, 409);
-        setTimeout(() => { releaseOwnership(); modelCatalog.dispose(); sync.close(); stopTimeSource(); for (const id of terminalSessions.keys()) removeTerminal(id, true); void runtimeHost.close().catch(error => writeDiagnostic("runtime.close", String(error))); server.stop(true); }, 50);
+        if (activeRuns.size || uploads.busy) return json({ error: "Finish active sessions and uploads before stopping the backend." }, 409);
+        admissionClosed = true;
+        setTimeout(() => { void stop().then(result => { if (result.timedOut || result.errors.length) writeDiagnostic("backend.close", `Shutdown timedOut=${result.timedOut}, errors=${result.errors.length}`); }, error => writeDiagnostic("backend.close", String(error))); }, 50);
         return json({ ok: true });
       }
       if (url.pathname === "/api/sync" && request.method === "GET") return sync.stream(request.signal);
@@ -1982,6 +1980,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         }
         return response;
       } catch (error) {
+        if (error instanceof BackendClosingError) return json({ error: "Backend is closing." }, 503);
         if (error instanceof URIError || error instanceof TypeError) return json({ error: "Invalid backend request." }, 400);
         return json({ error: error instanceof Error ? error.message : "Backend request failed." }, 500);
       }
@@ -1998,19 +1997,28 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
   const url = backendOrigin(boundPort) ?? `http://${host}:${boundPort}`;
   let closing: Promise<ServerCloseResult> | undefined;
-  return {
-    url,
-    port: boundPort,
-    stop: () => {
+  function stop(): Promise<ServerCloseResult> {
       if (closing) return closing;
-      closing = (async (): Promise<ServerCloseResult> => {
+      const completion = Promise.withResolvers<ServerCloseResult>();
+      closing = completion.promise;
+      void (async (): Promise<ServerCloseResult> => {
         const errors: unknown[] = [];
         let timedOut = false;
         // Stop admission before touching ownership so no new run can start.
+        admissionClosed = true;
         try { server.stop(true); } catch (error) { errors.push(error); }
         for (const run of activeRuns.values()) {
           try { run.abort(); } catch (error) { errors.push(error); }
         }
+        const uploadClose = uploads.close();
+        if (uploads.busy) {
+          let uploadTimer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            const closed = await Promise.race([uploadClose.then(() => true), new Promise<boolean>(resolve => { uploadTimer = setTimeout(() => resolve(false), SHUTDOWN_TIMEOUT_MS); })]);
+            if (!closed) { timedOut = true; errors.push(new Error("Uploads did not settle before the shutdown timeout.")); }
+          } catch (error) { errors.push(error); }
+          finally { if (uploadTimer) clearTimeout(uploadTimer); }
+        } else void uploadClose.catch(error => writeDiagnostic("upload.close", String(error)));
         const drains = [...runDrains.values()];
         const settled = drains.length === 0
           ? true
@@ -2040,10 +2048,10 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
           try { removeTerminal(id, true); } catch (error) { errors.push(error); }
         }
         return { timedOut, pendingRuns, errors };
-      })();
+      })().then(completion.resolve, completion.reject);
       return closing;
-    },
-  };
+  }
+  return { url, port: boundPort, stop };
 }
 
 
