@@ -76,6 +76,10 @@ function validateProviderEntry(entry: unknown): void {
   if (data.args !== undefined) stringList(data.args, `${type}.args`);
   if (data.resumeArgs !== undefined) stringList(data.resumeArgs, `${type}.resumeArgs`);
   if (data.env !== undefined) envRecord(data.env, `${type}.env`);
+  if (data.inheritEnv !== undefined) {
+    const names = stringList(data.inheritEnv, `${type}.inheritEnv`);
+    if (names?.some(name => name.length > 128 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))) throw new TypeError("Invalid inherited subagent environment name.");
+  }
   if (data.maxTurns !== undefined) positive(data.maxTurns, `${type}.maxTurns`);
   if (data.timeoutMs !== undefined) positive(data.timeoutMs, `${type}.timeoutMs`);
   if (data.permission !== undefined) enumField(data.permission, `${type}.permission`, ["allow", "reject"] as const);
@@ -132,6 +136,7 @@ export function buildSubagentProviders(config?: SubagentConfig): SubagentProvide
           command: entry.command,
           ...(entry.args ? { args: entry.args } : {}),
           ...(entry.env ? { env: entry.env } : {}),
+          ...(entry.inheritEnv ? { inheritEnv: entry.inheritEnv } : {}),
           ...(entry.permission ? { permission: entry.permission } : {}),
           ...(entry.timeoutMs !== undefined ? { timeoutMs: positive(entry.timeoutMs, "timeoutMs") } : {}),
         }));
@@ -157,6 +162,8 @@ export function buildSubagentProviders(config?: SubagentConfig): SubagentProvide
           ...(entry.promptDelivery ? { promptDelivery: entry.promptDelivery } : {}),
           ...(entry.model ? { model: entry.model } : {}),
           ...(entry.env ? { env: entry.env } : {}),
+          ...(entry.inheritEnv ? { inheritEnv: entry.inheritEnv } : {}),
+          ...(entry.timeoutMs !== undefined ? { timeoutMs: entry.timeoutMs } : {}),
           capabilities: {
             continuable: entry.continuable === true,
             resume: entry.resume === true,

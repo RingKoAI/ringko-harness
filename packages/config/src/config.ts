@@ -115,10 +115,10 @@ export interface RingkoConfig {
 export type SubagentProviderConfig =
   | { name?: string; type: "in-process"; description?: string; maxTurns?: number; timeoutMs?: number }
   | { name?: string; type: "openai"; model: string; models?: string[]; protocol?: "responses" | "chat"; auth?: "api-key" | "oauth"; oauthAccount?: string; baseURL?: string; apiKey?: string; apiKeyEnv?: string; temperature?: number; maxOutputTokens?: number; maxTurns?: number; timeoutMs?: number; description?: string }
-  | { name?: string; type: "acp"; command: string; args?: string[]; env?: Record<string, string>; permission?: "allow" | "reject"; timeoutMs?: number }
-  | { name?: string; type: "claude-code"; command?: string; args?: string[]; model?: string; permissionMode?: string; env?: Record<string, string> }
-  | { name?: string; type: "codex"; command?: string; args?: string[]; resumeArgs?: string[]; model?: string; permissionMode?: "never" | "approve-for-me" | "dangerously-bypass-approvals-and-sandbox"; env?: Record<string, string> }
-  | { name: string; type: "command"; command: string; args?: string[]; resumeArgs?: string[]; parser?: "text" | "claude-stream-json" | "codex-jsonl"; promptDelivery?: "stdin" | "arg"; model?: string; env?: Record<string, string>; continuable?: boolean; resume?: boolean };
+  | { name?: string; type: "acp"; command: string; args?: string[]; env?: Record<string, string>; inheritEnv?: string[]; permission?: "allow" | "reject"; timeoutMs?: number }
+  | { name?: string; type: "claude-code"; command?: string; args?: string[]; model?: string; permissionMode?: string; env?: Record<string, string>; inheritEnv?: string[]; timeoutMs?: number }
+  | { name?: string; type: "codex"; command?: string; args?: string[]; resumeArgs?: string[]; model?: string; permissionMode?: "never" | "approve-for-me" | "dangerously-bypass-approvals-and-sandbox"; env?: Record<string, string>; inheritEnv?: string[]; timeoutMs?: number }
+  | { name: string; type: "command"; command: string; args?: string[]; resumeArgs?: string[]; parser?: "text" | "claude-stream-json" | "codex-jsonl"; promptDelivery?: "stdin" | "arg"; model?: string; env?: Record<string, string>; inheritEnv?: string[]; timeoutMs?: number; continuable?: boolean; resume?: boolean };
 
 export interface SubagentConfig {
   /** Provider used when the model does not name one. */

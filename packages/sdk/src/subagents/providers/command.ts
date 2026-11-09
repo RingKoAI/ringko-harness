@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
+import { accessSync, constants, statSync } from "node:fs";
 import type {
   SubagentCatalogEntry,
   SubagentProvider,
@@ -24,6 +25,8 @@ export interface CommandProviderOptions {
   parser?: CommandParser;
   model?: string;
   env?: Readonly<Record<string, string>>;
+  inheritEnv?: readonly string[];
+  timeoutMs?: number;
   capabilities?: Partial<SubagentProvider["capabilities"]>;
   disposeGraceMs?: number;
   /** Override shell spawning; defaults to true on Windows for .cmd shims. */
@@ -181,10 +184,10 @@ function clip(text: string): { content: string; truncated: boolean } {
 }
 
 function commandAvailable(command: string): boolean {
-  if (isAbsolute(command)) return true;
+  if (isAbsolute(command)) { try { accessSync(command, constants.X_OK); return statSync(command).isFile(); } catch { return false; } }
   const bun = (globalThis as { Bun?: { which?(name: string): string | null } }).Bun;
   if (bun?.which) return Boolean(bun.which(command));
-  return true;
+  return false;
 }
 
 /**
@@ -317,11 +320,14 @@ export class CommandProvider implements SubagentProvider {
       ...(promptDelivery === "arg" ? { prompt } : {}),
     });
     if (promptDelivery === "arg" && !(template ?? []).some(part => part.includes("{prompt}"))) args.push(prompt);
-    const processHandle = spawnProcess(this.options.command, args, {
+    let processHandle: SpawnedProcess;
+    try { processHandle = spawnProcess(this.options.command, args, {
       cwd,
       ...(this.options.env ? { env: { ...this.options.env } } : {}),
+      ...(this.options.inheritEnv ? { inheritEnv: this.options.inheritEnv } : {}),
+      ...(this.options.timeoutMs !== undefined ? { timeoutMs: this.options.timeoutMs } : {}),
       shell: this.options.shell ?? (promptDelivery !== "arg" && process.platform === "win32"),
-    });
+    }); } catch (error) { child.running = false; throw error; }
     const active: ActiveProcess = { process: processHandle, aborted: false };
     child.current = active;
     const parser = parserFor(this.options.parser ?? "text");
@@ -334,6 +340,7 @@ export class CommandProvider implements SubagentProvider {
         processHandle.writeStdin(prompt);
         processHandle.closeStdin();
       }
+      let pumpError: unknown;
       const pump = processHandle.lines(line => {
         const update = parser.push(line);
         if (update?.sessionId && update.sessionId !== child.nativeSessionId) {
@@ -341,9 +348,10 @@ export class CommandProvider implements SubagentProvider {
           context.onEvent?.({ childId: child.id, provider: this.name, type: "status", status: "running", metadata: { nativeSessionId: update.sessionId }, time: Date.now() });
         }
         if (update?.text) context.onEvent?.({ childId: child.id, provider: this.name, type: "message", message: { role: "assistant", content: update.text }, time: Date.now() });
-      });
+      }).catch(error => { pumpError = error; });
       const exit = await processHandle.exited;
-      await pump.catch(() => undefined);
+      await pump;
+      if (pumpError !== undefined) throw pumpError;
       const parsed = parser.finish();
       if (parsed.sessionId && parsed.sessionId !== child.nativeSessionId) {
         child.nativeSessionId = parsed.sessionId;
@@ -428,6 +436,8 @@ export function claudeCodeProvider(options: {
   model?: string;
   permissionMode?: string;
   env?: Readonly<Record<string, string>>;
+  inheritEnv?: readonly string[];
+  timeoutMs?: number;
 } = {}): CommandProvider {
   const base = options.args ?? [
     "-p", "--output-format", "stream-json", "--verbose",
@@ -446,6 +456,8 @@ export function claudeCodeProvider(options: {
     parser: "claude-stream-json",
     ...(options.model ? { model: options.model } : {}),
     ...(options.env ? { env: options.env } : {}),
+    ...(options.inheritEnv ? { inheritEnv: options.inheritEnv } : {}),
+    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     capabilities: { continuable: true, resume: true, modelSelection: true, tools: false, approvals: false },
   });
 }
@@ -459,6 +471,8 @@ export function codexProvider(options: {
   model?: string;
   permissionMode?: "never" | "approve-for-me" | "dangerously-bypass-approvals-and-sandbox";
   env?: Readonly<Record<string, string>>;
+  inheritEnv?: readonly string[];
+  timeoutMs?: number;
 } = {}): CommandProvider {
   const mode = options.permissionMode ?? "never";
   const permission = mode === "dangerously-bypass-approvals-and-sandbox"
@@ -478,6 +492,8 @@ export function codexProvider(options: {
     parser: "codex-jsonl",
     ...(options.model ? { model: options.model } : {}),
     ...(options.env ? { env: options.env } : {}),
+    ...(options.inheritEnv ? { inheritEnv: options.inheritEnv } : {}),
+    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     capabilities: { continuable: true, resume: true, modelSelection: true, tools: false, approvals: false },
   });
 }

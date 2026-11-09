@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { createInterface } from "node:readline";
 import type {
   SubagentCatalogEntry,
   SubagentProvider,
@@ -10,6 +9,7 @@ import type {
   SubagentStopReason,
 } from "../types.ts";
 import { spawnProcess, type SpawnedProcess } from "./process.ts";
+import { SUBAGENT_LIMITS } from "../types.ts";
 
 interface RpcMessage {
   jsonrpc?: string;
@@ -33,15 +33,15 @@ class JsonLineConnection {
     private readonly onRequest: (method: string, params: unknown) => Promise<unknown>,
   ) {
     void this.pump();
+    void this.process.exited.catch(error => this.fail(error instanceof Error ? error : new Error(String(error))));
   }
 
   private async pump(): Promise<void> {
-    const reader = createInterface({ input: this.process.child.stdout, crlfDelay: Infinity });
     try {
-      for await (const line of reader) {
-        if (!line.trim()) continue;
+      await this.process.lines(line => {
+        if (!line.trim()) return;
         let message: RpcMessage;
-        try { message = JSON.parse(line) as RpcMessage; } catch { continue; }
+        try { message = JSON.parse(line) as RpcMessage; } catch { return; }
         if (message.id !== undefined && message.method) {
           void this.onRequest(message.method, message.params).then(
             result => this.write({ jsonrpc: "2.0", id: message.id!, result }),
@@ -49,29 +49,32 @@ class JsonLineConnection {
           );
         } else if (message.id !== undefined) {
           const pending = this.pending.get(Number(message.id));
-          if (!pending) continue;
+          if (!pending) return;
           this.pending.delete(Number(message.id));
           if (message.error) pending.reject(new Error(message.error.message ?? "ACP request failed."));
           else pending.resolve(message.result);
         } else if (message.method) {
           this.onNotification(message.method, message.params);
         }
-      }
-    } catch { /* process ended */ }
+      });
+    } catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); }
     this.fail(new Error("ACP connection closed."));
   }
 
   private write(value: unknown): void {
     if (this.closed) return;
-    try { this.process.writeStdin(`${JSON.stringify(value)}\n`); } catch { /* closed */ }
+    try { this.process.writeStdin(`${JSON.stringify(value)}\n`); }
+    catch (error) { this.fail(error instanceof Error ? error : new Error(String(error))); void this.process.kill(); }
   }
 
   request(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
     if (this.closed) return Promise.reject(new Error("ACP connection closed."));
+    if (signal?.aborted) return Promise.reject(signal.reason);
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      const onAbort = () => { if (this.pending.delete(id)) reject(new Error("ACP request aborted.")); };
+      const settle = (error?: Error, value?: unknown) => { this.pending.delete(id); signal?.removeEventListener("abort", onAbort); if (error) reject(error); else resolve(value); };
+      const onAbort = () => settle(new Error("ACP request aborted."));
+      this.pending.set(id, { resolve: value => settle(undefined, value), reject: error => settle(error) });
       signal?.addEventListener("abort", onAbort, { once: true });
       this.write({ jsonrpc: "2.0", id, method, params });
     });
@@ -98,6 +101,7 @@ export interface AcpProviderOptions {
   command: string;
   args?: readonly string[];
   env?: Readonly<Record<string, string>>;
+  inheritEnv?: readonly string[];
   permission?: "allow" | "reject";
   timeoutMs?: number;
   disposeGraceMs?: number;
@@ -152,12 +156,14 @@ export class AcpProvider implements SubagentProvider {
     const processHandle = spawnProcess(this.options.command, this.options.args ?? [], {
       cwd: input.cwd,
       env: this.options.env,
+      inheritEnv: this.options.inheritEnv,
+      timeoutMs: this.timeoutMs,
       shell: this.options.shell ?? process.platform === "win32",
     });
     let sessionId: string | undefined;
     let aborted = false;
     let disposed = false;
-    let content = "";
+    let content = "", truncated = false;
     const result = Promise.withResolvers<SubagentResult>();
     const timer = setTimeout(() => { aborted = true; void processHandle.kill(this.disposeGraceMs); }, this.timeoutMs);
     const connection = new JsonLineConnection(processHandle, (method, params) => {
@@ -167,7 +173,9 @@ export class AcpProvider implements SubagentProvider {
       if (update.sessionUpdate === "agent_message_chunk") {
         const chunk = asRecord(update.content);
         if (chunk?.type === "text" && typeof chunk.text === "string") {
-          content += chunk.text;
+          const room = SUBAGENT_LIMITS.resultCharacters - content.length;
+          if (chunk.text.length > room) truncated = true;
+          content += chunk.text.slice(0, Math.max(0, room));
           context.onEvent?.({ childId: id, provider: this.name, type: "message", message: { role: "assistant", content: chunk.text }, time: Date.now() });
         }
       } else if (update.sessionUpdate === "agent_thought_chunk") {
@@ -228,6 +236,7 @@ export class AcpProvider implements SubagentProvider {
           provider: this.name,
           status: reason === "completed" && !empty ? "completed" : reason === "aborted" ? "cancelled" : "failed",
           content,
+          ...(truncated ? { truncated: true } : {}),
           stopReason: empty ? "error" : reason,
           ...(empty ? { diagnostic: "ACP agent returned no answer." } : reason !== "completed" && reason !== "aborted" ? { diagnostic: `ACP agent stopped: ${String(parsed?.stopReason ?? "unknown")}.` } : {}),
         });
