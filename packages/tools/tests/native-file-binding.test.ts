@@ -9,6 +9,8 @@ import { createEditTool, createWriteTool, createWorkspace } from "../src/index.t
 import { safeFileOperation } from "../src/file-operation.ts";
 import { spawn } from "node:child_process";
 import { acquireFileLock } from "../src/file-lock.ts";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 let root: string;
 beforeEach(async () => { root = await realpath(await mkdtemp(join(tmpdir(), "rkh-native-binding-"))); });
@@ -76,4 +78,16 @@ it("excludes another process and releases the kernel lock when that process exit
     await expect(acquireFileLock(join(root, "coordination.lock"))).rejects.toMatchObject({ code: "EBUSY" });
   } finally { child.kill("SIGKILL"); await exited; }
   const release = await acquireFileLock(join(root, "coordination.lock")); await release();
+});
+
+it("keeps a local reservation and kernel lease across unrelated native worker cleanup", async () => {
+  const path = join(root, "coordination.lock"), release = await acquireFileLock(path);
+  try {
+    await expect(acquireFileLock(path)).rejects.toMatchObject({ code: "EBUSY" });
+    await safeFileOperation(join(root, "unrelated.txt"), { kind: "write", content: "fixture" });
+    const executable = Bun.which("node"); if (!executable) throw new Error("Node.js is required.");
+    const result = await promisify(execFile)(executable, [join(import.meta.dir, "fixtures", "native-file-host.mjs"), nativeFileBinding(), root, "probe-lock"]);
+    expect(result.stdout).toContain("Node-API lock excluded");
+  } finally { await release(); }
+  const reacquired = await acquireFileLock(path); await reacquired();
 });

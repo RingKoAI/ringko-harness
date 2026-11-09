@@ -3,7 +3,10 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 const native = createRequire(import.meta.url)(process.argv[2]);
-if (process.argv[4] === "lock") {
+if (process.argv[4] === "probe-lock") {
+  assert.throws(() => native.begin(join(process.argv[3], "coordination.lock"), "lock", false), { code: "EBUSY" });
+  console.log("Node-API lock excluded.");
+} else if (process.argv[4] === "lock") {
   const transaction = native.begin(join(process.argv[3], "coordination.lock"), "lock", false);
   process.stdin.resume();
   process.stdin.once("end", () => { native.close(transaction); });
