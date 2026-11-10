@@ -36,8 +36,9 @@ fails closed; workspace reads and directory listings do not require approval.
 ## Terminal layout
 
 The conversation uses shaded user messages, Markdown assistant replies and compact
-tool results. Adjacent read/search operations collapse into an exploration summary;
-Ctrl+O reveals the original calls, arguments and outputs. Failures and unknown
+tool results. Completed user turns collapse their tools into one activity summary,
+including reads, writes, shell and delegated tasks across model steps. Ctrl+O
+reveals the original calls, arguments and outputs in order. Failures and unknown
 outcomes remain explicit. Ctrl+T toggles reasoning details.
 
 PgUp enters history reading without following incoming stream updates. PgDn moves
@@ -47,6 +48,32 @@ Short terminals collapse optional task details; Windows reserves a final column
 to avoid ConPTY wrap artifacts.
 
 With `--config <path>`, model, thinking and display changes are saved to that file.
+
+Enter `/status` to open Settings at **Stats → Overview**, with Status, Config,
+Usage and Stats main pages. The command remains visible above the pane. Tab/Shift+Tab
+switches main pages, R refreshes and Esc returns to the prompt. Reading
+the pages does not call a model or create a session.
+
+- **Status** shows the active session, version, backend, model/provider, cwd, MCP
+  connections, settings sources and update preferences. M opens MCP; PgUp/PgDn
+  scrolls. Credentials are reported by location only; URL credentials, query
+  strings and fragments are hidden.
+- **Config** (`/config`) edits reasoning visibility, tool expansion, startup update
+  checks, automatic updates, thinking effort and access mode. Select with Up/Down,
+  change with Enter/Space and filter with `/`. Saving is immediate, reports failures
+  and requires an idle run. With `--config`, changes go to that file; otherwise
+  they go to user settings. Automatic updates are locked when startup checks are off.
+- **Usage** (`/usage`) shows the current session's reported tokens, cache usage,
+  calls and output rate. Missing usage, provider quotas and costs are not estimated.
+- **Stats** (`/stats`) opens a calendar heatmap and two-column overview: favorite
+  model, tokens, sessions, longest session span, active days and streaks. Left/Right
+  or O/M switches Overview/Models; Models shows calls, tokens and cache usage for
+  every model. T cycles all history, the last 7 days and the last 30 days.
+  Up/Down or PgUp/PgDn scrolls; narrow terminals stack metrics and crop the heatmap
+  to recent weeks. The shared backend is required. Activity counts reported model
+  calls in the terminal's local time zone; session spans include idle time.
+
+See [Usage statistics](../../docs/usage-statistics.md) for aggregation semantics.
 
 ## Local shell commands
 
@@ -79,5 +106,5 @@ pnpm --filter @ringko-ai/tui run build:all  # linux/macos/windows targets
 The executable embeds Bun; distribute the adjacent `dist/webui` directory too.
 The browser's interactive PTY additionally requires Node.js and the node-pty
 bridge/native dependency; these are not embedded in the executable.
-Current Windows/Bun 1.4.2 compiled-service smoke testing hits `EPERM` creating
-session directories. Use the source CLI until this packaging/runtime issue is resolved.
+On Windows, `pnpm test:sandbox:bin` verifies the relocated executable's embedded
+file module, status endpoint, ConPTY startup, workspace writes and external-write denial.

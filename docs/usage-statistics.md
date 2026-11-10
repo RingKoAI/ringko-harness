@@ -30,6 +30,23 @@ the page is mounted and can be disabled; manual refresh remains available.
   IANA time zone for calendar buckets; custom end dates include the selected
   day. Ranges longer than 90 days use monthly buckets.
 
+## Terminal overview
+
+In the TUI, `/status` opens **Settings → Stats → Overview**. `/stats` opens the same
+page. The overview uses a calendar heatmap and paired metrics; Left/Right or O/M
+switches to **Models** for per-model call/token/cache totals. T selects all time,
+the last 7 days or the last 30 days; these terminal ranges are rolling intervals.
+
+The heatmap counts deduplicated reported model calls for the latest 366 local
+calendar days (recent weeks on narrow terminals). Range filters apply to activity
+and totals together. Favorite model means most recorded calls, breaking ties by
+the model-summary order. Active days count local dates with reported calls; the
+denominator runs from the first matching call to the selected range's end. A
+current streak may end today or yesterday; a longer gap resets it. Longest session
+is its creation-to-last-matching-call span, clipped to the selected range, and
+includes idle time. These metrics do not estimate unreported requests or active
+working hours. Older backends without activity metadata show a restart hint.
+
 ## API and limits
 
 `GET /api/usage` uses the backend's existing authentication, origin and workspace
@@ -38,6 +55,8 @@ checks. Optional query fields are `start`/`end` (epoch milliseconds), `timeZone`
 Filters are exact matches. A session ID never broadens the workspace scope.
 Responses contain usage metadata and session titles, not prompts, tool content,
 provider configuration or credentials.
+The optional `activity` object contains bounded daily counts, local calendar
+streaks, active-day coverage and the longest recorded session span.
 
 Scans reject linked logs/directories outside the trusted workspace-session
 directory. Limits are 2,048 directory entries, 16 MiB per log, 128 MiB total,

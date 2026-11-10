@@ -1,6 +1,7 @@
 // Slash-command registry and input parsing for the REPL (pure, unit-testable).
 import { discoverSkills, expandCommandPrompt, loadMcpServers, type LoadedPlugin } from "@ringko-ai/config";
 import { SHORTCUT_HELP } from "./keybindings.ts";
+import type { StatusTab } from "./status.ts";
 
 export type ParsedInput =
   | { kind: "prompt"; value: string }
@@ -20,6 +21,7 @@ export interface SlashContext {
   toolNames(): string[];
   managePermissions?(): void;
   showTodos?(): void;
+  showStatus?(tab?: StatusTab): void;
   /** Connect to / list providers. */
   connect(arg: string): void | Promise<void>;
   /** Sign in to a provider via OAuth (default: openai). */
@@ -59,6 +61,10 @@ export interface SlashCommand {
 
 export function buildCommands(): SlashCommand[] {
   return [
+    { name: "status", description: "open Settings with activity overview, models, status and configuration", run: ctx => { if (ctx.showStatus) ctx.showStatus(); else ctx.print("Status requires an interactive REPL."); } },
+    { name: "config", description: "open interactive configuration", run: ctx => ctx.showStatus?.("Config") },
+    { name: "usage", description: "show current session's reported usage", run: ctx => ctx.showStatus?.("Usage") },
+    { name: "stats", description: "show workspace usage statistics", run: ctx => ctx.showStatus?.("Stats") },
     { name: "todos", description: "browse all plan steps", run: ctx => ctx.showTodos?.() },
     { name: "agents", description: "switch between main and subagent task views", run: ctx => ctx.pickAgent?.() },
     { name: "loop", description: "repeat a prompt until a completion promise or max iterations", run: (ctx, arg) => ctx.startLoop?.(arg) },

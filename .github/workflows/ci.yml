@@ -34,7 +34,7 @@ jobs:
       - name: Select Windows native compiler
         if: runner.os == 'Windows'
         shell: pwsh
-        run: '"CXX=cl" | Out-File -FilePath $env:GITHUB_ENV -Append'
+        run: '"CC=cl" | Out-File -FilePath $env:GITHUB_ENV -Append'
 
       - name: Install
         run: pnpm install --frozen-lockfile

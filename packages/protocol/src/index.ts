@@ -1,6 +1,8 @@
 // Wire contracts are platform-neutral: never import server/SDK modules into browser hosts.
 export * from "./usage-statistics.ts";
 export interface ServerMessage {
+  /** Log identity used only by client transcript projections. Never sent to a model. */
+  sourceSeq?: number;
   role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string; name?: string; failed?: boolean;
   toolCalls?: Array<{ id: string; name: string; arguments: unknown }>;
   reasoning?: string; reasoningDetails?: Array<{ text: string; providerOptions?: Record<string, Record<string, unknown>> }>;
@@ -20,6 +22,8 @@ export const SYNC_LIMITS = {
 } as const;
 
 export interface BackendIdentity { protocol: number; instance: string; workspace: string; configPath: string | null }
+/** Read-only, allowlisted diagnostics; raw configuration and credentials are excluded. */
+export interface RuntimeStatus { version: string | null; entries: Array<{ label: string; value: string }> }
 export interface SessionMeta { id: string; createdAt: number; cwd: string | null; title?: string | null; summary?: string | null; archived?: boolean; busy?: boolean }
 export interface Approval { id: string; toolName: string; riskLevel: "low" | "medium" | "high"; riskKind: "safe" | "workspace_file" | "workspace_write" | "external_file" | "network" | "shell"; reason: string; target: string | null }
 export interface QuestionRequest { id: string; input: { questions: Array<{ id: string; question: string; header?: string; detail?: string; multiSelect?: boolean; options?: Array<{ label: string; description?: string }> }> } }

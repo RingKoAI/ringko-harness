@@ -5,6 +5,7 @@ import { fetchPermissionRules, removePermissionRule, type PermissionRule } from 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { UpdateSettings } from '@/components/update-settings'
 import { LOCALES, useI18n, type Locale, type MessageKey } from '@/i18n'
 import { ConnectorsPage } from '@/pages/ConnectorsPage'
 import { OAuthPage } from '@/pages/OAuthPage'
@@ -31,8 +32,8 @@ const PAGES: { slug: string; label: MessageKey }[] = [
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-4 py-3">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <span className="text-sm">{children}</span>
+      <span className="shrink-0 text-sm text-muted-foreground">{label}</span>
+      <span className="min-w-0 text-right text-sm">{children}</span>
     </div>
   )
 }
@@ -53,7 +54,7 @@ function GeneralPage() {
       </CardHeader>
       <CardContent className="divide-y">
         <Row label={t('settings.workspace')}>
-          <span className="font-mono text-xs">{app.info?.workspace ?? '—'}</span>
+          <span className="break-all font-mono text-xs">{app.info?.workspace ?? '—'}</span>
         </Row>
         <Row label={t('settings.access')}>{app.info?.access.label ?? '—'}</Row>
         <Row label={t('settings.authRequired')}>
@@ -85,6 +86,7 @@ function GeneralPage() {
             ))}
           </select>
         </Row>
+        <UpdateSettings />
       </CardContent>
     </Card>
   )

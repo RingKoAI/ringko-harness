@@ -1,3 +1,8 @@
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE 1
+#else
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "platform.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -11,19 +16,20 @@
 #include <sys/acl.h>
 #endif
 
-static bool system_error(file_error *error, int code = errno) {
+static bool system_error_code(file_error *error, int code) {
   const char *name = code == ENOENT ? "ENOENT" : code == EEXIST ? "EEXIST" : code == EACCES ? "EACCES" :
     code == EPERM ? "EPERM" : code == ELOOP ? "ELOOP" : code == ENOTDIR ? "ENOTDIR" : code == ENOSPC ? "ENOSPC" : "EIO";
   return file_refuse(error, name, "Safe native file operation failed; retry if the target changed.");
 }
+static bool system_error(file_error *error) { return system_error_code(error, errno); }
 static void information(const struct stat *value, file_info *info) {
-  info->exists = true; info->size = static_cast<uint64_t>(value->st_size);
+  info->exists = true; info->size = (uint64_t)value->st_size;
 #if defined(__APPLE__)
-  info->mtime_ms = static_cast<double>(value->st_mtimespec.tv_sec) * 1000 + static_cast<double>(value->st_mtimespec.tv_nsec) / 1000000;
+  info->mtime_ms = (double)value->st_mtimespec.tv_sec * 1000 + (double)value->st_mtimespec.tv_nsec / 1000000;
 #else
-  info->mtime_ms = static_cast<double>(value->st_mtim.tv_sec) * 1000 + static_cast<double>(value->st_mtim.tv_nsec) / 1000000;
+  info->mtime_ms = (double)value->st_mtim.tv_sec * 1000 + (double)value->st_mtim.tv_nsec / 1000000;
 #endif
-  snprintf(info->identity, sizeof(info->identity), "posix:%llu:%llu", static_cast<unsigned long long>(value->st_dev), static_cast<unsigned long long>(value->st_ino));
+  snprintf(info->identity, sizeof(info->identity), "posix:%llu:%llu", (unsigned long long)value->st_dev, (unsigned long long)value->st_ino);
 }
 bool file_begin(file_transaction *tx, file_char *path, enum file_kind kind, bool absent, file_error *error) {
   tx->path = path; tx->kind = kind; tx->parent = tx->source = tx->staged = -1;
@@ -35,7 +41,7 @@ bool file_begin(file_transaction *tx, file_char *path, enum file_kind kind, bool
   tx->parent = open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (tx->parent < 0) return system_error(error);
   tx->directories[tx->directory_count++] = tx->parent;
-  const size_t parent_length = static_cast<size_t>(last - path);
+  const size_t parent_length = (size_t)(last - path);
   *last = 0; char *component = parent_length ? path + 1 : NULL; size_t depth = 0;
   while (component && *component) {
     char *end = strchr(component, '/'); if (end) *end = 0;
@@ -75,9 +81,9 @@ bool file_begin(file_transaction *tx, file_char *path, enum file_kind kind, bool
 bool file_read(file_transaction *tx, void *data, size_t length, size_t *count, file_error *error) {
   ssize_t received; do { received = read(tx->source, data, length); } while (received < 0 && errno == EINTR);
   if (received < 0) return system_error(error);
-  tx->read_bytes += static_cast<uint64_t>(received);
+  tx->read_bytes += (uint64_t)received;
   if (tx->read_bytes > FILE_MAX_BYTES) return file_refuse(error, "EFBIG", "Edit source exceeds the 64 MiB size limit.");
-  *count = static_cast<size_t>(received); return true;
+  *count = (size_t)received; return true;
 }
 static bool copy_permissions(file_transaction *tx, file_error *error) {
   struct stat staged;
@@ -89,17 +95,17 @@ static bool copy_permissions(file_transaction *tx, file_error *error) {
   if (!acl) { if (errno == ENOENT || errno == ENOTSUP) return true; return system_error(error); }
   const bool ok = acl_set_fd(tx->staged, acl) == 0;
   const int code = errno; acl_free(acl);
-  return ok ? true : system_error(error, code);
+  return ok ? true : system_error_code(error, code);
 #else
   const char *key = "system.posix_acl_access";
   ssize_t size = fgetxattr(tx->source, key, NULL, 0);
   if (size < 0) { if (errno == ENODATA || errno == ENOTSUP) return true; return system_error(error); }
   if (size > FILE_CHUNK_BYTES) return file_refuse(error, "EFBIG", "File ACL exceeds the supported size.");
-  char *data = static_cast<char *>(malloc(static_cast<size_t>(size > 0 ? size : 1)));
+  char *data = malloc((size_t)(size > 0 ? size : 1));
   if (!data) return file_refuse(error, "ENOMEM", "Could not allocate ACL metadata.");
-  bool ok = fgetxattr(tx->source, key, data, static_cast<size_t>(size)) == size && fsetxattr(tx->staged, key, data, static_cast<size_t>(size), 0) == 0;
+  bool ok = fgetxattr(tx->source, key, data, (size_t)size) == size && fsetxattr(tx->staged, key, data, (size_t)size, 0) == 0;
   const int code = errno; free(data);
-  return ok ? true : system_error(error, code);
+  return ok ? true : system_error_code(error, code);
 #endif
 }
 static ssize_t attribute_names(int fd, char *data, size_t size) {
@@ -121,37 +127,37 @@ static bool copy_attributes(file_transaction *tx, file_error *error) {
   if (size < 0) { if (errno == ENOTSUP) return true; return system_error(error); }
   if (size > FILE_CHUNK_BYTES) return file_refuse(error, "EFBIG", "File metadata exceeds its byte budget.");
   if (!size) return true;
-  char *names = static_cast<char *>(malloc(static_cast<size_t>(size)));
+  char *names = malloc((size_t)size);
   if (!names) return file_refuse(error, "ENOMEM", "Could not allocate file metadata.");
-  bool ok = attribute_names(tx->source, names, static_cast<size_t>(size)) == size;
+  bool ok = attribute_names(tx->source, names, (size_t)size) == size;
   if (!ok) { free(names); return file_refuse(error, "ESTALE", "File metadata changed; retry the call."); }
   size_t position = 0, bytes = 0, count = 0;
-  while (position < static_cast<size_t>(size)) {
-    const size_t length = strnlen(names + position, static_cast<size_t>(size) - position);
-    if (length == static_cast<size_t>(size) - position || ++count > FILE_MAX_ATTRIBUTES) { ok = file_refuse(error, "EFBIG", "File metadata exceeds its entry budget."); break; }
+  while (position < (size_t)size) {
+    const size_t length = strnlen(names + position, (size_t)size - position);
+    if (length == (size_t)size - position || ++count > FILE_MAX_ATTRIBUTES) { ok = file_refuse(error, "EFBIG", "File metadata exceeds its entry budget."); break; }
     const char *name = names + position; position += length + 1;
     // These privilege/content signatures are invalidated by normal file writes.
     if (!strcmp(name, "security.capability") || !strcmp(name, "security.ima") || !strcmp(name, "security.evm") || !strcmp(name, "system.posix_acl_access") || !strcmp(name, "com.apple.decmpfs")) continue;
     const ssize_t length_value = attribute_value(tx->source, name, NULL, 0);
     if (length_value < 0) { ok = system_error(error); break; }
-    if (static_cast<size_t>(length_value) > FILE_CHUNK_BYTES - bytes) { ok = file_refuse(error, "EFBIG", "File metadata exceeds its byte budget."); break; }
-    bytes += static_cast<size_t>(length_value);
-    void *data = malloc(static_cast<size_t>(length_value ? length_value : 1));
+    if ((size_t)length_value > FILE_CHUNK_BYTES - bytes) { ok = file_refuse(error, "EFBIG", "File metadata exceeds its byte budget."); break; }
+    bytes += (size_t)length_value;
+    void *data = malloc((size_t)(length_value ? length_value : 1));
     if (!data) { ok = file_refuse(error, "ENOMEM", "Could not allocate file metadata."); break; }
-    if (attribute_value(tx->source, name, data, static_cast<size_t>(length_value)) != length_value) ok = file_refuse(error, "ESTALE", "File metadata changed; retry the call.");
+    if (attribute_value(tx->source, name, data, (size_t)length_value) != length_value) ok = file_refuse(error, "ESTALE", "File metadata changed; retry the call.");
     else {
       bool same = false;
       if (attribute_value(tx->staged, name, NULL, 0) == length_value) {
-        void *current = malloc(static_cast<size_t>(length_value ? length_value : 1));
+        void *current = malloc((size_t)(length_value ? length_value : 1));
         if (!current) { free(data); ok = file_refuse(error, "ENOMEM", "Could not allocate file metadata."); break; }
-        same = attribute_value(tx->staged, name, current, static_cast<size_t>(length_value)) == length_value && !memcmp(current, data, static_cast<size_t>(length_value));
+        same = attribute_value(tx->staged, name, current, (size_t)length_value) == length_value && !memcmp(current, data, (size_t)length_value);
         free(current);
       }
       if (!same) {
 #if defined(__APPLE__)
-        if (fsetxattr(tx->staged, name, data, static_cast<size_t>(length_value), 0, 0)) ok = system_error(error);
+        if (fsetxattr(tx->staged, name, data, (size_t)length_value, 0, 0)) ok = system_error(error);
 #else
-        if (fsetxattr(tx->staged, name, data, static_cast<size_t>(length_value), 0)) ok = system_error(error);
+        if (fsetxattr(tx->staged, name, data, (size_t)length_value, 0)) ok = system_error(error);
 #endif
       }
     }
@@ -169,11 +175,11 @@ bool file_stage(file_transaction *tx, const char *name, file_error *error) {
 bool file_write(file_transaction *tx, const void *data, size_t length, file_error *error) {
   size_t position = 0;
   while (position < length) {
-    ssize_t written = write(tx->staged, static_cast<const char *>(data) + position, length - position);
+    ssize_t written = write(tx->staged, (const char *)data + position, length - position);
     if (written < 0 && errno == EINTR) continue;
     if (written < 0) return system_error(error);
     if (!written) return file_refuse(error, "EIO", "File write made no progress.");
-    position += static_cast<size_t>(written);
+    position += (size_t)written;
   }
   tx->written += length; tx->flushed = false; return true;
 }

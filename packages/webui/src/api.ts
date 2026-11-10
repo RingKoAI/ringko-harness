@@ -1,5 +1,5 @@
 // Typed client for the RingKo local server (see @ringko-ai/app).
-import { type TodoItem } from '@ringko-ai/client';
+import { type TodoItem, type TranscriptMetadata } from '@ringko-ai/client';
 export { UnauthorizedError, backendClient, clearToken, getToken, setToken } from './api/http';
 export type { SessionSnapshot, TodoItem, SessionUsage } from '@ringko-ai/client';
 export type { UsageStatistics, UsageStatisticsQuery, UsageStatisticsBucket, UsageRequest, UsageCallKind } from '@ringko-ai/client';
@@ -55,6 +55,7 @@ export interface Info {
   thinking: string | null;
   expandThinking: boolean;
   expandTools: boolean;
+  updates: { checkOnStartup: boolean; autoUpdate: boolean };
   model: string | null;
   modelId: string | null;
   providers: ProviderInfo[];
@@ -135,7 +136,7 @@ export interface TrajectoryPage {
   records: TrajectoryRecord[]; hasOlder: boolean; hasNewer: boolean; lastSeq: number;
 }
 
-export interface ServerMessage {
+export interface ServerMessage extends TranscriptMetadata {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
   name?: string;

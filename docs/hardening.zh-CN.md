@@ -22,7 +22,7 @@ OS 身份和不可由攻击者修改的目录；不能把应用层路径检查�
 macOS 带文件系统压缩标记的文件也会明确拒绝原子替换，避免复制旧的派生压缩数据。
 扩展元数据限制为 128 项/64 KiB；派生的权限或内容签名不会被复制为新内容的有效签名。
 
-源码开发先安装 C/C++ 编译工具，再运行：
+原生模块使用 C11，不依赖 C++ 运行库。源码开发先安装 C 编译工具，再运行：
 
 ```sh
 pnpm install
@@ -30,9 +30,15 @@ pnpm build:native
 pnpm dev:tui
 ```
 
-可用 `CXX` 指定编译器可执行文件。Windows 支持 LLVM-MinGW，以及开发者终端中的
-MSVC（`CXX=cl`）；macOS 使用 Xcode Command Line Tools；Linux 使用 GCC/Clang。
+可用 `CC` 指定编译器可执行文件。Windows 支持 LLVM-MinGW，以及开发者终端中的
+MSVC（`CC=cl`）；macOS 使用 Xcode Command Line Tools；Linux 使用 GCC/Clang。
 `node-api-headers` 仅为开发依赖，运行时不下载编译器或执行源码构建。
+
+PTY 桥接单独依赖第三方 `node-pty`，其 `node-addon-api` 是构建用的 C++ 封装头文件，
+与上述 C11 文件模块无关。本仓库通过 pnpm 定向覆盖到 `node-addon-api@8.9.2`。
+`node-pty@1.1.0` 的 npm 包自带 Windows/macOS 预编译产物；这些平台正常安装无需手动
+重编 PTY。缺少对应产物的平台（包括该版本的 Linux）或显式启用源码构建时仍需要工具链。
+仓库的 pnpm 覆盖只约束本仓库的安装；公开 npm 包的下游安装仍遵循 `node-pty` 上游声明。
 
 正式 npm 包包含五个平台的预编译模块；独立版将对应模块内嵌到可执行文件中，
 本文件模块不要求使用者额外编译器，原有 node-pty/平台沙箱前置条件不变。

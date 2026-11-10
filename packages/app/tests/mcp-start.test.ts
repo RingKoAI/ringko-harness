@@ -23,6 +23,11 @@ it("starts configured MCP servers on Web startup before any model run", async ()
     expect(initialized).toBe(1);
     const response = await fetch(`${app.url}/api/mcp/connected`);
     expect(response.status).toBe(200);
+    for (let index = 0; index < 2; index++) {
+      const status = await (await fetch(`${app.url}/api/status`)).json();
+      expect(status.entries.find((entry: { label: string }) => entry.label === "MCP servers").value).toBe("1 connected, 0 failed · /mcp");
+    }
+    expect(initialized).toBe(1);
   } finally {
     app.stop(); mcp.stop(true);
     if (previous === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previous;

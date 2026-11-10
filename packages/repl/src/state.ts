@@ -1,8 +1,9 @@
 // Pure REPL state helpers (no terminal dependency, unit-testable).
 import type { AgentEvent, ChatMessage } from "@ringko-ai/sdk";
-import type { SessionEvent } from "@ringko-ai/session";
+import { toChatSurface, type SessionEvent } from "@ringko-ai/session";
+import { restoreTranscript, type TranscriptMetadata } from "@ringko-ai/client";
 
-export interface ReplItem {
+export interface ReplItem extends TranscriptMetadata {
   id: number;
   kind: "user" | "assistant" | "tool" | "notice" | "thinking";
   text: string;
@@ -11,7 +12,9 @@ export interface ReplItem {
   arguments?: unknown;
   running?: boolean;
   incomplete?: boolean;
+  unmatched?: boolean;
   failed?: boolean;
+  hasToolCalls?: boolean;
 }
 
 let counter = 0;
@@ -29,19 +32,19 @@ export function noticeItem(text: string): ReplItem {
 }
 
 /** Restore visible messages as well as the model's context on session resume. */
-export function messagesToItems(messages: readonly ChatMessage[], events: readonly SessionEvent[] = []): ReplItem[] {
-  const failedCalls = new Set(events.filter(event => event.type === "tool/result")
-    .flatMap(event => {
-      const data = event.data as { failed?: unknown; toolCallId?: unknown } | null;
-      return data?.failed === true && typeof data.toolCallId === "string" ? [data.toolCallId] : [];
-    }));
+export function messagesToItems(messages: readonly (ChatMessage & TranscriptMetadata & { failed?: boolean })[], events: readonly SessionEvent[] = [], busy = false, failed = false): ReplItem[] {
+  const surface = events.length ? toChatSurface(events) : [];
+  const restored = restoreTranscript(messages.map((message, index) => ({ ...message,
+    sourceSeq: message.sourceSeq ?? (surface.length === messages.length ? surface[index]?.seq : undefined),
+  })), events, busy, failed);
   let items: ReplItem[] = [];
-  for (const message of messages) {
-    if (message.role === "user") items.push(userItem(message.content));
+  for (const message of restored) {
+    const metadata: TranscriptMetadata = { ...(message.sourceSeq !== undefined ? { sourceSeq: message.sourceSeq } : {}), ...(message.runStart !== undefined ? { runStart: message.runStart } : {}), ...(message.runStatus ? { runStatus: message.runStatus } : {}) };
+    if (message.role === "user") items.push({ ...userItem(message.content), ...metadata });
     else if (message.role === "assistant") {
-      items.push(...agentEventToItems({ type: "model", turn: 0, message }));
-      for (const call of message.toolCalls ?? []) items = applyAgentEvent(items, { type: "tool_call", turn: 0, message: { role: "assistant", content: "", toolCalls: [call] } });
-    } else if (message.role === "tool") items = applyAgentEvent(items, { type: message.toolCallId && failedCalls.has(message.toolCallId) ? "tool_error" : "tool", turn: 0, message });
+      items.push(...agentEventToItems({ type: "model", turn: 0, message }).map(item => ({ ...item, ...metadata })));
+      for (const call of message.toolCalls ?? []) items = applyAgentEvent(items, { type: "tool_call", turn: 0, message: { role: "assistant", content: "", toolCalls: [call] } }, metadata);
+    } else if (message.role === "tool") items = applyAgentEvent(items, { type: message.failed ? "tool_error" : "tool", turn: 0, message }, metadata);
   }
   // A restored call without a result has an unknown outcome, not an active process.
   return finishPendingTools(items);
@@ -53,7 +56,7 @@ export function agentEventToItems(event: AgentEvent): ReplItem[] {
   if (event.type === "model") {
     const items: ReplItem[] = [];
     if (event.message.reasoning) items.push({ id: nextId(), kind: "thinking", text: event.message.reasoning });
-    if (event.message.content.length > 0) items.push({ id: nextId(), kind: "assistant", text: event.message.content });
+    if (event.message.content.length > 0) items.push({ id: nextId(), kind: "assistant", text: event.message.content, ...(event.message.toolCalls?.length ? { hasToolCalls: true } : {}) });
     return items;
   }
   return [
@@ -70,11 +73,14 @@ export function agentEventToItems(event: AgentEvent): ReplItem[] {
 }
 
 /** Update a call in place so concurrent results keep their original call order. */
-export function applyAgentEvent(items: readonly ReplItem[], event: AgentEvent): ReplItem[] {
+export function applyAgentEvent(items: readonly ReplItem[], event: AgentEvent, metadata: TranscriptMetadata = {}): ReplItem[] {
   const next = [...items];
-  for (const item of agentEventToItems(event)) {
-    const index = item.kind === "tool" && item.toolCallId ? next.findIndex(existing => existing.kind === "tool" && existing.toolCallId === item.toolCallId) : -1;
-    if (index < 0) next.push(item);
+  const user = next.findLastIndex(item => item.kind === "user");
+  for (const value of agentEventToItems(event)) {
+    const item = { ...value, ...metadata };
+    const index = item.kind === "tool" && item.toolCallId ? next.findLastIndex((existing, index) => index > user && existing.kind === "tool" && existing.running && existing.toolCallId === item.toolCallId && (item.runStart === undefined || existing.runStart === item.runStart)) : -1;
+    if (index >= 0 && event.type === "tool_call") { next[index] = { ...next[index], incomplete: true }; next.push({ ...item, incomplete: true }); }
+    else if (index < 0) next.push(item.kind === "tool" && event.type !== "tool_call" ? { ...item, unmatched: true } : item);
     else next[index] = { ...next[index], ...item, id: next[index].id, arguments: next[index].arguments ?? item.arguments };
   }
   return next;

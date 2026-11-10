@@ -8,6 +8,9 @@ import { buildPluginCommands, resetPluginCommands, setPluginCommands } from "./c
 import { isolateTerminalDiagnostics } from "./diagnostics.ts";
 
 export interface LaunchReplOptions {
+  version?: string;
+  backendUrl?: string;
+  configPath?: string;
   backend?: BackendClient;
   model: ModelClient;
   modelLabel: string;

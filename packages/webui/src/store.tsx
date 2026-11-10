@@ -12,6 +12,7 @@ export interface AppState extends Conversation {
   openSession(id: string): void; newChat(): void; setDraft(value: string): void
   editQueued(id: string, prompt: string): void; removeQueued(id: string): void; resumeQueue(): void
   runningSessions: string[]
+  setToolExpansion(key: string, details: boolean, open: boolean): void
 }
 const AppContext = createContext<AppState | null>(null)
 const blank = emptyConversation()
@@ -102,6 +103,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [conversations])
   const state = useMemo(() => { void revision; return sessionId ? conversations.get(sessionId) : { ...blank, draft: newDraft } }, [sessionId, conversations, revision, newDraft])
   const value = useMemo<AppState>(() => ({ ...state, info, unauthorized, sessions, sessionId, refreshInfo, refreshSessions, openSession, newChat, send, sendTo, stop, answer, decide, controlJob,
+    setToolExpansion: (key, details, open) => { if (sessionId) conversations.setToolExpansion(sessionId, key, details, open) },
     clearSession: () => select(), setDraft: draft => { if (selected.current) conversations.patch(selected.current, { draft }); else { newDraftRef.current = draft; setNewDraft(draft) } },
     editQueued: (id, prompt) => { if (selected.current) { try { conversations.editQueued(selected.current, id, prompt) } catch (error) { reportError(error) } } },
     removeQueued: id => { if (selected.current) conversations.removeQueued(selected.current, id) },

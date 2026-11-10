@@ -17,3 +17,8 @@ it('reports no additions when every id already exists or is empty', () => {
   expect(mergeDiscoveredModels(existing, [{ id: 'alpha' }, { id: '' }])).toEqual([{ id: 'alpha', name: '' }])
   expect(newModelCount(existing, [{ id: 'alpha' }, { id: '' }])).toBe(0)
 })
+
+it('preserves context, aliases and capability flags when fetching models again', () => {
+  const existing = [{ id: 'alias', name: 'Edited', contextWindow: 262144, maxInputTokens: 200000, maxOutputTokens: 8192, catalogId: 'fixture/capacity', vision: false, url: 'https://fixture.invalid/chat/completions' }]
+  expect(mergeDiscoveredModels(existing, [{ id: 'alias', name: 'Remote name' }, { id: 'new' }])).toEqual([...existing, { id: 'new', name: 'new' }])
+})

@@ -20,6 +20,7 @@ import {
   sessionSummary,
   toChatMessages,
   sessionTodos,
+  sessionUsage,
   type SessionHandle,
 } from "@ringko-ai/session";
 import {
@@ -29,11 +30,15 @@ import {
   configuredModelIds,
   PROVIDER_PRESETS,
   saveConfig,
+  saveSettings,
+  saveConfigFile,
   selectModel,
   resolveSelectionContext,
   setOAuthAccount,
   upsertProviderModels,
   writeDiagnostic,
+  configurationStatus,
+  updatePolicy,
   type RingkoConfig,
   type SkillInstallScope,
 } from "@ringko-ai/config";
@@ -44,6 +49,7 @@ import { Transcript } from "./components/Transcript.tsx";
 import { Spinner } from "./components/Spinner.tsx";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { StatusBar } from "./components/StatusBar.tsx";
+import { StatusDialog } from "./components/StatusDialog.tsx";
 import { ApprovalDialog } from "./components/ApprovalDialog.tsx";
 import { AskDialog } from "./components/AskDialog.tsx";
 import { AuthDialog, type AuthBox } from "./components/AuthDialog.tsx";
@@ -65,10 +71,14 @@ import type { PermissionRule } from "@ringko-ai/sdk/runtime";
 import { terminalColumns, terminalLayout } from "./terminal-layout.ts";
 import { fitTerminalLine } from "./editor.ts";
 import { applyTaskView, restoreTaskViews, type SubagentView } from "./subagent-view.ts";
-import { BackendError, type BackendClient } from "@ringko-ai/client";
+import { BackendError, type BackendClient, type RuntimeStatus, type UsageStatistics } from "@ringko-ai/client";
 import { snapshotItems, snapshotTasks } from "./backend-state.ts";
+import { StatusUnavailableError, statusSettings, usageStatusEntries, workspaceStatusEntries, validStatusSetting, type StatusConfigInfo, type StatusPageReport, type StatusSettingKey, type StatusTab, type StatsPeriod } from "./status.ts";
 
 export interface ReplProps {
+  version?: string;
+  backendUrl?: string;
+  configPath?: string;
   backend?: BackendClient;
   model: ModelClient;
   modelLabel: string;
@@ -149,6 +159,9 @@ export function Repl(props: ReplProps) {
   const [jobs, setJobs] = useState<Array<{ jobId: string; description: string; kind: string; status: string; background: boolean }>>([]);
   const abortRef = useRef<AbortController | null>(null);
   const [authBox, setAuthBox] = useState<AuthBox | null>(null);
+  const [statusOpen, setStatusOpen] = useState(false);
+  const [statusTab, setStatusTab] = useState<StatusTab>("Stats");
+  const [statusCommand, setStatusCommand] = useState("status");
   const [picker, updatePicker] = useState<PickerState | null>(null);
   const pickerRefreshRef = useRef<(() => void) | undefined>(undefined);
   const setPicker = useCallback((next: PickerState | null): void => {
@@ -970,9 +983,85 @@ export function Repl(props: ReplProps) {
     }).catch(reportRemote);
   }
 
+  const loadStatus = useCallback(async (signal: AbortSignal): Promise<RuntimeStatus> => {
+    if (backend) return backend.request<RuntimeStatus>("/api/status", undefined, "GET", signal);
+    signal.throwIfAborted();
+    const mcp = runtimeRef.current?.currentConnections();
+    return {
+      version: props.version ?? null,
+      entries: [
+        { label: "cwd", value: workspace },
+        ...configurationStatus(config, { path: props.configPath, embedded: !props.configPath, warn: message => writeDiagnostic("status.config", message) }).map(entry => entry.label === "Model" ? { ...entry, value: `${modelLabelText}${modelId ? ` (${modelId})` : ""}` } : entry),
+        { label: "MCP servers", value: mcp ? `${mcp.connections.length} connected, ${mcp.errors.length} failed · /mcp` : "Runtime not initialized" },
+      ],
+    };
+  }, [backend, config, props.version, props.configPath, workspace, modelLabelText, modelId]);
+
+  const loadSettingsPage = useCallback(async (signal: AbortSignal, tab: StatusTab, period: StatsPeriod): Promise<StatusPageReport> => {
+    if (tab === "Status") return loadStatus(signal);
+    if (tab === "Config") {
+      const localLimits = backend ? undefined : await resolveSelectionContext(selectModel(config));
+      const localAccess = [config.permission, config.mode].find(value => value !== undefined && ["approval", "assist", "full"].includes(value)) ?? "approval";
+      const info = backend ? await backend.request<StatusConfigInfo & { model: string | null; context: { limit: number } }>("/api/info", undefined, "GET", signal) : {
+        expandThinking, expandTools, thinking, accessMode: localAccess,
+        updates: updatePolicy(config, message => writeDiagnostic("updates.config", message)), model: modelLabelText, context: { limit: localLimits?.contextWindow ?? 0 },
+      };
+      const report = await loadStatus(signal);
+      return { version: report.version, settings: statusSettings(info, Boolean(backend || createModel)), entries: [
+        { label: "Model", value: info.model ?? "Not configured" },
+        ...(info.context.limit > 0 ? [{ label: "Context window", value: `${info.context.limit.toLocaleString("en-US")} tokens` }] : []),
+        ...report.entries.filter(entry => entry.label === "Setting sources"),
+      ] };
+    }
+    if (tab === "Usage") {
+      if (!sessionId) return { version: props.version ?? null, entries: [{ label: "Session", value: "Not started" }, { label: "Usage", value: "Send a prompt to create a session; no model calls are made by this page." }] };
+      const usage = backend ? (await backend.snapshot(sessionId, signal)).usage : sessionRef.current ? sessionUsage(sessionRef.current.all()) : null;
+      return { version: props.version ?? null, entries: [{ label: "Session ID", value: sessionId }, ...usageStatusEntries(usage), { label: "Cost / provider quota", value: "Not reported" }] };
+    }
+    if (!backend) throw new StatusUnavailableError("Workspace statistics require the shared backend. Start the normal ringko TUI to use this page.");
+    const millisecondsPerDay = 86_400_000;
+    const days = period === "7d" ? 7 : period === "30d" ? 30 : undefined;
+    const query = new URLSearchParams({ limit: "5", timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(days ? { start: String(Date.now() - days * millisecondsPerDay) } : {}) });
+    const statistics = await backend.request<UsageStatistics>(`/api/usage?${query}`, undefined, "GET", signal);
+    return { version: props.version ?? null, entries: workspaceStatusEntries(statistics, period), statistics };
+  }, [backend, loadStatus, config, createModel, expandThinking, expandTools, thinking, modelLabelText, props.version, sessionId]);
+
+  const changeStatusSetting = useCallback(async (key: StatusSettingKey, value: boolean | string, signal: AbortSignal): Promise<void> => {
+    if (!validStatusSetting(key, value)) throw new Error("Invalid setting value.");
+    signal.throwIfAborted();
+    if (busyRef.current) throw new StatusUnavailableError("Wait for the current run before changing configuration.");
+    if (backend) {
+      const route = key === "thinking" ? "/api/thinking" : key === "accessMode" ? "/api/access" : key === "checkOnStartup" || key === "autoUpdate" ? "/api/updates" : "/api/ui";
+      const body = key === "thinking" ? { level: value } : key === "accessMode" ? { mode: value } : { [key]: value };
+      const info = await backend.request<StatusConfigInfo>(route, body, "POST", signal);
+      statusSettings(info); signal.throwIfAborted();
+      setExpandThinking(info.expandThinking); setExpandTools(info.expandTools); setThinking(info.thinking ?? "high");
+      setConfig(previous => ({ ...previous, expandThinking: info.expandThinking, expandTools: info.expandTools, thinking: info.thinking ?? "high", permission: info.accessMode, mode: info.accessMode, updates: info.updates }));
+      return;
+    }
+    const next = { ...config };
+    let candidate: ModelClient | undefined;
+    if (key === "thinking" && typeof value === "string") {
+      if (!createModel) throw new StatusUnavailableError("This host does not provide a configurable model client.");
+      next.thinking = value;
+      const result = await createModel(next); if (typeof result === "string") throw new Error(result); candidate = result;
+    } else if (key === "accessMode" && typeof value === "string") { next.permission = value; next.mode = value; }
+    else if ((key === "expandThinking" || key === "expandTools") && typeof value === "boolean") next[key] = value;
+    else if ((key === "checkOnStartup" || key === "autoUpdate") && typeof value === "boolean") next.updates = { ...updatePolicy(config, message => writeDiagnostic("updates.config", message)), [key]: value };
+    signal.throwIfAborted();
+    if (props.configPath) saveConfigFile(next, props.configPath); else saveSettings(next);
+    setConfig(next); setExpandThinking(next.expandThinking ?? false); setExpandTools(next.expandTools ?? false); setThinking(next.thinking ?? "high");
+    if (candidate) { modelRef.current = candidate; setModelVersion(version => version + 1); }
+    if (key === "thinking" && sessionRef.current) {
+      try { recordSessionThinking(sessionRef.current, String(value)); sessionRef.current.flush(); }
+      catch (error) { writeDiagnostic("settings.session", String(error)); throw new StatusUnavailableError("Setting saved, but session metadata failed. Close and reopen the session before continuing."); }
+    }
+  }, [backend, config, createModel, props.configPath]);
+
   const slash = useMemo<SlashContext>(
     () => ({
       print,
+      showStatus: tab => { setStatusTab(tab ?? "Stats"); setStatusCommand(tab?.toLowerCase() ?? "status"); setStatusOpen(true); },
       sendPrompt: text => { void submit(text); },
       clear: () => { setItems([]); setScrollOffset(0); },
       newSession: () => {
@@ -1152,11 +1241,11 @@ export function Repl(props: ReplProps) {
 
   async function submit(input: string): Promise<void> {
     if (busyRef.current) return;
-    if (!backend) await initializationRef.current;
+    const parsed = parseInput(input);
+    if (!backend && !(parsed.kind === "command" && ["status", "config", "usage", "stats"].includes(parsed.name))) await initializationRef.current;
     if (busyRef.current) return;
     setHistory(previous => [...previous.filter(value => value !== input), input].slice(-HISTORY_LIMIT));
     setScrollOffset(0);
-    const parsed = parseInput(input);
     if (backend && (parsed.kind === "shell" || parsed.kind === "prompt")) {
       await submitRemote(parsed.kind === "shell" ? "shell" : "prompt", parsed.value);
       return;
@@ -1290,15 +1379,21 @@ export function Repl(props: ReplProps) {
     }
   }
 
-  const modal = Boolean(pending || question?.input || authBox || picker || renameTarget);
+  const modal = Boolean(pending || question?.input || authBox || picker || renameTarget || statusOpen);
   const layout = terminalLayout(size.rows, modal);
   const selectedTask = taskViews.find(task => task.id === viewedTaskId);
   const visibleItems = selectedTask?.items ?? items;
+  if (statusOpen && !pending && !question?.input && !authBox && !picker && !renameTarget) return (
+    <Box flexDirection="column" width={size.columns} height={layout.height}>
+      <StatusDialog load={loadSettingsPage} command={statusCommand} initialTab={statusTab} onConfigChange={changeStatusSetting} session={{ id: sessionId, title, version: props.version, peer: backend ? props.backendUrl ?? "Connected backend" : undefined }} columns={size.columns} height={layout.height}
+        onClose={() => setStatusOpen(false)} onMcp={() => { setStatusOpen(false); openMcpPicker(); }} />
+    </Box>
+  );
   return (
     <Box flexDirection="column" width={size.columns} height={layout.height}>
       {!sessionStarted ? <Banner modelLabel={modelLabelText} workspace={workspace} /> : null}
       <Box ref={transcriptBox} flexDirection="column" flexGrow={1} flexShrink={1} minHeight={0} justifyContent={!sessionStarted ? "flex-start" : "flex-end"} overflowY="hidden">
-        <Transcript viewKey={`${sessionId ?? "new"}:${viewedTaskId ?? "main"}`} items={visibleItems} expandThinking={expandThinking} expandTools={expandTools} columns={size.columns} rows={Math.floor(transcriptSize.height)} offset={scrollOffset} onOffset={setScrollOffset} />
+        <Transcript viewKey={`${sessionId ?? "new"}:${viewedTaskId ?? "main"}`} items={visibleItems} expandThinking={expandThinking} expandTools={expandTools} columns={size.columns} rows={Math.floor(transcriptSize.height)} offset={scrollOffset} onOffset={setScrollOffset} busy={selectedTask ? selectedTask.status === "running" : running} runStatus={selectedTask?.status} />
         {!sessionStarted ? <Box flexDirection="column" paddingX={2} marginTop={1} marginBottom={1}>
           <Text bold color={theme.brand}>What would you like to work on?</Text>
           <Text color={theme.dim}>/connect providers · /model models · /resume sessions</Text>

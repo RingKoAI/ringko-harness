@@ -4,12 +4,12 @@ import { lstat, open, opendir, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { backendKey, isPathInside } from "@ringko-ai/config";
 import { parseLog, projectDirNames, SESSION_LOG_NAME, sessionTitle, sessionUsage, type SessionEvent, type SessionHeader } from "@ringko-ai/session";
-import type { UsageCallKind, UsageRequest, UsageStatistics, UsageStatisticsBucket, UsageStatisticsQuery } from "@ringko-ai/protocol";
+import type { UsageActivity, UsageCallKind, UsageRequest, UsageStatistics, UsageStatisticsBucket, UsageStatisticsQuery } from "@ringko-ai/protocol";
 
 export const USAGE_STATISTICS_LIMITS = {
   sessions: 2048, fileBytes: 16 * 1024 * 1024, totalBytes: 128 * 1024 * 1024,
   calls: 100_000, pageSize: 25, maxPageSize: 100, filterCharacters: 1024,
-  cacheMs: 2000, cacheEntries: 4, ancestry: 64, dailyBuckets: 90, identities: 512, trendBuckets: 1200,
+  cacheMs: 2000, cacheEntries: 4, ancestry: 64, dailyBuckets: 90, identities: 512, trendBuckets: 1200, activityDays: 366,
 } as const;
 const DAY_MS = 86_400_000;
 const KINDS: readonly UsageCallKind[] = ["primary", "task", "compaction", "metadata", "unknown"];
@@ -124,6 +124,41 @@ function groups(calls: readonly Call[], key: (call: Call) => string): UsageStati
   return [...entries].map(([name, values]) => bucket(name, values)).sort((a, b) => (b.usage?.totalTokens ?? 0) - (a.usage?.totalTokens ?? 0) || a.key.localeCompare(b.key));
 }
 
+/** Calendar arithmetic uses date keys, not elapsed hours, so DST cannot break streaks. */
+function activity(calls: readonly Call[], sources: ReadonlyMap<string, UsageSource>, dateKey: (time: number) => string, start: number, end: number, now: number, timeZone: string): UsageActivity {
+  const dayIndex = (key: string) => Math.floor(Date.parse(`${key}T00:00:00Z`) / DAY_MS);
+  const today = dateKey(now), todayIndex = dayIndex(today), counts = new Map<string, number>();
+  const spans = new Map<string, { first: number; last: number }>();
+  for (const { request } of calls) {
+    const day = dateKey(request.time); counts.set(day, (counts.get(day) ?? 0) + 1);
+    const created = sources.get(request.sessionId)?.header.createdAt;
+    if (typeof created !== "number" || !Number.isSafeInteger(created) || created < 0 || created > request.time) continue;
+    const first = Math.max(start, created);
+    const span = spans.get(request.sessionId);
+    if (span) { span.first = Math.min(span.first, first); span.last = Math.max(span.last, request.time); }
+    else spans.set(request.sessionId, { first, last: request.time });
+  }
+  const days = [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([date, calls]) => ({ date, calls }));
+  let longestStreak = 0, streak = 0, previous: number | undefined;
+  for (const day of days) {
+    const index = dayIndex(day.date); streak = previous !== undefined && index === previous + 1 ? streak + 1 : 1;
+    longestStreak = Math.max(longestStreak, streak); previous = index;
+  }
+  const latest = days.at(-1);
+  const currentStreak = latest && [todayIndex, todayIndex - 1].includes(dayIndex(latest.date)) ? streak : 0;
+  const firstIndex = days.length ? dayIndex(dateKey(Math.max(start, calls.at(-1)!.request.time))) : todayIndex;
+  const lastIndex = dayIndex(dateKey(Math.min(now, end - 1)));
+  let longestSessionMs: number | null = null;
+  for (const span of spans.values()) longestSessionMs = Math.max(longestSessionMs ?? 0, span.last - span.first);
+  return {
+    timeZone, today, days: days.filter(day => dayIndex(day.date) > todayIndex - USAGE_STATISTICS_LIMITS.activityDays),
+    activeDays: days.length, totalDays: days.length ? Math.max(1, lastIndex - firstIndex + 1) : 0,
+    longestStreak, currentStreak,
+    mostActiveDay: days.reduce<UsageActivity["mostActiveDay"]>((best, day) => !best || day.calls > best.calls ? day : best, null),
+    longestSessionMs,
+  };
+}
+
 /** All views use the same deduplicated call set and cache-inclusive input semantics. */
 export function usageStatistics(loaded: LoadedUsage, workspace: string, query: UsageStatisticsQuery, now = Date.now()): UsageStatistics {
   const sources = new Map(loaded.sources.map(source => [source.header.id, source]));
@@ -205,7 +240,8 @@ export function usageStatistics(loaded: LoadedUsage, workspace: string, query: U
     workspace, generatedAt: now, summary: summary.usage, averageDurationMs: summary.averageDurationMs, timedCalls: summary.timedCalls,
     sessions: new Set(calls.map(call => call.request.sessionId)).size,
     providers: groups(calls, call => call.request.provider ?? ""), models: groups(calls, call => call.request.model ?? ""),
-    trend, grain, requests: calls.slice(offset, offset + limit).map(call => call.request), total: calls.length, offset, limit, options,
+    trend, grain, activity: activity(calls, sources, dateKey, start, end, now, query.timeZone ?? "UTC"),
+    requests: calls.slice(offset, offset + limit).map(call => call.request), total: calls.length, offset, limit, options,
     coverage: { scannedSessions: loaded.sources.length, unreportedSessions, skippedSessions: loaded.skipped, deduplicatedCalls, limited: loaded.limited || ancestryLimited },
   };
 }

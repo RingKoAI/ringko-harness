@@ -123,14 +123,6 @@ export function PromptInput({ running, editor, onEdit, history, onSubmit, onShor
         ? ["Enter run shell", "Alt+Enter newline", "Ctrl+C clear"]
         : ["Enter send", "Alt+Enter newline", "/ commands", "Ctrl+L models", "Ctrl+C twice exits"];
   return <Box flexDirection="column" flexShrink={0}>
-    {suggestions.length ? <Box flexDirection="column" paddingX={1}>
-      {suggestions.map((command, index) => <Fragment key={command.name}>
-        {index === 0 || commandGroup(suggestions[index - 1]?.name ?? "") !== commandGroup(command.name) ? <Text color={theme.dim} bold>{commandGroup(command.name)}</Text> : null}
-        <Box>
-        <Text color={index === active ? theme.brand : undefined} bold={index === active}>/{command.name}</Text>
-        <Text color={theme.dim}>  {truncate(command.description, Math.max(1, width - command.name.length - 3))}</Text>
-      </Box></Fragment>)}
-    </Box> : null}
     <Text color={border}>{caption}{"─".repeat(Math.max(0, columns - stringWidth(caption)))}</Text>
     <Box paddingX={1}>
       <Text color={shell ? theme.shell : theme.brand}>{"> "}</Text>
@@ -139,6 +131,14 @@ export function PromptInput({ running, editor, onEdit, history, onSubmit, onShor
       </Box>
     </Box>
     <Text color={border}>{"─".repeat(columns)}</Text>
+    {suggestions.length ? <Box flexDirection="column" paddingX={1}>
+      {suggestions.map((command, index) => <Fragment key={command.name}>
+        {index === 0 || commandGroup(suggestions[index - 1]?.name ?? "") !== commandGroup(command.name) ? <Text color={theme.dim} bold>{commandGroup(command.name)}</Text> : null}
+        <Box>
+        <Text color={index === active ? theme.brand : undefined} bold={index === active}>/{command.name}</Text>
+        <Text color={theme.dim}>  {truncate(command.description, Math.max(1, width - command.name.length - 3))}</Text>
+      </Box></Fragment>)}
+    </Box> : null}
     {exitArmed
       ? <Text color={theme.permission}>{truncate("Press Ctrl+C again to exit", width)}</Text>
       : <Text color={theme.dim}>{hintLine(hints, columns)}</Text>}

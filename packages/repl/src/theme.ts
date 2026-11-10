@@ -9,6 +9,7 @@ export const theme = {
   error: "red",
   success: "green",
   dim: "gray",
+  secondaryText: "#999999",
   border: "gray",
   permission: "yellow",
   assistant: undefined,

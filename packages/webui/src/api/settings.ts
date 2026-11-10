@@ -63,6 +63,20 @@ export async function setUi(patch: { expandThinking?: boolean; expandTools?: boo
   return (await response.json()) as Info;
 }
 
+export async function setUpdates(patch: Partial<Info["updates"]>): Promise<Info> {
+  const response = await fetch(`${BASE}/api/updates`, {
+    method: "POST",
+    headers: authHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(patch),
+  });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null) as { error?: unknown } | null;
+    throw new Error(typeof detail?.error === "string" ? detail.error : `Save update settings failed (${response.status}).`);
+  }
+  return (await response.json()) as Info;
+}
+
 export async function compact(sessionId: string, instructions?: string): Promise<{ compacted: boolean; summary: string | null; tokens: number }> {
   const response = await fetch(`${BASE}/api/compact`, {
     method: "POST",

@@ -73,6 +73,11 @@ import {
   setOAuthAccount,
   setToolAuth,
   updateOAuthCredential,
+  updatePolicy,
+  configurationStatus,
+  parseModelDefinition,
+  resolveSelectionMetadata,
+  resolveModelContext,
   writeDiagnostic,
   type McpServerConfig,
   type ModelDefinition,
@@ -116,6 +121,7 @@ import {
   sessionJobs,
   sessionUsage,
   toChatMessages,
+  toChatSurface,
   type FeedbackValue,
   type SessionEvent,
   type SessionHandle,
@@ -389,6 +395,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       thinking: config.thinking ?? null,
       expandThinking: config.expandThinking ?? false,
       expandTools: config.expandTools ?? false,
+      updates: updatePolicy(config, message => writeDiagnostic("updates.config", message)),
       model: typeof model === "string" ? null : modelLabel(model.selection),
       modelId:
         typeof model === "string" ? null : `${model.selection.provider.name}/${model.selection.model.id}`,
@@ -762,10 +769,29 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
 
   function handleProviders(): Response {
     try {
+      if (options.configPath) {
+        const config = loadConfig({ path: options.configPath });
+        return json({ providers: config.providers ?? [], model: config.model, small_model: config.small_model });
+      }
       return json(loadProviders());
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Invalid provider file." }, 500);
     }
+  }
+
+  /** Metadata lookup only: never probes provider URLs or sends credentials. */
+  async function handleModelContextPreview(request: Request): Promise<Response> {
+    const body = await readJson<unknown>(request);
+    if (!isRecord(body) || !isRecord(body.provider)) return json({ error: "provider and model are required." }, 400);
+    const input = body.provider;
+    if (typeof input.name !== "string" || !input.name.trim() || input.name.length > 128) return json({ error: "Invalid provider name." }, 400);
+    for (const field of ["type", "vendor", "baseURL", "url"] as const) if (input[field] !== undefined && (typeof input[field] !== "string" || input[field].length > 4096)) return json({ error: "Invalid provider metadata field." }, 400);
+    let model: ModelDefinition;
+    try { model = parseModelDefinition(body.model); }
+    catch (error) { return json({ error: error instanceof Error ? error.message : "Invalid model." }, 400); }
+    const provider: ProviderDefinition = { name: input.name, type: input.type as string | undefined, vendor: input.vendor as string | undefined, baseURL: input.baseURL as string | undefined, url: input.url as string | undefined };
+    const metadata = await resolveSelectionMetadata({ provider, model }, modelCatalog);
+    return json({ automatic: resolveModelContext({ id: model.id, name: model.name, catalogId: model.catalogId }, metadata), metadata: metadata ?? null });
   }
 
   /** Ask the configured provider endpoint for its model list (operator-initiated). */
@@ -820,15 +846,20 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (typeof record.url === "string") provider.url = record.url;
       if (typeof record.apiKey === "string") provider.apiKey = record.apiKey;
       if (typeof record.module === "string") provider.module = record.module;
-      if (Array.isArray(record.models)) provider.models = record.models as ModelDefinition[];
+      if (Array.isArray(record.models)) {
+        try { provider.models = record.models.map(parseModelDefinition); }
+        catch (error) { return json({ error: error instanceof Error ? error.message : "Invalid model parameters." }, 400); }
+      }
       providers.push(provider);
     }
     try {
-      saveProviders({
+      const next = {
         providers,
         ...(typeof body.model === "string" ? { model: body.model } : {}),
         ...(typeof body.small_model === "string" ? { small_model: body.small_model } : {}),
-      });
+      };
+      if (options.configPath) persistSettings({ ...loadConfig({ path: options.configPath }), ...next });
+      else saveProviders(next);
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Cannot save providers." }, 500);
     }
@@ -1086,6 +1117,40 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     return await handleInfo();
   }
 
+  async function handleStatus(): Promise<Response> {
+    const config = readConfig();
+    if (typeof config === "string") return json({ error: "Cannot read the active configuration. Fix the configuration and retry /status." }, 500);
+    let entries;
+    try { entries = configurationStatus(config, { path: options.configPath, warn: message => writeDiagnostic("status.config", message) }); }
+    catch { return json({ error: "Cannot summarize the active configuration. Fix the configuration and retry /status." }, 500); }
+    const cwd = workspace;
+    let mcp;
+    try { mcp = await runtimeFor(cwd).readyConnections(); }
+    catch { return json({ error: "Cannot read MCP connection status; retry /status." }, 500); }
+    if (cwd !== workspace) return json({ error: "Workspace changed; retry /status." }, 409);
+    return json({
+      version: options.version ?? null,
+      entries: [
+        { label: "cwd", value: cwd },
+        ...entries,
+        { label: "MCP servers", value: `${mcp.connections.length} connected, ${mcp.errors.length} failed · /mcp` },
+        { label: "Backend authentication", value: options.authToken ? "RINGKO_WEB_TOKEN / host token required" : "Not required" },
+      ],
+    });
+  }
+
+  async function handleSetUpdates(request: Request): Promise<Response> {
+    const body = await readJson<unknown>(request);
+    if (!isRecord(body) || !Object.keys(body).length || Object.entries(body).some(([key, value]) => !["checkOnStartup", "autoUpdate"].includes(key) || typeof value !== "boolean")) {
+      return json({ error: "Expected checkOnStartup and/or autoUpdate boolean settings." }, 400);
+    }
+    const config = readConfig();
+    if (typeof config === "string") return json({ error: config }, 500);
+    persistSettings({ ...config, updates: { ...updatePolicy(config, message => writeDiagnostic("updates.config", message)), ...body } });
+    sync.publish("config");
+    return await handleInfo();
+  }
+
   async function handleCompact(request: Request): Promise<Response> {
     const body = await readJson<{ sessionId?: unknown; instructions?: unknown }>(request);
     const sessionId = typeof body?.sessionId === "string" ? body.sessionId : "";
@@ -1181,19 +1246,19 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   function handleSession(id: string): Response {
     try {
       const events = store.open(id, "read").all();
-      const failedCalls = new Set(events.filter(event => event.type === "tool/result")
+      const failedResults = new Set(events.filter(event => event.type === "tool/result")
         .flatMap(event => {
           const data = event.data as { failed?: unknown; toolCallId?: unknown } | null;
-          return data?.failed === true && typeof data.toolCallId === "string" ? [data.toolCallId] : [];
+          return data?.failed === true ? [event.seq] : [];
         }));
       return json({
         id,
         title: sessionTitle(events) ?? null,
         summary: sessionSummary(events) ?? null,
         archived: sessionArchived(events),
-        messages: toChatMessages(events).map(message => message.role === "tool"
-          ? { ...stripMessageParts(message), failed: message.toolCallId ? failedCalls.has(message.toolCallId) : false }
-          : stripMessageParts(message)),
+        messages: toChatSurface(events).map(({ message, seq }) => message.role === "tool"
+          ? { ...stripMessageParts(message), sourceSeq: seq, failed: failedResults.has(seq) }
+          : { ...stripMessageParts(message), sourceSeq: seq }),
         tasks: taskSummaries(events, activeRuns.has(id)),
         todos: sessionTodos(events),
         usage: sessionUsage(events),
@@ -1217,7 +1282,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         id, instance: sync.instance, revision: sync.revision,
         title: sessionTitle(events) ?? null, summary: sessionSummary(events) ?? null, archived: sessionArchived(events),
         model: sessionModel(events) ?? null,
-        messages: toChatMessages(events).map(stripMessageParts), events: events.map(stripEventParts), busy,
+        messages: toChatSurface(events).map(({ message, seq }) => ({ ...stripMessageParts(message), sourceSeq: seq })), events: events.map(stripEventParts), busy,
         usage: sessionUsage(events),
         tasks: taskSummaries(events, busy), todos: sessionTodos(events), jobs: sessionJobs(events, busy),
         approvals: [...(state?.approvals.values() ?? [])], questions: [...(state?.questions.values() ?? [])],
@@ -1802,6 +1867,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         }
       }
       if (url.pathname === "/api/backend" && request.method === "GET") return json({ protocol: PROTOCOL_VERSION, instance: sync.instance, workspace, configPath: options.configPath ? resolve(options.configPath) : null });
+      if (url.pathname === "/api/status" && request.method === "GET") return await handleStatus();
       if (url.pathname === "/api/backend/stop" && request.method === "POST") {
         if (activeRuns.size || uploads.busy) return json({ error: "Finish active sessions and uploads before stopping the backend." }, 409);
         admissionClosed = true;
@@ -1856,6 +1922,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname === "/api/providers" && request.method === "GET") return handleProviders();
       if (url.pathname === "/api/providers" && request.method === "PUT") return await handleSaveProviders(request);
       if (url.pathname === "/api/providers/models" && request.method === "POST") return await handleDiscoverModels(request);
+      if (url.pathname === "/api/providers/context" && request.method === "POST") return await handleModelContextPreview(request);
       if (url.pathname === "/api/projects" && request.method === "GET") return handleProjects();
       if (url.pathname === "/api/projects" && request.method === "POST") return await handleAddProject(request);
       if (url.pathname === "/api/mcp" && request.method === "GET") return handleMcp();
@@ -1883,6 +1950,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname === "/api/model" && request.method === "POST") return await handleSetModel(request);
       if (url.pathname === "/api/thinking" && request.method === "POST") return await handleSetThinking(request);
       if (url.pathname === "/api/ui" && request.method === "POST") return await handleSetUi(request);
+      if (url.pathname === "/api/updates" && request.method === "POST") return await handleSetUpdates(request);
       if (url.pathname === "/api/compact" && request.method === "POST") return await handleCompact(request);
       if (url.pathname === "/api/access" && request.method === "POST") return await handleSetAccess(request);
       if (url.pathname === "/api/permission" && request.method === "POST") return await handleSetAccess(request);

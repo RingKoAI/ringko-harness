@@ -4,11 +4,15 @@ import type { BackendClient } from "@ringko-ai/client";
 import { connectBackend } from "../../backend.ts";
 import { cliCommand } from "../../cli-identity.ts";
 import { printResumeHint } from "../../resume-hint.ts";
+import { VERSION } from "../../version.ts";
 import { readConfig } from "../shared.ts";
 import type { CliIo, ParsedArgs } from "../types.ts";
 
 interface ReplModule {
   launchRepl(options: {
+    version?: string;
+    backendUrl?: string;
+    configPath?: string;
     model: import("@ringko-ai/sdk").ModelClient;
     modelLabel: string;
     config: RingkoConfig;
@@ -58,6 +62,9 @@ export async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number>
     config,
     workspace: connection.workspace,
     backend,
+    version: VERSION,
+    backendUrl: connection.url,
+    ...(parsed.config ? { configPath: parsed.config } : {}),
     ...(resumeSessionId ? { resumeSessionId } : {}),
     ...(parsed.sessionPicker ? { pickSession: true } : {}),
     ...(info.modelId ? { modelId: info.modelId } : {}),

@@ -7,6 +7,7 @@ import { transcriptViewport, type TranscriptViewport } from "../transcript-viewp
 import { fitTerminalLine } from "../editor.ts";
 import { hintLine } from "../chrome.ts";
 import { theme } from "../theme.ts";
+import type { TranscriptRunStatus } from "@ringko-ai/client";
 
 export interface TranscriptProps {
   items: readonly ReplItem[];
@@ -18,11 +19,13 @@ export interface TranscriptProps {
   offset?: number;
   onOffset?: (offset: number) => void;
   viewKey?: string;
+  busy?: boolean;
+  runStatus?: TranscriptRunStatus;
 }
 
-export function Transcript({ items, limit, expandThinking = false, expandTools = false, columns = 80, rows = 20, offset = 0, onOffset, viewKey = "main" }: TranscriptProps) {
+export function Transcript({ items, limit, expandThinking = false, expandTools = false, columns = 80, rows = 20, offset = 0, onOffset, viewKey = "main", busy = false, runStatus }: TranscriptProps) {
   const render = useMemo(() => createTranscriptRenderer(), [viewKey]);
-  const lines = useMemo(() => render(limit === undefined ? items : items.slice(-limit), columns, expandThinking, expandTools), [items, limit, expandThinking, expandTools, columns, render]);
+  const lines = useMemo(() => render(limit === undefined ? items : items.slice(-limit), columns, expandThinking, expandTools, { busy, runStatus }), [items, limit, expandThinking, expandTools, columns, render, busy, runStatus]);
   const tools = items.some(item => item.kind === "tool");
   const previous = useRef<TranscriptViewport | undefined>(undefined);
   const height = Math.max(0, rows - (tools && rows > 2 ? 1 : 0));

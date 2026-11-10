@@ -4,12 +4,12 @@ import type { DiscoveredProviderModel } from '@/api'
  * Merge a discovered model list into the configured one. Existing entries keep
  * their edited names; new ids are appended in discovery order.
  */
-export function mergeDiscoveredModels(
-  existing: readonly { id: string; name?: string }[],
+export function mergeDiscoveredModels<T extends { id: string; name?: string }>(
+  existing: readonly T[],
   discovered: readonly DiscoveredProviderModel[],
-): { id: string; name: string }[] {
+): Array<T | { id: string; name: string }> {
   const seen = new Set(existing.map(model => model.id))
-  const merged = existing.map(model => ({ id: model.id, name: model.name ?? '' }))
+  const merged: Array<T | { id: string; name: string }> = existing.map(model => ({ ...model, name: model.name ?? '' }))
   for (const model of discovered) {
     if (!model.id || seen.has(model.id)) continue
     seen.add(model.id)

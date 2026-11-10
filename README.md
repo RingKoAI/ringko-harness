@@ -41,7 +41,7 @@ From a checkout:
 
 ```sh
 pnpm install
-pnpm build:native # source development requires a C/C++ compiler
+pnpm build:native # source development requires a C11 compiler
 pnpm dev:tui    # terminal UI
 pnpm build      # code, tui and webui
 ```
@@ -68,6 +68,11 @@ pnpm build      # code, tui and webui
   reloaded before every request, skills, and MCP servers.
 - **Providers.** Any AI SDK model. Thinking levels map to each provider's own
   field, and missing model limits are filled from Models.dev.
+- **Terminal settings.** `/status` opens Status, Config, Usage and Stats pages.
+  Edit display, update, thinking and access preferences; inspect session usage or
+  workspace statistics. `/config`, `/usage` and `/stats` open the corresponding
+  pages directly. The default Stats overview shows a calendar heatmap and paired
+  metrics, with a separate Models view. See [terminal controls](packages/repl/README.md).
 
 ## Shared sessions
 

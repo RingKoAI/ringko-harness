@@ -29,6 +29,19 @@ export interface UsageStatisticsBucket {
   averageDurationMs: number | null;
   timedCalls: number;
 }
+export interface UsageActivity {
+  timeZone: string;
+  today: string;
+  /** Sparse daily counts over the latest year, using the same filtered calls. */
+  days: Array<{ date: string; calls: number }>;
+  activeDays: number;
+  totalDays: number;
+  longestStreak: number;
+  currentStreak: number;
+  mostActiveDay: { date: string; calls: number } | null;
+  /** Creation-to-last-reported-call span, clipped to the selected range; includes idle time. */
+  longestSessionMs: number | null;
+}
 export interface UsageStatistics {
   workspace: string;
   generatedAt: number;
@@ -40,6 +53,8 @@ export interface UsageStatistics {
   models: UsageStatisticsBucket[];
   trend: UsageStatisticsBucket[];
   grain: "day" | "month";
+  /** Optional for compatibility with older backends. */
+  activity?: UsageActivity;
   requests: UsageRequest[];
   total: number;
   offset: number;

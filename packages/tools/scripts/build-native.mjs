@@ -15,7 +15,7 @@ export function nativeTarget(value = `${process.platform}-${process.arch}`) {
 }
 export function fingerprint(target) {
   const hash = createHash("sha256").update(target).update("node-api-v8-files-v3");
-  for (const name of ["binding.cc", "platform.h", target.startsWith("win32-") ? "windows.cc" : "posix.cc"]) hash.update(name + "\0").update(readFileSync(join(source, name))).update("\0");
+  for (const name of ["binding.c", "platform.h", target.startsWith("win32-") ? "windows.c" : "posix.c"]) hash.update(name + "\0").update(readFileSync(join(source, name))).update("\0");
   for (const name of ["node_api.h", "node_api_types.h", "js_native_api.h", "js_native_api_types.h"]) hash.update(name + "\0").update(readFileSync(join(headers.include_dir, name))).update("\0");
   hash.update(readFileSync(import.meta.path));
   return hash.digest("hex");
@@ -55,21 +55,21 @@ export function buildNative(target = nativeTarget()) {
   const [platform, arch] = target.split("-");
   if (platform !== process.platform) throw new Error(`Missing ${target} native build. Build it on ${platform} or provide matching CI native artifacts before cross-compiling.`);
   const crossLinux = platform === "linux" && arch !== process.arch;
-  const candidates = crossLinux ? [`${arch === "arm64" ? "aarch64" : "x86_64"}-linux-gnu-g++`] : ["clang++", "g++", "clang", "c++"];
-  const compiler = process.env.CXX || candidates.map(name => Bun.which(name)).find(Boolean);
-  if (!compiler) throw new Error(`A C/C++ compiler is required for ${target}. Install the build toolchain or set CXX to its executable.`);
+  const candidates = crossLinux ? [`${arch === "arm64" ? "aarch64" : "x86_64"}-linux-gnu-gcc`] : ["clang", "gcc", "cc"];
+  const compiler = process.env.CC || candidates.map(name => Bun.which(name)).find(Boolean);
+  if (!compiler) throw new Error(`A C11 compiler is required for ${target}. Install the build toolchain or set CC to its executable.`);
   const directory = nativeDirectory(target), digest = fingerprint(target), name = `ringko-secure-files-${digest.slice(0, 16)}.node`;
   mkdirSync(directory, { recursive: true });
   const staging = mkdtempSync(join(directory, ".build-")), temporary = join(staging, "binding.node");
   const msvc = /(?:^|[\\/])cl(?:\.exe)?$/i.test(compiler);
   const args = msvc
-    ? ["/nologo", "/std:c++17", "/O2", "/W4", "/EHs-c-", "/GR-", "/MT", "/DNAPI_VERSION=8", "/I", headers.include_dir, `/Fo${staging}\\`]
-    : ["-std=c++17", "-O2", "-Wall", "-Wextra", "-Wpedantic", "-fno-exceptions", "-fno-rtti", "-DNAPI_VERSION=8", "-I", headers.include_dir];
+    ? ["/nologo", "/std:c11", "/TC", "/O2", "/W4", "/WX", "/MT", "/DNAPI_VERSION=8", "/I", headers.include_dir, `/Fo${staging}\\`]
+    : ["-std=c11", "-O2", "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-DNAPI_VERSION=8", "-I", headers.include_dir];
   if (!msvc) {
     if (platform === "darwin") args.push("-dynamiclib", "-undefined", "dynamic_lookup", "-mmacosx-version-min=13.0", "-arch", arch === "x64" ? "x86_64" : "arm64");
-    else args.push("-shared", ...(platform === "linux" ? ["-fPIC"] : []), "-static-libgcc", "-static-libstdc++");
+    else args.push("-shared", ...(platform === "linux" ? ["-fPIC"] : []), "-static-libgcc");
   }
-  args.push(join(source, "binding.cc"), join(source, platform === "win32" ? "windows.cc" : "posix.cc"));
+  args.push(join(source, "binding.c"), join(source, platform === "win32" ? "windows.c" : "posix.c"));
   if (msvc) args.push("/link", "/DLL", `/OUT:${temporary}`, "advapi32.lib");
   else { args.push("-o", temporary); if (platform === "win32") args.push("-ladvapi32"); }
   try {

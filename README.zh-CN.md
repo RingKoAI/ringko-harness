@@ -39,7 +39,7 @@ ringko web      # 浏览器界面，打印按 workspace 派生的访问地址
 
 ```sh
 pnpm install
-pnpm build:native # 源码运行先构建 Node-API 文件模块，需要 C/C++ 编译器
+pnpm build:native # 源码运行先构建 Node-API 文件模块，需要 C11 编译器
 pnpm dev:tui    # 终端界面
 pnpm build      # code、tui 与 webui
 ```
@@ -63,6 +63,10 @@ pnpm build      # code、tui 与 webui
 - **上下文。** 自动与手动压缩；每次请求前重新加载 `AGENTS.md`；技能；MCP server。
 - **供应商。** 任意 AI SDK 模型。思考档位映射到各供应商自己的字段，缺失的模型限制
   由 Models.dev 补全。
+- **终端设置。** `/status` 打开 Status、Config、Usage、Stats 四页，可编辑显示、更新、
+  思考档位和访问模式，查看当前会话用量及工作区统计。`/config`、`/usage`、`/stats`
+  直接打开对应页面。默认展示 Stats 概览的活动热力图与双列统计，可切换 Models。
+  操作方式见[终端说明](packages/repl/README.md)。
 
 ## 共享会话
 

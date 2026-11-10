@@ -22,6 +22,7 @@ describe("parseInput", () => {
   });
 
   it("parses known commands and their arguments", () => {
+    expect(parseInput("/status")).toEqual({ kind: "command", name: "status", arg: "" });
     expect(parseInput("/help")).toEqual({ kind: "command", name: "help", arg: "" });
     expect(parseInput("/quit")).toEqual({ kind: "command", name: "quit", arg: "" });
     expect(parseInput("/model gpt-4o")).toEqual({ kind: "command", name: "model", arg: "gpt-4o" });
@@ -37,6 +38,21 @@ describe("parseInput", () => {
 });
 
 describe("registry", () => {
+  it("routes status to a read-only host view and includes it in completion", () => {
+    let opened = 0;
+    findCommand("status")!.run({ showStatus: () => { opened++; } } as unknown as SlashContext, "");
+    expect(opened).toBe(1);
+    expect(filterCommands("stat")[0]?.name).toBe("status");
+    const printed: string[] = [];
+    findCommand("status")!.run({ print: (text: string) => printed.push(text) } as unknown as SlashContext, "");
+    expect(printed[0]).toContain("interactive REPL");
+  });
+  it("opens the corresponding settings page from configuration and usage aliases", () => {
+    const opened: string[] = [];
+    const context = { showStatus: (tab?: string) => { opened.push(tab ?? "Status"); } } as unknown as SlashContext;
+    for (const command of ["config", "usage", "stats"]) findCommand(command)!.run(context, "");
+    expect(opened).toEqual(["Config", "Usage", "Stats"]);
+  });
   it("resolves aliases", () => {
     expect(findCommand("q")?.name).toBe("exit");
     expect(findCommand("?")?.name).toBe("help");

@@ -1,9 +1,9 @@
 import { Terminal, Wrench } from 'lucide-react'
-import { useState } from 'react'
+import type { ReactNode } from 'react'
 import type { ServerMessage, ToolCall } from '@/api'
 import { ToolDiff } from '@/components/tool-diff'
 import { editDiff } from '@/lib/edit-diff'
-import { toolActivityKind, toolCallTarget, type ToolActivityKind } from '@/lib/tool-activity'
+import { toolCallTarget, type ToolTurn } from '@/lib/tool-activity'
 import { cn } from '@/lib/utils'
 import type { useI18n } from '@/i18n'
 
@@ -68,44 +68,22 @@ export function ToolCallList({ calls, results, busy, showDetails, t }: { calls: 
   )
 }
 
-type ActivityKind = ToolActivityKind
-
-/**
- * One step's tool calls collapse into a single summary row. The group opens
- * while a call is still running, when a call failed, or when detailed tool
- * output is enabled, and otherwise stays closed to keep the transcript dense.
- */
-export function ToolActivityGroup({ calls, results, busy, showDetails, t }: { calls: readonly ToolCall[]; results?: ReadonlyMap<string, ServerMessage>; busy: boolean; showDetails: boolean; t: Translate }) {
-  const pending = calls.filter(call => !results?.has(call.id))
-  const running = busy && pending.length > 0 ? pending[pending.length - 1]!.name : null
-  const failed = calls.filter(call => results?.get(call.id)?.failed).length
-  const counts = new Map<ActivityKind, number>()
-  let additions = 0
-  let deletions = 0
-  for (const call of calls) {
-    const kind = toolActivityKind(call.name)
-    counts.set(kind, (counts.get(kind) ?? 0) + 1)
-    if (call.name === 'edit') {
-      const change = editDiff(call.arguments)
-      if (change) { additions += change.additions; deletions += change.deletions }
-    }
-  }
-  const [override, setOverride] = useState<{ signature: string; open: boolean } | null>(null)
-  const signature = `${calls.length}:${failed}:${running ?? ''}:${showDetails ? 1 : 0}`
-  const autoOpen = Boolean(running) || failed > 0 || showDetails
-  const open = override?.signature === signature ? override.open : autoOpen
+/** A stable per-turn disclosure; assistant prose stays outside the hidden tool process. */
+export function TurnToolActivity({ turn, showDetails, override, onToggle, t, children }: { turn: ToolTurn; showDetails: boolean; override?: { details: boolean; open: boolean }; onToggle: (open: boolean) => void; t: Translate; children: (open: boolean) => ReactNode }) {
+  const open = !turn.foldable || (override?.details === showDetails ? override.open : showDetails)
   return (
-    <details open={open} onToggle={event => setOverride({ signature, open: event.currentTarget.open })} className="my-1 rounded-md border bg-muted/20 text-xs">
-      <summary className="flex min-w-0 cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 px-3 py-1.5">
+    <div className="min-w-0 space-y-4" data-tool-turn={turn.key}>
+      {turn.count > 0 && <button type="button" aria-expanded={open} disabled={!turn.foldable} onClick={() => onToggle(!open)} className="flex min-h-10 w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-md border bg-muted/20 px-3 py-2 text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default">
         <Wrench className="size-3 shrink-0" aria-hidden="true" />
-        <span className="font-medium">{t('activity.title', { count: calls.length })}</span>
-        {[...counts].map(([kind, count]) => <span key={kind} className="text-muted-foreground">{t(`activity.${kind}`)} {count}</span>)}
-        {additions + deletions > 0 ? <span className="shrink-0 tabular-nums"><span className="text-emerald-600 dark:text-emerald-400">+{additions}</span><span className="mx-1 text-muted-foreground">/</span><span className="text-destructive">−{deletions}</span></span> : null}
-        {failed > 0 ? <span className="text-destructive">{t('activity.failed', { count: failed })}</span> : null}
-        <span className="ml-auto shrink-0 text-muted-foreground">{running ? t('activity.running', { name: running }) : open ? t('activity.hide') : t('activity.show')}</span>
-      </summary>
-      <div className="border-t px-3 py-2"><ToolCallList calls={calls} results={results} busy={busy} showDetails={showDetails} t={t} /></div>
-    </details>
+        <span className="font-medium">{t(turn.orphans ? 'activity.turnRecords' : 'activity.turnTitle', { count: turn.count })}</span>
+        {[...turn.counts].map(([kind, count]) => <span key={kind} className="text-muted-foreground">{t(`activity.${kind}`)} {count}</span>)}
+        {turn.additions + turn.deletions > 0 && <span className="shrink-0 tabular-nums"><span className="text-emerald-600 dark:text-emerald-400">+{turn.additions}</span><span className="mx-1 text-muted-foreground">/</span><span className="text-destructive">−{turn.deletions}</span></span>}
+        {turn.failed > 0 && <span className="text-destructive">{t('activity.failed', { count: turn.failed })}</span>}
+        {!turn.running && turn.unknown > 0 && <span className="text-destructive">{t('activity.unknown', { count: turn.unknown })}</span>}
+        <span className="ml-auto shrink-0 text-muted-foreground">{turn.running ? t('message.working') : !turn.foldable ? t('activity.keptOpen') : open ? t('activity.hide') : t('activity.show')}</span>
+      </button>}
+      {children(open)}
+    </div>
   )
 }
 

@@ -1,5 +1,5 @@
 import type { Approval, ChatHandlers, JobSummary, LoopStatus, QuestionRequest, ServerMessage, TaskSummary, TodoItem } from '../api'
-import type { SessionSnapshot, SessionUsage } from '@ringko-ai/client'
+import { restoreTranscript, type SessionSnapshot, type SessionUsage } from '@ringko-ai/client'
 import { normalizeSessionUsage } from './session-usage'
 
 export const CONVERSATION_LIMITS = { queued: 16, prompt: 65536, partial: 262144, cached: 64 } as const
@@ -9,14 +9,15 @@ export interface Conversation {
   tasks: TaskSummary[]; jobs: JobSummary[]; todos: TodoItem[]; queue: QueuedMessage[]
   partial: { content: string; reasoning: string } | null; draft: string; error: string | null; loop: LoopStatus | null
   usage: SessionUsage | null; model: string | null
+  toolExpansions: Record<string, { details: boolean; open: boolean }>
 }
-export const emptyConversation = (): Conversation => ({ messages: [], busy: false, approval: null, question: null, tasks: [], jobs: [], todos: [], queue: [], partial: null, draft: '', error: null, loop: null, usage: null, model: null })
+export const emptyConversation = (): Conversation => ({ messages: [], busy: false, approval: null, question: null, tasks: [], jobs: [], todos: [], queue: [], partial: null, draft: '', error: null, loop: null, usage: null, model: null, toolExpansions: {} })
 type Transport = (input: { sessionId?: string; prompt: string; attachments: string[]; loop?: { args: string } }, handlers: ChatHandlers) => { abort(): void }
 
 /** Owns each stream independently of the currently visible route. Late callbacks are discarded. */
 export class Conversations {
   private states = new Map<string, Conversation>()
-  private runs = new Map<string, { token: symbol; abort(): void }>()
+  private runs = new Map<string, { token: symbol; userId: string; abort(): void }>()
   private listeners = new Set<() => void>()
   private paused = new Set<string>()
   private revisions = new Map<string, { instance: string; revision: number }>()
@@ -40,6 +41,11 @@ export class Conversations {
     return state
   }
   patch(id: string, patch: Partial<Conversation>) { this.states.set(id, { ...this.get(id), ...patch }); for (const listener of [...this.listeners]) listener() }
+  setToolExpansion(id: string, key: string, details: boolean, open: boolean): void {
+    const state = this.get(id), choice = { details, open }
+    const owner = state.messages.find(message => message.role === 'user' && message.viewId === key)
+    this.patch(id, { toolExpansions: { ...state.toolExpansions, [key]: choice, ...(owner?.runStart === undefined ? {} : { [`run:${owner.runStart}`]: choice }) } })
+  }
   load(id: string, data: Partial<Conversation>, expected?: Conversation) {
     const current = this.get(id)
     // A request issued before any local edit/run must never overwrite its newer state.
@@ -51,9 +57,23 @@ export class Conversations {
     if (this.disposed || this.runs.has(snapshot.id)) return
     const previous = this.revisions.get(snapshot.id)
     if (previous?.instance === snapshot.instance && previous.revision > snapshot.revision) return
-    const failed = new Set(snapshot.events.filter(event => event.type === 'tool/result' && (event.data as { failed?: boolean })?.failed).map(event => (event.data as { toolCallId?: string }).toolCallId))
+    const current = this.get(snapshot.id)
+    const viewIds = new Map<number, string>()
+    for (const message of current.messages) if (message.role === 'user' && message.sourceSeq !== undefined && message.viewId) viewIds.set(message.sourceSeq, message.viewId)
+    const messages = restoreTranscript(snapshot.messages, snapshot.events, snapshot.busy, snapshot.error !== null).map((message, index) => {
+      if (message.role !== 'user') return message
+      const previous = current.messages[index]
+      const viewId = (message.sourceSeq === undefined ? undefined : viewIds.get(message.sourceSeq))
+        ?? (previous?.role === 'user' && previous.content === message.content ? previous.viewId : undefined)
+        ?? (message.sourceSeq === undefined ? `user:${index}` : `seq:${message.sourceSeq}`)
+      return { ...message, viewId }
+    })
+    const retained = new Set(messages.flatMap(message => [message.viewId, message.runStart === undefined ? undefined : `run:${message.runStart}`]).filter((key): key is string => key !== undefined))
+    const expansions = { ...current.toolExpansions }
+    for (const message of messages) if (message.viewId && message.runStart !== undefined && expansions[message.viewId]) expansions[`run:${message.runStart}`] = expansions[message.viewId]
     this.patch(snapshot.id, {
-      messages: snapshot.messages.map(message => message.role === 'tool' ? { ...message, failed: failed.has(message.toolCallId) } : message),
+      messages,
+      toolExpansions: Object.fromEntries(Object.entries(expansions).filter(([key]) => retained.has(key))),
       busy: snapshot.busy, partial: snapshot.partial, approval: snapshot.approvals[0] ?? null,
       question: snapshot.questions[0] ?? null, tasks: snapshot.tasks, todos: snapshot.todos, jobs: snapshot.jobs,
       loop: snapshot.loop, error: snapshot.error,
@@ -104,6 +124,7 @@ export class Conversations {
     this.paused.add(id)
     const run = this.runs.get(id); this.runs.delete(id); run?.abort()
     this.patch(id, { busy: false, partial: null, approval: null, question: null,
+      messages: state.messages.map(message => run && message.viewId === run.userId && message.role === 'user' ? { ...message, runStatus: 'cancelled' } : message),
       tasks: state.tasks.map(task => task.status === 'running' ? { ...task, status: 'unknown' } : task),
       jobs: state.jobs.map(job => job.status === 'running' ? { ...job, status: 'unknown' } : job) })
   }
@@ -115,9 +136,9 @@ export class Conversations {
     loop?: { args: string },
     options: { create?: boolean; onCreated?: (id: string) => void } = {},
   ) {
-    const token = Symbol(id); this.runs.set(id, { token, abort() {} })
+    const token = Symbol(id), userId = crypto.randomUUID(); this.runs.set(id, { token, userId, abort() {} })
     let key = id
-    this.patch(key, { busy: true, error: null, loop: null, messages: [...this.get(key).messages, { role: 'user', content: prompt }] })
+    this.patch(key, { busy: true, error: null, loop: null, messages: [...this.get(key).messages, { role: 'user', content: prompt, viewId: userId, runStatus: 'running' }] })
     const update = (change: (state: Conversation) => Partial<Conversation>) => {
       if (this.runs.get(key)?.token === token) this.patch(key, change(this.get(key)))
     }
@@ -126,6 +147,7 @@ export class Conversations {
       this.runs.delete(key)
       const state = this.get(key)
       this.patch(key, { busy: false, partial: null, approval: null, question: null, error: error ?? null, loop: null,
+        messages: state.messages.map(message => message.role === 'user' && message.viewId === userId ? { ...message, runStatus: error ? 'failed' : 'completed' } : message),
         ...(error ? { tasks: state.tasks.map(task => task.status === 'running' ? { ...task, status: 'unknown' as const } : task), jobs: state.jobs.map(job => job.status === 'running' ? { ...job, status: 'unknown' as const } : job) } : {}) })
       this.report(error, key)
       if (!error) queueMicrotask(() => this.resume(key))
@@ -175,7 +197,7 @@ export class Conversations {
         },
         onSessionMeta: () => this.report(undefined, key), onDone: () => finish(), onError: finish, onUnauthorized: () => finish('Unauthorized'),
       })
-      if (this.runs.get(key)?.token === token) this.runs.set(key, { token, ...handle })
+      if (this.runs.get(key)?.token === token) this.runs.set(key, { token, userId, ...handle })
     } catch (error) { finish(error instanceof Error ? error.message : 'Request failed.') }
   }
 }

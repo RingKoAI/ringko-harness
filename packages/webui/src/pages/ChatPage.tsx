@@ -35,10 +35,10 @@ import { Textarea } from '@/components/ui/textarea'
 import { useI18n, type MessageKey } from '@/i18n'
 import { useApp } from '@/store'
 import { cn } from '@/lib/utils'
-import { matchToolResults } from '@/lib/tool-activity'
+import { toolTurns } from '@/lib/tool-activity'
 import { isNearBottom, scrollMetrics } from '@/lib/chat-scroll'
 import { CopyButton } from '@/components/chat/copy-button'
-import { ToolActivityGroup, ToolResult, toolSummary } from '@/components/chat/tool-activity'
+import { ToolCallList, TurnToolActivity, ToolResult, toolSummary } from '@/components/chat/tool-activity'
 import { BrandMark } from '@/components/brand-mark'
 
 const COMMANDS: { name: string; label: MessageKey }[] = [
@@ -59,6 +59,8 @@ function MessageRow({
   feedback,
   toolResults,
   busy,
+  showCalls,
+  toolBusy,
 }: {
   message: ServerMessage
   index: number
@@ -71,6 +73,8 @@ function MessageRow({
   feedback?: 'up' | 'down'
   toolResults?: ReadonlyMap<string, ServerMessage>
   busy: boolean
+  showCalls: boolean
+  toolBusy: boolean
 }) {
   const { t } = useI18n()
   const [editing, setEditing] = useState(false)
@@ -149,7 +153,7 @@ function MessageRow({
             <Markdown content={message.content} />
           )
         ) : null}
-        {message.toolCalls && message.toolCalls.length > 0 ? <ToolActivityGroup calls={message.toolCalls} results={toolResults} busy={busy} showDetails={showTools} t={t} /> : null}
+        {showCalls && message.toolCalls && message.toolCalls.length > 0 ? <ToolCallList calls={message.toolCalls} results={toolResults} busy={toolBusy} showDetails={showTools} t={t} /> : null}
         {!isTool ? (
           <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
             {message.content ? (
@@ -390,7 +394,7 @@ export function ChatPage() {
 
   const showThinking = app.info?.expandThinking ?? false
   const showTools = app.info?.expandTools ?? false
-  const toolActivity = useMemo(() => matchToolResults(app.messages), [app.messages])
+  const toolActivity = useMemo(() => toolTurns(app.messages, app.busy, app.error), [app.messages, app.busy, app.error])
   // Fork indexes count transcript messages only; system notices (compaction,
   // background job notifications) are not branching targets.
   const forkIndexes = useMemo(() => {
@@ -440,6 +444,13 @@ export function ChatPage() {
       toast.error(cause instanceof Error ? cause.message : String(cause)),
     )
   }
+  function renderMessage(index: number, showCalls: boolean, toolBusy: boolean) {
+    const message = app.messages[index]!
+    if (message.role === 'system' || toolActivity.attached.has(index) || (message.role === 'tool' && !showCalls)) return null
+    if (message.role === 'assistant' && !message.content && (!message.reasoning || !showThinking) && !showCalls) return null
+    return <MessageRow key={index} message={message} index={index} forkIndex={forkIndexes[index]} showThinking={showThinking} showTools={showTools}
+      onBranch={branch} onEdit={edit} onFeedback={rate} feedback={feedback[index]} toolResults={toolActivity.results.get(index)} busy={app.busy} showCalls={showCalls} toolBusy={toolBusy} />
+  }
   const empty = app.messages.length === 0
   const landing = empty && view === 'chat'
   const shellJobs = app.jobs.filter(job => job.kind === 'shell')
@@ -478,21 +489,13 @@ export function ChatPage() {
           <ScrollArea data-chat-scroll className="min-h-0 flex-1">
         <div className="px-3 sm:px-4">
           <div className="chat-column flex min-w-0 flex-col gap-6 px-4 py-6 [overflow-wrap:anywhere]" data-chat-transcript>
-            {app.messages.map((message, index) => message.role === 'system' || toolActivity.attached.has(index) ? null : (
-              <MessageRow
-                key={index}
-                message={message}
-                index={index}
-                forkIndex={forkIndexes[index]}
-                showThinking={showThinking}
-                showTools={showTools}
-                onBranch={branch}
-                onEdit={edit}
-                onFeedback={rate}
-                feedback={feedback[index]}
-                toolResults={toolActivity.results.get(index)}
-                busy={app.busy}
-              />
+            {toolActivity.turns.map(turn => app.messages.slice(turn.start, turn.end).every(message => message.role === 'system') ? null : (
+              <div key={`${app.sessionId ?? 'new'}:${turn.key}`} className="min-w-0 space-y-6" data-chat-turn>
+                {turn.userIndex === undefined ? null : renderMessage(turn.userIndex, true, turn.running)}
+                <TurnToolActivity turn={turn} showDetails={showTools} override={app.toolExpansions[turn.key]} onToggle={open => app.setToolExpansion(turn.key, showTools, open)} t={t}>
+                  {open => Array.from({ length: turn.end - turn.start }, (_, offset) => turn.start + offset).map(index => index === turn.userIndex ? null : renderMessage(index, open, turn.running))}
+                </TurnToolActivity>
+              </div>
             ))}
             {app.partial ? <div aria-live="off" aria-label={t('stream.live')} className="min-w-0">
               {app.partial.reasoning ? <details open={showThinking} className="mb-3 rounded-lg border p-3"><summary className="cursor-pointer text-sm text-muted-foreground">{t('ui.showThinking')}</summary><div className="mt-2 whitespace-pre-wrap break-words text-sm text-muted-foreground">{app.partial.reasoning}</div></details> : null}

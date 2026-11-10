@@ -6,7 +6,7 @@ import { loadConfig, loadProviders, saveConfig, saveConfigFile } from "@ringko-a
 import { BackendClient } from "@ringko-ai/client";
 import { startServer } from "../src/server.ts";
 
-it("model, thinking and display controls update the explicit config without touching global settings", async () => {
+it("model, thinking, display and update controls respect the explicit config", async () => {
   const root = mkdtempSync(join(tmpdir(), "rkh-explicit-config-"));
   const previous = process.env.RINGKO_HOME; process.env.RINGKO_HOME = join(root, "home");
   const path = join(root, "fixture.json");
@@ -19,9 +19,12 @@ it("model, thinking and display controls update the explicit config without touc
     expect(info.modelId).toBe("Fixture/two");
     await client.request("/api/thinking", { level: "low" });
     await client.request("/api/ui", { expandTools: true });
-    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ model: "Fixture/two", thinking: "low", expandTools: true });
+    const updated = await client.request<{ updates: { checkOnStartup: boolean; autoUpdate: boolean } }>("/api/updates", { autoUpdate: true });
+    expect(updated.updates).toEqual({ checkOnStartup: true, autoUpdate: true });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ model: "Fixture/two", thinking: "low", expandTools: true, updates: { checkOnStartup: true, autoUpdate: true } });
     expect(loadProviders().model).toBe("Global/original");
     expect(loadConfig()).toMatchObject({ thinking: "high", expandTools: false });
+    expect(loadConfig().updates).toBeUndefined();
   } finally {
     app.stop();
     if (previous === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previous;

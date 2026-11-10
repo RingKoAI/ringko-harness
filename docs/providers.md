@@ -106,6 +106,17 @@ A model entry accepts:
 | `catalogId` | Exact Models.dev mapping, `provider/model-id`. |
 | `url` | Per-model chat-completions URL. |
 
+In Web UI **Settings → Providers & models**, every model exposes context-window,
+input/output token limits and an optional catalog mapping, including OAuth models.
+Blank fields or **Restore automatic** remove manual capacity overrides; **Save**
+applies changes to subsequent runs. **View automatic limits** reads RingKo's catalog
+metadata without probing provider endpoints or sending provider credentials.
+The UI distinguishes catalog output ceilings from automatic output reservations.
+Values must be positive safe integers; explicit input/output caps cannot exceed an
+explicit context window. Overrides do not increase a provider's actual capacity.
+With `--config`, the editor reads and saves that file; otherwise it saves
+`provider.json`. Fetching model lists preserves existing model limits and metadata.
+
 Explicit `contextWindow`, `maxInputTokens` and `maxOutputTokens` override
 catalog values. The total window and input-only cap are separate. When no
 values are available, RingKo uses a 128,000-token working window and reserves

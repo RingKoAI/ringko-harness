@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -14,8 +15,9 @@ typedef char file_char;
 
 enum { FILE_MAX_BYTES = 64 * 1024 * 1024, FILE_CHUNK_BYTES = 64 * 1024, FILE_MAX_DEPTH = 256, FILE_TEMP_CHARS = 128, FILE_MAX_ATTRIBUTES = 128 };
 enum file_kind { FILE_WRITE, FILE_EDIT, FILE_REMOVE, FILE_STORAGE_LOCK, FILE_READ };
-struct file_error { const char *code; const char *message; };
-struct file_info { bool exists; uint64_t size; double mtime_ms; char identity[128]; };
+typedef struct file_error { const char *code; const char *message; } file_error;
+typedef struct file_info { bool exists; uint64_t size; double mtime_ms; char identity[128]; } file_info;
+typedef struct file_transaction file_transaction;
 struct file_transaction {
   file_transaction *next;
   bool closed, committed, existed, staged_ready, flushed;
@@ -48,7 +50,7 @@ bool file_commit(file_transaction *, file_info *, file_error *);
 bool file_remove(file_transaction *, const char *, file_error *);
 bool file_close(file_transaction *, file_error *);
 
-inline bool file_refuse(file_error *error, const char *code, const char *message) {
+static inline bool file_refuse(file_error *error, const char *code, const char *message) {
   error->code = code; error->message = message; return false;
 }
 #endif

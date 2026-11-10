@@ -99,3 +99,28 @@ it('does not resume a manually paused queue or overwrite a newer snapshot', asyn
   expect(manager.get('a').messages.at(-1)?.content).toBe('newer')
   manager.resume('a'); expect(calls).toHaveLength(2)
 })
+
+it('preserves a turn view identity through stream completion, hydration and compaction', () => {
+  const { manager, calls } = fixture(); manager.send('a', 'same prompt')
+  const identity = manager.get('a').messages[0].viewId
+  manager.setToolExpansion('a', identity!, false, true)
+  calls[0].handlers.onDone({ sessionId: 'a', content: 'done', turns: 1 })
+  const value: SessionSnapshot = { ...snapshot(), busy: false, partial: null, approvals: [], messages: [{ role: 'user', content: 'same prompt', sourceSeq: 2 }, { role: 'assistant', content: 'done', sourceSeq: 3 }], events: [
+    { seq: 1, time: 1, type: 'run/started', data: { runId: 'run' } }, { seq: 2, time: 2, type: 'user/message' }, { seq: 3, time: 3, type: 'assistant/message' }, { seq: 4, time: 4, type: 'run/completed', data: { runId: 'run' } },
+  ] }
+  manager.synchronize(value)
+  expect(manager.get('a').messages[0]).toMatchObject({ viewId: identity, runStatus: 'completed' })
+  manager.synchronize({ ...value, revision: 2, messages: [{ role: 'system', content: 'summary', sourceSeq: 5 }, ...value.messages] })
+  expect(manager.get('a').messages[1].viewId).toBe(identity)
+  expect(manager.get('a').toolExpansions[identity!]).toEqual({ details: false, open: true })
+  manager.synchronize({ ...value, revision: 3, messages: [{ role: 'system', content: 'summary', sourceSeq: 5 }, value.messages[1]] })
+  expect(manager.get('a').toolExpansions['run:1']).toEqual({ details: false, open: true })
+})
+
+it('marks only the owned input cancelled and ignores a late terminal callback', () => {
+  const { manager, calls } = fixture(); manager.send('a', 'first')
+  calls[0].handlers.onDone({ sessionId: 'a', content: 'done', turns: 1 })
+  manager.send('a', 'second'); manager.stop('a')
+  calls[1].handlers.onDone({ sessionId: 'a', content: 'late', turns: 1 })
+  expect(manager.get('a').messages.filter(message => message.role === 'user').map(message => message.runStatus)).toEqual(['completed', 'cancelled'])
+})

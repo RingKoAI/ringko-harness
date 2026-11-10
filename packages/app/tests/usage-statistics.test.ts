@@ -103,6 +103,29 @@ it("rejects malformed dates, unbounded pages, timezone and call-type filters", (
   expect(parseUsageStatisticsQuery(new URLSearchParams("provider=__proto__&model=all&limit=10"))).toMatchObject({ provider: "__proto__", model: "all", limit: 10 });
 });
 
+it("computes daily activity and session spans from the same filtered deduplicated calls", () => {
+  const records = loaded(source("parent", [usage(0, NOW - 3 * DAY, 1, 1), usage(1, NOW - 2 * DAY, 1, 1), usage(2, NOW - DAY, 1, 1)]),
+    source("fork", [usage(0, NOW - 3 * DAY, 1, 1)], { parentSession: "parent", createdAt: NOW - 1000 }));
+  const result = usageStatistics(records, "workspace", { timeZone: "UTC", limit: 1 }, NOW);
+  expect(result.activity).toMatchObject({ activeDays: 3, totalDays: 4, longestStreak: 3, currentStreak: 3, longestSessionMs: 9 * DAY });
+  expect(result.activity!.days.reduce((sum, day) => sum + day.calls, 0)).toBe(result.total);
+  expect(result.activity!.days).toHaveLength(3); expect(result.requests).toHaveLength(1);
+  const filtered = usageStatistics(records, "workspace", { start: NOW - DAY, timeZone: "UTC" }, NOW);
+  expect(filtered.activity).toMatchObject({ activeDays: 1, totalDays: 2, currentStreak: 1, longestSessionMs: 0 });
+  expect(usageStatistics(loaded(), "workspace", {}, NOW).activity).toMatchObject({ days: [], activeDays: 0, totalDays: 0, longestSessionMs: null });
+  const invalidHeader = usageStatistics(loaded(source("invalid", [usage(0, NOW, 1, 1)], { createdAt: NaN })), "workspace", {}, NOW);
+  expect(invalidHeader.activity!.activeDays).toBe(1); expect(invalidHeader.activity!.longestSessionMs).toBeNull();
+});
+
+it("keeps streaks calendar-based across DST and bounds the heatmap independently of lifetime totals", () => {
+  const now = Date.UTC(2026, 2, 10, 12), first = Date.UTC(2026, 2, 7, 5);
+  const records = loaded(source("dst", [usage(0, first, 1, 1), usage(1, first + DAY, 1, 1), usage(2, first + 2 * DAY - 3_600_000, 1, 1), usage(3, now - 500 * DAY, 1, 1)]));
+  const activity = usageStatistics(records, "workspace", { timeZone: "America/New_York" }, now).activity!;
+  expect(activity.days.map(day => day.date)).toEqual(["2026-03-07", "2026-03-08", "2026-03-09"]);
+  expect(activity.longestStreak).toBe(3); expect(activity.currentStreak).toBe(3); expect(activity.activeDays).toBe(4);
+  expect(usageStatistics(records, "workspace", {}, now + 2 * DAY).activity!.currentStreak).toBe(0);
+});
+
 it("authenticates the endpoint, confines scans to the workspace and excludes transcript contents", async () => {
   const root = mkdtempSync(join(tmpdir(), "rkh-usage-api-"));
   const before = process.env.RINGKO_HOME, agents = process.env.AGENTS_HOME;

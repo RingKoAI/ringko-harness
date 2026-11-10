@@ -1,4 +1,5 @@
 import type { ModelSelection } from "./config.ts";
+import type { ModelMetadata } from "./model-metadata.ts";
 import { resolveModelContext, type ContextLimits } from "./context.ts";
 import { ModelCatalogCache, modelCatalogUrl } from "./model-cache.ts";
 import { isLocalModelHost } from "./network-address.ts";
@@ -34,9 +35,14 @@ function catalogEligible(selection: ModelSelection): boolean {
   return true;
 }
 
+/** Lookup public metadata using the same eligibility policy as runtime capacity. */
+export async function resolveSelectionMetadata(selection: ModelSelection | undefined, catalog?: ModelCatalogCache): Promise<ModelMetadata | undefined> {
+  return selection && catalogEligible(selection) ? (catalog ?? defaultCatalog()).find(selection.provider, selection.model) : undefined;
+}
+
 /** Backend, CLI and embedded hosts share capacity resolution without rebuilding model clients. */
 export async function resolveSelectionContext(selection: ModelSelection | undefined, catalog?: ModelCatalogCache): Promise<ContextLimits> {
   if (!selection) return resolveModelContext({ id: "echo", name: "Echo" });
-  const metadata = catalogEligible(selection) ? await (catalog ?? defaultCatalog()).find(selection.provider, selection.model) : undefined;
+  const metadata = await resolveSelectionMetadata(selection, catalog);
   return resolveModelContext(selection.model, metadata);
 }

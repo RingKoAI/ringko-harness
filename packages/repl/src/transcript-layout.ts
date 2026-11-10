@@ -2,7 +2,7 @@ import wrapAnsi from "wrap-ansi";
 import { cleanTerminalText } from "./editor.ts";
 import { markdownToAnsi, MARKDOWN_LIMITS } from "./markdown.ts";
 import { toolCallSummary, toolInputText, toolOutputText, toolResultSummary, type ReplItem } from "./state.ts";
-import { explorationLabel, transcriptGroups } from "./transcript-groups.ts";
+import { turnToolsLabel, transcriptGroups, type TranscriptRunView } from "./transcript-groups.ts";
 
 export interface TranscriptLine {
   text: string;
@@ -40,7 +40,7 @@ function renderBlock(item: ReplItem, columns: number, thinking: boolean, tools: 
     return thinking ? [...title, ...wrapped(item, item.text.slice(0, MARKDOWN_LIMITS.characters), columns, { prefix: "  ", section: 1 })] : title;
   }
   const target = toolCallSummary(item);
-  const status = item.failed ? " · Failed" : item.incomplete ? " · Outcome unknown" : item.running ? " · Running" : "";
+  const status = item.failed ? " · Failed" : item.incomplete ? " · Outcome unknown" : item.unmatched ? " · Unmatched result" : item.running ? " · Running" : "";
   const lines = wrapped(item, `${item.toolName ?? "tool"}${target ? ` (${target})` : ""}${status}`, columns, { prefix: "● ", continuation: "  ", heading: true });
   lines.push(...wrapped(item, toolResultSummary(item) ?? "Done", columns, { prefix: "  └ ", continuation: "    ", section: 1 }));
   if (tools) {
@@ -55,30 +55,26 @@ function renderBlock(item: ReplItem, columns: number, thinking: boolean, tools: 
   return lines;
 }
 
-function layout(items: readonly ReplItem[], columns: number, thinking: boolean, tools: boolean, render: BlockRenderer): TranscriptLine[] {
+function layout(items: readonly ReplItem[], columns: number, thinking: boolean, tools: boolean, render: BlockRenderer, view: TranscriptRunView): TranscriptLine[] {
   const lines: TranscriptLine[] = [];
   const width = Math.max(1, Math.floor(columns));
-  for (const group of transcriptGroups(items)) {
-    const first = group.items[0];
-    if (!first) continue;
-    if (lines.length && (first.kind === "user" || first.kind === "tool" || first.kind === "assistant")) {
-      lines.push({ text: "", kind: "notice", itemId: first.id, position: -1 });
-    }
-    if (group.exploration && group.items.length > 1 && !tools) {
-      const active = group.items.find(item => item.running);
-      const last = active ?? group.items.at(-1)!;
-      lines.push(...wrapped({ ...first, running: Boolean(active) }, explorationLabel(group.items), width, { prefix: "● ", heading: true }));
-      lines.push(...wrapped(first, `${last.toolName}${toolCallSummary(last) ? ` (${toolCallSummary(last)})` : ""} · ${toolResultSummary(last) ?? "Done"}`, width, { prefix: "  └ ", continuation: "    ", section: 1 }));
-    } else {
-      for (const item of group.items) lines.push(...render(item, width, thinking, tools));
+  for (const group of transcriptGroups(items, view)) {
+    const firstTool = group.tools[0];
+    for (const item of group.items) {
+      if (item.kind === "tool" && firstTool) {
+        if (item.id === firstTool.id) lines.push(...wrapped({ ...firstTool, running: group.running }, turnToolsLabel(group), width, { prefix: "● ", continuation: "  ", heading: true, section: 4 }));
+        if (group.foldable && !tools) continue;
+      }
+      if (lines.length && (item.kind === "user" || item.kind === "tool" || item.kind === "assistant")) lines.push({ text: "", kind: "notice", itemId: item.id, position: -1 });
+      lines.push(...render(item, width, thinking, tools));
     }
   }
   return lines;
 }
 
 /** Pure entry point for consumers that do not retain a render cache. */
-export function transcriptLines(items: readonly ReplItem[], columns: number, thinking: boolean, tools: boolean): TranscriptLine[] {
-  return layout(items, columns, thinking, tools, renderBlock);
+export function transcriptLines(items: readonly ReplItem[], columns: number, thinking: boolean, tools: boolean, view: TranscriptRunView = {}): TranscriptLine[] {
+  return layout(items, columns, thinking, tools, renderBlock, view);
 }
 
 /** Per-view bounded cache: completed blocks survive unrelated stream updates. */
@@ -86,7 +82,7 @@ export function createTranscriptRenderer() {
   const cache = new Map<number, { signature: readonly unknown[]; lines: TranscriptLine[]; size: number }>();
   let characters = 0;
   const render: BlockRenderer = (item, columns, thinking, tools) => {
-    const signature = [item.kind, item.text, item.toolName, item.running, item.incomplete, item.failed, toolCallSummary(item), tools ? toolInputText(item) : undefined, columns, thinking, tools];
+    const signature = [item.kind, item.text, item.toolName, item.running, item.incomplete, item.unmatched, item.failed, toolCallSummary(item), tools ? toolInputText(item) : undefined, columns, thinking, tools];
     const previous = cache.get(item.id);
     if (previous && previous.signature.every((part, index) => part === signature[index])) {
       cache.delete(item.id);
@@ -108,5 +104,5 @@ export function createTranscriptRenderer() {
     }
     return lines;
   };
-  return (items: readonly ReplItem[], columns: number, thinking: boolean, tools: boolean) => layout(items, columns, thinking, tools, render);
+  return (items: readonly ReplItem[], columns: number, thinking: boolean, tools: boolean, view: TranscriptRunView = {}) => layout(items, columns, thinking, tools, render, view);
 }

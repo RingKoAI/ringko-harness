@@ -11,21 +11,25 @@ const tool = (id: number, name: string, overrides: Partial<ReplItem> = {}): Repl
 const textOf = (lines: ReturnType<typeof transcriptLines>) => cleanTerminalText(lines.map(line => line.text).join("\n"));
 
 describe("compact transcript projection", () => {
-  it("groups adjacent exploration without mutating calls, and expands every original call", () => {
-    const items = [tool(1, "read"), tool(2, "read"), tool(3, "grep")];
-    expect(transcriptGroups(items)[0].items.map(item => item.id)).toEqual([1, 2, 3]);
+  it("groups every tool in a user turn while preserving prose and original expanded order", () => {
+    const items: ReplItem[] = [{ id: 0, kind: "user", text: "fix it" }, tool(1, "read"), { id: 4, kind: "assistant", text: "Next I will edit.", hasToolCalls: true }, tool(2, "edit"), tool(3, "shell"), { id: 5, kind: "assistant", text: "Final answer" }];
+    expect(transcriptGroups(items)[0].tools.map(item => item.id)).toEqual([1, 2, 3]);
     const compact = textOf(transcriptLines(items, 80, false, false));
-    expect(compact).toContain("Explored · 2 reads · 1 search");
+    expect(compact).toContain("Turn tools · 3 calls · read 1 · write 1 · commands 1");
+    expect(compact).toContain("Next I will edit."); expect(compact).toContain("Final answer");
     expect(compact).not.toContain("result");
     const expanded = textOf(transcriptLines(items, 80, false, true));
     for (const id of [1, 2, 3]) expect(expanded).toContain(`file-${id}.ts`);
     expect(expanded.match(/Output:/g)).toHaveLength(3);
-    expect(items.every(item => item.text === "result")).toBe(true);
+    expect(items.filter(item => item.kind === "tool").every(item => item.text === "result")).toBe(true);
+    expect(expanded.indexOf("file-1.ts")).toBeLessThan(expanded.indexOf("Next I will edit."));
+    expect(expanded.indexOf("Next I will edit.")).toBeLessThan(expanded.indexOf("file-2.ts"));
   });
 
-  it("keeps errors, unknown outcomes, writes, shell and message boundaries out of exploration groups", () => {
+  it("keeps failed and unknown turns open and never merges across a new user input", () => {
     const items: ReplItem[] = [tool(1, "read"), tool(2, "grep", { failed: true, text: "denied" }), tool(3, "read", { incomplete: true }), tool(4, "write"), tool(5, "shell"), { id: 6, kind: "assistant", text: "answer" }, tool(7, "read")];
-    expect(transcriptGroups(items)).toHaveLength(items.length);
+    expect(transcriptGroups(items)[0].foldable).toBe(false);
+    expect(transcriptGroups([...items, { id: 8, kind: "user", text: "next" }, tool(9, "write")])).toHaveLength(2);
     const text = textOf(transcriptLines(items, 80, false, false));
     expect(text).toContain("Failed");
     expect(text).toContain("denied");
@@ -33,10 +37,21 @@ describe("compact transcript projection", () => {
     expect(text).not.toContain("Explored");
   });
 
-  it("reports exploration as running only when an actual member is running", () => {
+  it("keeps a live turn open between tools and its next model step", () => {
     const items = [tool(1, "read"), tool(2, "grep", { running: true, text: "" })];
-    expect(textOf(transcriptLines(items, 80, false, false))).toContain("Exploring");
-    expect(textOf(transcriptLines(items.map(item => ({ ...item, running: false })), 80, false, false))).toContain("Explored");
+    expect(textOf(transcriptLines(items, 80, false, false))).toContain("Running");
+    expect(transcriptGroups(items.map(item => ({ ...item, running: false })), { busy: true })[0].running).toBe(true);
+  });
+
+  it("keeps cancelled turns open after a final answer and preserves the turn anchor on expansion", () => {
+    const items: ReplItem[] = [{ id: 1, kind: "user", text: "work", runStatus: "cancelled" }, tool(2, "edit"), { id: 3, kind: "assistant", text: "answer" }];
+    expect(transcriptGroups(items)[0].foldable).toBe(false);
+    expect(textOf(transcriptLines(items, 80, false, false))).toContain("file-2.ts");
+    items[0] = { ...items[0], runStatus: "completed" };
+    const compact = transcriptLines(items, 80, false, false), expanded = transcriptLines(items, 80, false, true);
+    const anchor = compact.find(line => line.text.includes("Turn tools"))!;
+    expect(expanded.filter(line => line.itemId === anchor.itemId && line.position === anchor.position)).toHaveLength(1);
+    expect(compact.some(line => line.text.includes("file-2.ts"))).toBe(false);
   });
 
   it("bounds expanded output without losing the stored result and sanitizes control sequences", () => {

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { rm } from "node:fs/promises";
+
+const SHUTDOWN_TIMEOUT_MS = 10_000;
+const SHUTDOWN_REQUEST_MS = 1_000;
 
 if (process.platform !== "win32") {
   console.log("Skipped Windows standalone ConPTY verification on this platform.");
@@ -47,6 +51,11 @@ try {
     await Bun.sleep(100);
   }
   assert.ok(ready, "Standalone backend did not become ready.");
+  const statusResponse = await fetch(`${origin}/api/status`, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal(statusResponse.status, 200, "Compiled backend's status endpoint is unavailable");
+  const status = await statusResponse.json();
+  assert.equal(status.entries.find(entry => entry.label === "cwd")?.value, workspace);
+  assert.equal(JSON.stringify(status).includes(token), false, "Status must not expose the backend token");
   const form = new FormData(); form.append("file", new File(["embedded-native-smoke"], "native.txt"));
   const uploaded = await fetch(`${origin}/api/upload`, { method: "POST", headers: { origin, authorization: `Bearer ${token}` }, body: form });
   assert.equal(uploaded.status, 200, "Compiled executable's embedded native file module is unavailable");
@@ -86,8 +95,16 @@ try {
   console.log("Verified standalone Windows ConPTY, embedded helper initialization, workspace writes, and external-write denial.");
 } finally {
   socket?.close();
-  child.kill();
-  await child.exited;
+  if (child.exitCode === null) {
+    // Let the backend close its ConPTY helper before killing the executable
+    // that helper shares. Otherwise Windows can keep the image locked.
+    try {
+      const response = await fetch(`${origin}/api/backend/stop`, { method: "POST", headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(SHUTDOWN_REQUEST_MS) });
+      await response.body?.cancel();
+    } catch { /* A failed startup still needs the bounded kill fallback. */ }
+  }
+  const killTimer = setTimeout(() => { if (child.exitCode === null) child.kill(); }, SHUTDOWN_TIMEOUT_MS);
+  try { await child.exited; } finally { clearTimeout(killTimer); }
   await stderr;
-  rmSync(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }
