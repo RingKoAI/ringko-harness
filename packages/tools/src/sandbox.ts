@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
-import { ensureWindowsSandbox, prepareWindowsAcl, prepareWindowsSandbox } from "./windows-runner.ts";
+import { ensureWindowsSandbox, prepareWindowsAcl, prepareWindowsSandbox, resolveWindowsPolicy, type AclPreparationResult, type WindowsSandboxPolicy } from "./windows-runner.ts";
 import { shellCommand, type ShellKind } from "./shell-resolver.ts";
 import { SandboxDeniedError, SandboxUnavailableError } from "./sandbox-errors.ts";
 import { sandboxEnvironment } from "./sandbox-environment.ts";
@@ -104,13 +104,29 @@ export class Sandbox {
   readonly additionalWritableRoots: readonly string[];
   readonly runner: SandboxRunner;
   readonly enforcement: "full" | "partial" | "none";
+  readonly allowApprovedWrites: boolean;
   private readonly runnerExecutable: string;
   private tempDirectory?: string;
+  private effectiveModeState: SandboxMode;
+  private degradedRootsState: ReadonlySet<string> = new Set();
+  private residualOwnerGrantRootsState: ReadonlySet<string> = new Set();
 
-  constructor(options: { workspace: string; mode?: SandboxMode; additionalWritableRoots?: readonly string[]; runner?: SandboxRunner }) {
+  /**
+   * Mode the confined child actually runs under. It differs from `mode` only
+   * on Windows when a writable root cannot be relabeled to Low integrity.
+   */
+  get effectiveMode(): SandboxMode { return this.effectiveModeState; }
+  /** Writable roots currently confined to read-only by MIC degradation. */
+  get degradedWritableRoots(): ReadonlySet<string> { return this.degradedRootsState; }
+  /** Roots where a temporary owner-grant ACE could not be removed after labeling. */
+  get residualOwnerGrantRoots(): ReadonlySet<string> { return this.residualOwnerGrantRootsState; }
+
+  constructor(options: { workspace: string; mode?: SandboxMode; additionalWritableRoots?: readonly string[]; runner?: SandboxRunner; allowApprovedWrites?: boolean }) {
     const mode = options.mode ?? "workspace-write";
     if (!MODES.includes(mode)) throw new TypeError(`Invalid sandbox mode: ${String(mode)}`);
     this.mode = mode;
+    this.allowApprovedWrites = options.allowApprovedWrites === true;
+    this.effectiveModeState = mode;
     const resolveRoot = (value: string) => {
       const absolute = resolve(value);
       if (process.platform === "win32" && mode !== "danger-full-access" && !/^(?:[A-Za-z]:[\\/]|\\\\\?\\[A-Za-z]:[\\/])/.test(absolute)) {
@@ -143,9 +159,12 @@ export class Sandbox {
   }
 
   /** Enforce a write/delete target before the operation touches disk. */
-  assertWrite(path: string): void {
+  assertWrite(path: string, approval?: { approvalGranted?: boolean; approvedTarget?: string }): void {
     if (this.mode === "danger-full-access") return;
     const target = canonicalTarget(path);
+    // Only the canonical, risk-assessed target of this one human-approved
+    // invocation is allowed. Saved allow rules do not create this authority.
+    if (this.allowApprovedWrites && approval?.approvalGranted === true && approval.approvedTarget === target) return;
     if (this.mode === "read-only") {
       if (within(realpathSync(this.temp()), target)) return;
       throw new SandboxDeniedError(`Sandbox mode read-only denies writes outside its private temp: ${path}`);
@@ -158,11 +177,23 @@ export class Sandbox {
     return this.tempDirectory;
   }
 
+  private applyAclPreparation(requested: "read-only" | "workspace-write", result: AclPreparationResult): WindowsSandboxPolicy {
+    const policy = resolveWindowsPolicy(requested, this.workspaceRoot, this.additionalWritableRoots, result.degraded);
+    this.effectiveModeState = policy.mode;
+    this.degradedRootsState = new Set(result.degraded);
+    this.residualOwnerGrantRootsState = new Set(result.residualOwnerGrants);
+    return policy;
+  }
+
   /** Prewarm process confinement asynchronously; wrap remains a synchronous compatibility API. */
   async prepare(environment?: Readonly<Record<string, string>>): Promise<void> {
-    if (this.mode === "danger-full-access") return;
+    const mode = this.mode;
+    if (mode === "danger-full-access") return;
     sandboxEnvironment(this.runner === "windows-acl" ? this.temp() : tmpdir(), environment);
-    if (this.runner === "windows-acl") await prepareWindowsSandbox(this.mode, this.workspaceRoot, this.temp(), this.mode === "workspace-write" ? this.additionalWritableRoots : []);
+    if (this.runner === "windows-acl") {
+      const result = await prepareWindowsSandbox(mode, this.workspaceRoot, this.temp(), mode === "workspace-write" ? this.additionalWritableRoots : []);
+      this.applyAclPreparation(mode, result);
+    }
   }
 
   /** Wrap an arbitrary host process and its descendants under the active policy. */
@@ -207,12 +238,20 @@ export class Sandbox {
   private windowsProcess(executable: string, args: readonly string[], cwd: string, size?: { cols: number; rows: number }, environment?: Readonly<Record<string, string>>): SandboxedProcess {
     const env = sandboxEnvironment(this.temp(), environment);
     const helper = ensureWindowsSandbox();
-    const roots = this.mode === "workspace-write" ? this.additionalWritableRoots : [];
-    prepareWindowsAcl(this.mode as "read-only" | "workspace-write", this.workspaceRoot, this.temp(), roots);
+    const requested = this.mode === "danger-full-access" ? "workspace-write" : this.mode;
+    // A writable root whose Low Mandatory Level label could not be applied is
+    // read-only to a Low-IL child (Windows MIC). Degrade gracefully instead of
+    // failing every shell: low-privilege users often cannot relabel their
+    // workspace root. The private temp root stays writable in every mode, so
+    // the sandbox remains usable even when the workspace is read-only.
+    const result = requested === "workspace-write"
+      ? prepareWindowsAcl("workspace-write", this.workspaceRoot, this.temp(), this.additionalWritableRoots)
+      : prepareWindowsAcl("read-only", this.workspaceRoot, this.temp(), []);
+    const policy = this.applyAclPreparation(requested, result);
     return {
       executable: helper,
-      args: [this.mode, this.workspaceRoot, this.temp(), cwd,
-        ...roots.flatMap(root => ["--writable-root", root]),
+      args: [policy.mode, this.workspaceRoot, this.temp(), cwd,
+        ...policy.writableRoots.flatMap(root => ["--writable-root", root]),
         ...(size ? ["--pty", String(size.cols), String(size.rows)] : []),
         ...Object.keys(environment ?? {}).flatMap(name => ["--allow-env", name]),
         "--", executable, ...args],
@@ -245,7 +284,6 @@ export class Sandbox {
     return this.wrap(executable, args, cwd);
   }
 }
-
 
 
 

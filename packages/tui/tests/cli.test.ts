@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { VERSION, runCli, type CliIo } from "../src/cli.ts";
@@ -28,6 +28,82 @@ afterEach(() => {
 });
 
 describe("ringko cli", () => {
+  it("handles command help before execution, initialization, or config mutations", async () => {
+    for (const args of [["run", "--help"], ["web", "-h"], ["config", "set", "permission", "full", "--help"], ["auth", "login", "--help"]]) {
+      const result = collect(); expect(await runCli(args, result.io)).toBe(0); expect(result.out.join("\n")).toContain("Usage:");
+    }
+    expect(existsSync(join(home, ".ringko", "settings.local.json"))).toBe(false);
+  });
+
+  it("preserves run prompt options after the literal separator", async () => {
+    const result = collect(); expect(await runCli(["run", "--workspace", home, "--", "--help", "--model", "literal"], result.io)).toBe(0);
+    expect(result.out).toEqual(["echo: --help --model literal"]);
+  });
+
+  it("reports the configured access mode and rejects invalid modes", async () => {
+    saveConfig({ permission: "assist" }); const result = collect();
+    expect(await runCli(["info"], result.io)).toBe(0); expect(result.out[0]).toContain("assist");
+    saveConfig({ permission: "invalid" }); expect(await runCli(["info"], collect().io)).toBe(2);
+  });
+
+  it("filters explicit workspace session lists and rejects unsupported session actions", async () => {
+    const other = join(home, "other"); mkdirSync(other);
+    const first = new SessionStore({ cwd: home }).create(), second = new SessionStore({ cwd: other }).create();
+    recordUserMessage(first, "first"); recordUserMessage(second, "second"); first.close(); second.close();
+    const result = collect(); expect(await runCli(["session", "list", "--workspace", home], result.io)).toBe(0);
+    expect(result.out.join("\n")).toContain(first.id); expect(result.out.join("\n")).not.toContain(second.id);
+    expect(await runCli(["session", "delete", first.id], collect().io)).toBe(2);
+    expect(new SessionStore({ cwd: home }).list()).toHaveLength(1);
+  });
+
+  it("rejects loop counts beyond the safe integer range before executing", async () => {
+    const result = collect(); expect(await runCli(["loop", "fixture", "--max-iterations", "9007199254740992"], result.io)).toBe(2);
+    expect(result.err.join("\n")).toContain("safe non-negative integer"); expect(result.out).toEqual([]);
+  });
+
+  it("discovers and saves models only in the explicit config", async () => {
+    const provider = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ data: [{ id: "discovered", name: "Discovered" }] }) });
+    const path = join(home, "models.json");
+    writeFileSync(path, JSON.stringify({ custom: true, providers: [{ name: "fixture", type: "openai-compatible", baseURL: `http://127.0.0.1:${provider.port}/v1`, models: [] }] }));
+    try {
+      const result = collect(); expect(await runCli(["models", "--config", path], result.io)).toBe(0);
+      const saved = JSON.parse(readFileSync(path, "utf8")); expect(saved.custom).toBe(true); expect(saved.providers[0].models[0].id).toBe("discovered");
+      expect(existsSync(join(home, ".ringko", "provider.json"))).toBe(false);
+      expect(existsSync(join(home, ".ringko", "settings.local.json"))).toBe(false);
+    } finally { provider.stop(true); }
+  });
+  it("creates default user files on first operational launch but not for help, version or unknown commands", async () => {
+    const settings = join(home, ".ringko", "settings.local.json"), provider = join(home, ".ringko", "provider.json");
+    for (const command of ["help", "--help", "version", "--version", "unknown"]) await runCli([command], collect().io);
+    expect(existsSync(settings)).toBe(false); expect(existsSync(provider)).toBe(false);
+    expect(await runCli(["info"], collect().io)).toBe(0);
+    expect(JSON.parse(readFileSync(settings, "utf8")).instructionScan.excludeNestedRepositories).toBe(true);
+    expect(JSON.parse(readFileSync(provider, "utf8"))).toEqual({ model: "", small_model: "", providers: [] });
+  });
+
+  it("keeps explicit configuration reads and writes isolated from user defaults", async () => {
+    const path = join(home, "explicit.json"); writeFileSync(path, '{"permission":"assist","custom":true}');
+    expect(await runCli(["config", "set", "instructionScan.maxDepth", "0", "--config", path], collect().io)).toBe(0);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ permission: "assist", custom: true, instructionScan: { maxDepth: 0 } });
+    const result = collect(); expect(await runCli(["config", "path", "--config", path], result.io)).toBe(0); expect(result.out).toEqual([path]);
+    expect(await runCli(["config", "unset", "custom", "--config", path], collect().io)).toBe(0);
+    expect(JSON.parse(readFileSync(path, "utf8")).custom).toBeUndefined();
+    expect(existsSync(join(home, ".ringko", "settings.local.json"))).toBe(false);
+    expect(existsSync(join(home, ".ringko", "provider.json"))).toBe(false);
+  });
+
+  it("reports initialization failures and preserves the existing configuration", async () => {
+    const path = join(home, ".ringko", "provider.json"); mkdirSync(path, { recursive: true });
+    const result = collect(); expect(await runCli(["info"], result.io)).toBe(2);
+    expect(result.err.join(" ")).toContain("regular file"); expect(existsSync(join(home, ".ringko", "settings.local.json"))).toBe(false);
+  });
+
+  it("rejects empty or missing configuration option values before initializing user files", async () => {
+    for (const args of [["run", "hello", "--config", ""], ["config", "show", "--config", "--workspace", home]]) {
+      const result = collect(); expect(await runCli(args, result.io)).toBe(2); expect(result.err.join(" ")).toContain("Missing value for --config");
+    }
+    expect(existsSync(join(home, ".ringko", "settings.local.json"))).toBe(false);
+  });
   it("prints the version", async () => {
     const { io, out } = collect();
     expect(await runCli(["version"], io)).toBe(0);

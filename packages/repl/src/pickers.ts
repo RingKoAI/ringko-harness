@@ -10,6 +10,9 @@ export interface PickerState {
   items: SelectorItem[];
   onSelect: (value: string) => void;
   actions?: SelectorAction[];
+  rankedSearch?: boolean;
+  searchHint?: string;
+  selectHint?: string;
 }
 
 interface McpStatus {

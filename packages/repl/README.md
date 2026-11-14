@@ -1,5 +1,17 @@
 # @ringko-ai/repl
 
+## Permission switching
+
+`/permissions` (alias `/permission`) selects Read only, Default or Full access.
+`/permissions read-only|default|full-access` selects directly; Full access opens a
+confirmation with Cancel selected initially. The Config page offers the same
+presets and requires Y before enabling Full access. `/permissions rules` opens the
+original saved/session rule manager. The footer displays the effective preset.
+Switches affect subsequent runs using the same settings file and change sandbox
+and approval together; active runs, uploads and terminals block server switches.
+Per-call approval grants do not change the selected mode. Existing Shift+Tab effort
+bindings are unchanged. See [configuration](../../docs/configuration.md#permission-presets).
+
 Interactive terminal UI for RingKo, built with Ink and React.
 
 ## Layout
@@ -8,7 +20,14 @@ The startup screen clears on the first submitted prompt or local command; `/new`
 restores it for a fresh session. The active conversation contains a scrollable transcript, a live operation
 indicator, tool approvals, a bounded editor or selector, and a model/status footer.
 
-- `/model` opens model search grouped by provider; `/connect` browses providers.
+- `/model` opens model search grouped by provider. Run `/connect`, type a provider
+  name/ID (for example `opencodego` or `go`) and press Enter. Exact matches rank
+  first. Paste the masked API key and press Enter, then type a model name and press
+  Enter to use it. Custom providers ask for an endpoint first. Tab opens the full
+  form for editing defaults or entering comma-separated model IDs; Enter advances
+  through those fields, Ctrl+S saves and Esc cancels. `/connect <preset-id>` also
+  opens setup directly. Keys stay in user auth storage; provider settings respect
+  the active `--config` file. OAuth presets use `/login`.
 - `/status` opens Settings at **Stats → Overview**, with four main pages:
   Status, Config, Usage and Stats. The command stays visible above the pane.
   Tab/Shift+Tab switches main pages; Esc returns to the prompt and R refreshes.

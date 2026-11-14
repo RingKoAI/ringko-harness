@@ -7,7 +7,7 @@ export interface SessionMeta {
 }
 
 /** Any handle that accepts session events and can flush them (e.g. a SessionHandle). */
-export type SessionMetaTarget = Parameters<typeof recordSessionTitle>[0] & { flush(): void };
+export type SessionMetaTarget = Parameters<typeof recordSessionTitle>[0] & { flush(): void; id?: string };
 
 export interface SessionMetaOptions {
   /** Most recent messages considered; defaults to 24. */
@@ -83,6 +83,7 @@ export async function generateSessionMeta(
   try {
     const started = performance.now();
     const turn = await model({
+      ...(session.id ? { sessionId: session.id } : {}),
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: text },

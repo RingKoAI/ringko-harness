@@ -76,6 +76,15 @@ import {
   updatePolicy,
   configurationStatus,
   parseModelDefinition,
+  parseProviderConnection,
+  saveProviderConnection,
+  ProviderConnectionError,
+  resolveProviderApiKey,
+  validateProviderConnectionCredentials,
+  initializeConfig,
+  applyPermissionPreset,
+  isPermissionPreset,
+  permissionPresetFor,
   resolveSelectionMetadata,
   resolveModelContext,
   writeDiagnostic,
@@ -134,12 +143,18 @@ import { startInteractiveTerminal, type InteractiveTerminal } from "./server/ter
 import { sessionTitleView, stripEventParts, stripMessageParts } from "./server/views.ts";
 import { WorkspaceReview } from "./workspace-review.ts";
 import { RuntimeManager, RuntimeSupervisor, type RuntimeAgent } from "@ringko-ai/sdk/runtime";
-import { PROTOCOL_VERSION } from "@ringko-ai/protocol";
+import { CLIENT_LEASE_LIMITS, PROTOCOL_VERSION } from "@ringko-ai/protocol";
+import { ClientCapacityError, ClientLifecycle, type ClientLifecycleOptions } from "./services/client-lifecycle.ts";
 import { SyncManager } from "./services/sync.ts";
 import { RunStateManager } from "./services/runs.ts";
 import { parseUsageStatisticsQuery, UsageStatisticsService } from "./services/usage-statistics.ts";
 
 export interface ServerOptions {
+  /** Auto-started backends stop after their last process lease and active work settle. */
+  managed?: boolean;
+  /** Explicit hosts retain their existing always-on WebUI by default. */
+  webuiEnabled?: boolean;
+  clientLeaseLimits?: ClientLifecycleOptions["limits"];
   /** Host-owned upload budgets; omitted values use the bounded defaults. */
   uploadLimits?: Partial<UploadLimits>;
   port?: number;
@@ -178,6 +193,7 @@ export interface ServerCloseResult {
 export interface RingkoServer {
   readonly url: string;
   readonly port: number;
+  readonly closed: Promise<ServerCloseResult>;
   /** Stop admission, cancel runs, wait for settlement, then release resources. */
   stop(): Promise<ServerCloseResult>;
 }
@@ -192,6 +208,7 @@ const SHUTDOWN_TIMEOUT_MS = 5_000;
 const MAX_TERMINAL_SESSIONS = 4;
 const TERMINAL_SESSION_TTL_MS = 30 * 60 * 1000;
 class BackendClosingError extends Error {}
+class PermissionChangingError extends Error {}
 
 interface TerminalSocketData {
   terminalId: string;
@@ -209,9 +226,10 @@ interface TerminalSession {
 
 /** Start the local server. Throws if the port is unavailable. */
 export function startServer(options: ServerOptions = {}): RingkoServer {
+  for (const path of initializeConfig({ path: options.configPath })) writeDiagnostic("config.initialize", `Created default configuration: ${path}`);
   const host = options.host ?? process.env.RINGKO_HOST ?? DEFAULT_HOST;
   const loopback = ["127.0.0.1", "localhost", "::1"].includes(host);
-  if (options.shared && !loopback) throw new Error("Shared backends only support loopback hosts. Unset RINGKO_HOST or use 127.0.0.1.");
+  if ((options.shared || options.managed) && !loopback) throw new Error("Shared backends only support loopback hosts. Unset RINGKO_HOST or use 127.0.0.1.");
   const configuredPort = Number(process.env.RINGKO_PORT);
   const port = options.port ?? (Number.isInteger(configuredPort) && configuredPort > 0 ? configuredPort : DEFAULT_PORT);
   // A project-scoped backend must not inherit its launch directory. Explicit
@@ -229,9 +247,12 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   const activeAgents = new Map<string, RingKo>();
   const activeRuns = new Map<string, AbortController>();
   let admissionClosed = false;
+  let permissionChanging = false;
   const activeHandles = new Map<string, SessionHandle>();
   const runDrains = new Map<string, PromiseWithResolvers<void>>();
   const sync = new SyncManager();
+  const clients = new ClientLifecycle(sync.instance, { managed: options.managed, webui: options.webuiEnabled, limits: options.clientLeaseLimits });
+  const workspacePinned = () => options.shared || clients.status().cli > 0;
   const modelCatalog = new ModelCatalogCache({ onRefresh: () => sync.publish("config") });
   const loadModel = (config: RingkoConfig) => resolveLoadedModel(config, modelCatalog);
   const runStates = new RunStateManager();
@@ -268,7 +289,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
   // Single-threaded reservation: persistence validation and ownership happen without an await boundary.
   function beginRun(session: SessionHandle, record: () => void): AbortController {
-    try { if (admissionClosed) throw new BackendClosingError("Backend is closing."); record(); session.flush(); }
+    try { if (admissionClosed) throw new BackendClosingError("Backend is closing."); if (permissionChanging) throw new PermissionChangingError(); record(); session.flush(); }
     catch (error) {
       try { session.close(); } catch (failure) { writeDiagnostic("session.close", String(failure)); }
       throw error;
@@ -297,7 +318,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     }
   })();
   function activateProject(id: string | undefined): void {
-    if (options.shared) throw new Error("This shared backend is pinned to its workspace. Start a client in the other workspace instead.");
+    if (workspacePinned()) throw new Error("This backend is pinned by a terminal client or --shared. Start a client in the other workspace instead.");
     if (activeRuns.size) throw new Error("Cannot switch workspace while sessions are running.");
     if (uploads.busy) throw new Error("Cannot switch workspace while uploads are active.");
     const active = id ? projects.projects.find((entry) => entry.id === id) : undefined;
@@ -381,6 +402,8 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       auth: { required: Boolean(options.authToken) },
       access: access(accessMode),
       accessMode,
+      permissionPreset: permissionPresetFor(config),
+      sandboxMode: config.sandbox?.mode ?? "workspace-write",
       permission: accessMode,
       mode: { id: workflow.id, label: workflow.label ?? workflow.id, description: workflow.description ?? null },
       workflows: listWorkflows().map((entry) => ({
@@ -524,7 +547,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
 
   function handleSetCurrentProject(id: string): Response {
     if (!projects.projects.some((entry) => entry.id === id)) return json({ error: "Unknown project." }, 404);
-    if (options.shared || activeRuns.size || uploads.busy) return json({ error: "Workspace is pinned or busy; finish active work before switching." }, 409);
+    if (workspacePinned() || activeRuns.size || uploads.busy) return json({ error: "Workspace is pinned or busy; finish active work before switching." }, 409);
     activateProject(id);
     return handleProjects();
   }
@@ -605,7 +628,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         if (!permission.url || permission.url !== mcpEndpoint(candidate.url)) return json({ error: "Remote MCP requires a matching sandbox.mcp endpoint authorization in host settings." }, 403);
       }
       if (local) await sandbox.prepare(candidate.env);
-      const connection = await openMcpServer(name, candidate, { sandboxMode: sandbox.mode,
+      const connection = await openMcpServer(name, candidate, { sandboxMode: sandbox.effectiveMode,
         wrap: (executable, args, cwd, environment) => sandbox.wrap(executable, args, typeof candidate.cwd === "string" ? cwd : workspace, environment),
       });
       const tools = connection.tools.map((tool) => ({ name: tool.name, description: tool.description ?? null }));
@@ -814,7 +837,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       const models = await discoverModels({
         type,
         ...(baseURL ? { baseURL } : {}),
-        ...(apiKey ? { apiKey } : {}),
+        apiKey: resolveProviderApiKey({ name: name ?? type, type, baseURL, apiKey }),
         ...(name ? { providerId: name } : {}),
       }, { strict: true });
       return json({ models: models.slice(0, 500), truncated: models.length > 500 });
@@ -1064,7 +1087,26 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
   async function handleSetAccess(request: Request): Promise<Response> {
-    const body = await readJson<{ mode?: unknown; permission?: unknown }>(request);
+    const body = await readJson<{ mode?: unknown; permission?: unknown; preset?: unknown }>(request);
+    if (body?.preset !== undefined) {
+      if (!isPermissionPreset(body.preset) || body.mode !== undefined || body.permission !== undefined) return json({ error: 'preset must be "read-only" | "default" | "full-access", without legacy mode fields.' }, 400);
+      const config = readConfig();
+      if (typeof config === "string") return json({ error: config }, 500);
+      if (activeRuns.size || uploads.busy || pendingTerminals > 0 || [...terminalSessions.values()].some(session => !session.exited)) return json({ error: "Finish active runs, uploads and terminals before changing sandbox permissions." }, 409);
+      // Synchronous revalidation and replacement reserve the transition before
+      // any new run can observe half of the approval/sandbox bundle.
+      if (permissionChanging) return json({ error: "Permission mode is changing; retry after it finishes." }, 409);
+      const next = applyPermissionPreset(config, body.preset);
+      const sandbox = new Sandbox({ workspace, mode: next.sandbox?.mode, additionalWritableRoots: next.sandbox?.additionalWritableRoots });
+      permissionChanging = true;
+      try {
+        persistSettings(next);
+        runtimeFor(workspace).permissions.clearSessions();
+        await runtimeFor(workspace).resetMcp(sandbox, next.sandbox?.mcp ?? {});
+      } finally { permissionChanging = false; }
+      writeDiagnostic("permission.preset", JSON.stringify({ preset: body.preset, workspace }));
+      return await handleInfo();
+    }
     const permission = body?.permission ?? body?.mode;
     if (!isAccessMode(permission)) {
       return json({ error: 'permission must be "approval" | "assist" | "full".' }, 400);
@@ -1115,6 +1157,33 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     if (typeof body?.expandTools === "boolean") next.expandTools = body.expandTools;
     persistSettings(next);
     return await handleInfo();
+  }
+
+  async function handleConnectProvider(request: Request): Promise<Response> {
+    let input;
+    try { input = parseProviderConnection(await readJson<unknown>(request)); }
+    catch (error) { return json({ error: error instanceof ProviderConnectionError ? error.message : "Invalid provider connection." }, 400); }
+    const cwd = workspace;
+    const initial = readConfig();
+    if (typeof initial === "string") return json({ error: "Cannot read the active configuration." }, 500);
+    const target = { ...input, apiKey: input.apiKey ?? initial.providers?.find(entry => entry.name === input.name)?.apiKey };
+    try { validateProviderConnectionCredentials(target); }
+    catch (error) { return json({ error: error instanceof ProviderConnectionError ? error.message : "Invalid provider credentials." }, 400); }
+    let models;
+    try {
+      models = input.modelIds?.length ? input.modelIds.map(id => ({ id, name: id })) : await discoverModels({ type: input.type, baseURL: input.baseURL, apiKey: resolveProviderApiKey(target), providerId: input.name }, { strict: true, signal: request.signal, bounded: true });
+    } catch { return json({ error: "Model discovery failed. Check the endpoint/key, enter model IDs, or retry." }, 502); }
+    if (request.signal.aborted) return json({ error: "Provider connection cancelled." }, 408);
+    if (workspace !== cwd) return json({ error: "Workspace changed. Retry /connect." }, 409);
+    if (activeRuns.size) return json({ error: "Finish active runs before configuring providers." }, 409);
+    const config = readConfig();
+    if (typeof config === "string") return json({ error: "Cannot read the active configuration." }, 500);
+    try {
+      const result = saveProviderConnection(config, input, models, { path: options.configPath });
+      writeDiagnostic("provider.connect", `Saved ${result.provider.name} (${input.type}), ${result.provider.models?.length ?? 0} models; credentials ${input.apiKey ? "updated" : "unchanged"}.`);
+      sync.publish("config");
+      return json({ provider: result.provider });
+    } catch (error) { return json({ error: error instanceof ProviderConnectionError ? error.message : "Cannot save provider connection." }, 500); }
   }
 
   async function handleStatus(): Promise<Response> {
@@ -1520,6 +1589,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     let closed = false;
     const pendingApprovals = new Set<string>();
     let managed: RuntimeAgent | undefined;
+    let runInvoked = false;
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const send = (event: string, data: unknown): void => {
@@ -1540,6 +1610,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
           managed = runtimeFor(runWorkspace).createAgent(config, {
             model: model.client,
             onDelta: delta => send("delta", delta),
+            onToolInput: delta => send("tool_input", delta),
             task: true,
             log: eventLog,
             taskModels: configuredModelIds(config),
@@ -1615,7 +1686,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
             metaStarted = true;
             const metaModel = small && typeof small !== "string" ? small.client : model.client;
             const collected: SessionEvent[] = [];
-            const target = { appendEvent: (type: string, data?: unknown): SessionEvent => { const event = { type, data, seq: collected.length, time: Date.now() }; collected.push(event); return event; }, flush: () => {} };
+            const target = { id: session.id, appendEvent: (type: string, data?: unknown): SessionEvent => { const event = { type, data, seq: collected.length, time: Date.now() }; collected.push(event); return event; }, flush: () => {} };
             void generateSessionMeta(request => metaModel({ ...request, signal: AbortSignal.timeout(META_TIMEOUT_MS) }), toChatMessages(session.all()), target)
               .then(meta => {
                 const usageEvents = collected.filter(event => event.type === "model/usage");
@@ -1634,6 +1705,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
             const text = loopPrompt(options);
             for (let iteration = 1; ; iteration += 1) {
               send("loop", { iteration, maxIterations: options.maxIterations, promise: options.completionPromise ?? null });
+              runInvoked = true;
               const result = await ringko.run(text, { signal: abort.signal });
               maybeMeta();
               const complete = options.completionPromise !== undefined && promiseText(result.content) === options.completionPromise;
@@ -1645,15 +1717,26 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
               abort.signal.throwIfAborted();
             }
           } else {
+            runInvoked = true;
             const result = await ringko.run(prompt, { signal: abort.signal });
             maybeMeta();
             send("done", { sessionId: session.id, content: result.content, turns: result.turns });
           }
         } catch (error) {
-          // The SDK owns the durable terminal event (`run/failed` or
-          // `run/cancelled`); this layer only reports the live stream error.
-          const message = error instanceof Error ? error.message : "Run failed.";
-          send("error", { message });
+          if (!runInvoked) {
+            // Agent construction failed before the SDK could journal the input.
+            const runId = randomUUID();
+            try {
+              session.appendEvent("run/started", { runId }); recordUserMessage(session, prompt);
+              session.appendEvent(abort.signal.aborted ? "run/cancelled" : "run/failed", { runId, status: abort.signal.aborted ? "cancelled" : "failed", message: "Agent initialization failed. Check runtime configuration and retry." }); session.flush();
+            } catch (persistenceError) { writeDiagnostic("session.admission.failure", String(persistenceError)); }
+          }
+          // After invocation the SDK owns the durable terminal event; this
+          // layer reports the live error and handles failures before invocation.
+          // A cancelled run is not a failure: the streamed prefix stays and the
+          // durable `run/cancelled` event owns the final state.
+          if (abort.signal.aborted) send("cancelled", { message: "Run cancelled." });
+          else send("error", { message: error instanceof Error ? error.message : "Run failed." });
         } finally {
           try { await managed?.close(); } catch (error) { writeDiagnostic("runtime.agent.close", String(error)); }
           activeRuns.delete(session.id);
@@ -1846,13 +1929,17 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       const url = new URL(request.url);
       const handleRequest = async (): Promise<Response | undefined> => {
       if (admissionClosed) return json({ error: "Backend is closing." }, 503);
+      if (permissionChanging && request.method !== "GET") return json({ error: "Permission mode is changing; retry after it finishes." }, 409);
       // Local UI APIs must not be reachable from an unrelated browser origin (CSRF/DNS rebinding).
       const allowedHosts = new Set([host, "localhost", "127.0.0.1", "[::1]"]);
       if (loopback && url.pathname.startsWith("/api/") && !allowedHosts.has(url.hostname)) return json({ error: "Invalid backend host." }, 403);
       const origin = request.headers.get("origin");
       if (url.pathname.startsWith("/api/") && origin && origin !== url.origin && origin !== options.devServerUrl) return json({ error: "Cross-origin backend request denied." }, 403);
       const expectedWorkspace = request.headers.get("x-ringko-workspace");
-      if (expectedWorkspace) {
+      // Web frontends may switch project after the last CLI detaches. Lease
+      // renewal/release stay bound to an unguessable instance-owned lease id.
+      const leaseControl = /^\/api\/backend\/clients\/[a-f0-9-]{36}$/i.test(url.pathname);
+      if (expectedWorkspace && !leaseControl) {
         try { if (backendKey(decodeURIComponent(expectedWorkspace)) !== backendKey(workspace)) return json({ error: "Backend workspace changed. Reconnect to the correct workspace." }, 409); }
         catch { return json({ error: "Invalid workspace header." }, 400); }
       }
@@ -1866,7 +1953,26 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
           return json({ error: "unauthorized" }, 401);
         }
       }
-      if (url.pathname === "/api/backend" && request.method === "GET") return json({ protocol: PROTOCOL_VERSION, instance: sync.instance, workspace, configPath: options.configPath ? resolve(options.configPath) : null });
+      if (url.pathname === "/api/backend" && request.method === "GET") return json({ protocol: PROTOCOL_VERSION, instance: sync.instance, workspace, configPath: options.configPath ? resolve(options.configPath) : null, lifecycle: clients.status() });
+      if (url.pathname === "/api/backend/clients" && request.method === "POST") {
+        const body = await readJson<{ kind?: unknown }>(request);
+        if (admissionClosed) return json({ error: "Backend is closing." }, 503);
+        if (expectedWorkspace && backendKey(decodeURIComponent(expectedWorkspace)) !== backendKey(workspace)) return json({ error: "Workspace changed while attaching the client." }, 409);
+        if (body?.kind !== "cli" && body?.kind !== "web") return json({ error: "Invalid frontend kind." }, 400);
+        try {
+          const lease = clients.acquire(body.kind);
+          writeDiagnostic("backend.client.attach", JSON.stringify({ instance: sync.instance, kind: body.kind, clients: clients.status().clients }));
+          return json(lease);
+        }
+        catch (error) { if (error instanceof ClientCapacityError) return json({ error: error.message }, 429); throw error; }
+      }
+      if (leaseControl && (request.method === "PUT" || request.method === "DELETE")) {
+        const id = url.pathname.slice("/api/backend/clients/".length);
+        if (request.method === "DELETE") { clients.release(id); writeDiagnostic("backend.client.release", JSON.stringify({ instance: sync.instance, clients: clients.status().clients })); return json({ ok: true }); }
+        const lease = clients.renew(id);
+        return lease ? json(lease) : json({ error: "Frontend lease expired or was released." }, 404);
+      }
+      if (url.pathname === "/api/backend/persist" && request.method === "POST") { clients.pin(); return json({ ok: true }); }
       if (url.pathname === "/api/status" && request.method === "GET") return await handleStatus();
       if (url.pathname === "/api/backend/stop" && request.method === "POST") {
         if (activeRuns.size || uploads.busy) return json({ error: "Finish active sessions and uploads before stopping the backend." }, 409);
@@ -1922,6 +2028,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname === "/api/providers" && request.method === "GET") return handleProviders();
       if (url.pathname === "/api/providers" && request.method === "PUT") return await handleSaveProviders(request);
       if (url.pathname === "/api/providers/models" && request.method === "POST") return await handleDiscoverModels(request);
+      if (url.pathname === "/api/providers/connect" && request.method === "POST") return await handleConnectProvider(request);
       if (url.pathname === "/api/providers/context" && request.method === "POST") return await handleModelContextPreview(request);
       if (url.pathname === "/api/projects" && request.method === "GET") return handleProjects();
       if (url.pathname === "/api/projects" && request.method === "POST") return await handleAddProject(request);
@@ -1966,7 +2073,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         const id = decodeURIComponent(slash === -1 ? rest : rest.slice(0, slash));
         const action = slash === -1 ? "" : rest.slice(slash + 1);
         if (!id || id.length > 128 || id.includes("\0") || id.includes("/") || id.includes("\\")) return json({ error: "Invalid session id." }, 400);
-        if (options.shared) {
+          if (workspacePinned()) {
           try { const existing = store.open(id, "read"); if (existing.header.cwd && resolve(existing.header.cwd) !== workspace) return json({ error: "Session belongs to a different workspace." }, 409); }
           catch { return json({ error: "Unknown session." }, 404); }
         }
@@ -2037,6 +2144,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         catch (error) { return json({ error: error instanceof Error ? error.message : "Invalid answer." }, 400); }
       }
       if (url.pathname.startsWith("/api/")) return json({ error: "not found" }, 404);
+      if (!clients.status().webui) return new Response("Web UI is not enabled. Run ringko web to open a Web frontend.", { status: 404, headers: { "cache-control": "no-store" } });
       if (options.devServerUrl) return await proxyDev(options.devServerUrl, request, url);
       return await serveStatic(webuiDir, url.pathname);
       };
@@ -2049,6 +2157,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         return response;
       } catch (error) {
         if (error instanceof BackendClosingError) return json({ error: "Backend is closing." }, 503);
+        if (error instanceof PermissionChangingError) return json({ error: "Permission mode is changing; retry after it finishes." }, 409);
         if (error instanceof URIError || error instanceof TypeError) return json({ error: "Invalid backend request." }, 400);
         return json({ error: error instanceof Error ? error.message : "Backend request failed." }, 500);
       }
@@ -2064,16 +2173,26 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     throw error;
   }
   const url = backendOrigin(boundPort) ?? `http://${host}:${boundPort}`;
+  const completed = Promise.withResolvers<ServerCloseResult>();
+  const lifecycleTimer = setInterval(() => {
+    if (!admissionClosed && clients.shouldClose(permissionChanging || activeRuns.size > 0 || runDrains.size > 0 || uploads.busy || pendingTerminals > 0)) {
+      // No await between the final zero-client check and closing admission.
+      writeDiagnostic("backend.idle.close", JSON.stringify({ instance: sync.instance, reason: "No frontend clients or active work remain." }));
+      void stop().catch(error => writeDiagnostic("backend.idle.close", String(error)));
+    }
+  }, CLIENT_LEASE_LIMITS.sweepMs);
+  lifecycleTimer.unref?.();
   let closing: Promise<ServerCloseResult> | undefined;
   function stop(): Promise<ServerCloseResult> {
       if (closing) return closing;
-      const completion = Promise.withResolvers<ServerCloseResult>();
+      const completion = completed;
       closing = completion.promise;
       void (async (): Promise<ServerCloseResult> => {
         const errors: unknown[] = [];
         let timedOut = false;
         // Stop admission before touching ownership so no new run can start.
         admissionClosed = true;
+        clearInterval(lifecycleTimer);
         try { server.stop(true); } catch (error) { errors.push(error); }
         for (const run of activeRuns.values()) {
           try { run.abort(); } catch (error) { errors.push(error); }
@@ -2119,7 +2238,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       })().then(completion.resolve, completion.reject);
       return closing;
   }
-  return { url, port: boundPort, stop };
+  return { url, port: boundPort, stop, closed: completed.promise };
 }
 
 

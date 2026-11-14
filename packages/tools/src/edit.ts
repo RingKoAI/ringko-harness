@@ -65,15 +65,15 @@ export function createEditTool(workspace: Workspace, tracker: FileTracker = new 
     async assessRisk({ path }) {
       const target = await resolveWriteTarget(workspace, path);
       const alternates = alternateSpellings(target);
-      const extra = alternates.length > 0 ? { alternates } : {};
+      const extra = { ...(alternates.length > 0 ? { alternates } : {}), ...(sandbox.allowApprovedWrites && (sandbox.mode === "read-only" || !target.insideWorkspace && sandbox.mode !== "danger-full-access") ? { requiresExplicitApproval: true } : {}) };
       return target.insideWorkspace
-        ? { kind: "workspace_write", reason: `Edit ${target.relative}.`, target: target.absolute, ...extra }
+        ? { kind: "workspace_write", ...(sandbox.mode === "read-only" && sandbox.allowApprovedWrites ? { level: "medium" as const } : {}), reason: `Edit ${target.relative}.`, target: target.absolute, ...extra }
         : { kind: "external_file", reason: `Edit outside the workspace: ${target.absolute}.`, target: target.absolute, ...extra };
     },
     async execute({ path, old_string, new_string, replace_all }, context) {
       const target = await resolveWriteTarget(workspace, path);
       if (context?.approvedTarget && context.approvedTarget !== target.absolute) throw new Error("Edit target changed after approval; retry the call.");
-      sandbox.assertWrite(target.absolute);
+      sandbox.assertWrite(target.absolute, context);
       context?.signal?.throwIfAborted();
       const result = await safeFileOperation(target.absolute, { kind: "edit", oldString: old_string, newString: new_string, replaceAll: replace_all === true }, context?.signal);
       tracker.record(target.absolute, result);

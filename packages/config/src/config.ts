@@ -5,12 +5,13 @@
 // `~/.ringko/settings.local.json` holds workspace/capabilities/mode.
 //
 // Keys stay out of project trees; files are written 0600 on POSIX.
-import { randomUUID } from "node:crypto";
-import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
 import type { CatalogModel } from "./catalog.ts";
 import { providerPath, settingsPath } from "./paths.ts";
 import { isRecord } from "./util.ts";
+import { replaceJson } from "./json-file.ts";
+import type { InstructionScanConfig } from "./instruction-policy.ts";
+import type { PermissionPreset } from "./permission-presets.ts";
 
 /** One model offered by a provider. */
 export interface ModelDefinition {
@@ -54,7 +55,11 @@ export interface PluginTrustEntry { id: string; path: string }
 export type PluginTrust = string | PluginTrustEntry;
 
 export interface RingkoConfig {
+  /** Last selected preset; effective state is derived from permission and sandbox.mode. */
+  permissionPreset?: PermissionPreset;
   workspace?: string;
+  /** Recursive policy discovery and workspace-relative exclusions. */
+  instructionScan?: InstructionScanConfig;
   /** CLI updates: startup checks default to true, installation defaults to false. */
   updates?: { checkOnStartup?: boolean; autoUpdate?: boolean };
   capabilities?: {
@@ -144,17 +149,17 @@ function readObject(path: string, required: boolean): Record<string, unknown> {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
-  } catch {
-    if (required) throw new Error(`Cannot read config "${path}".`);
-    return {};
+  } catch (error) {
+    if (!required && (error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw new Error(`Cannot read config "${path}".`);
   }
   const trimmed = text.trim();
   if (trimmed.length === 0) return {}; // empty placeholder file
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
-  } catch (error) {
-    throw new Error(`Config "${path}" is not valid JSON: ${(error as Error).message}`);
+  } catch {
+    throw new Error(`Config "${path}" is not valid JSON. Fix the existing file before retrying.`);
   }
   if (!isRecord(parsed)) throw new Error(`Config "${path}" must be a JSON object.`);
   return parsed;
@@ -162,7 +167,7 @@ function readObject(path: string, required: boolean): Record<string, unknown> {
 
 /** Load the merged configuration (settings + provider definitions + selection). */
 export function loadConfig(options: LoadConfigOptions = {}): RingkoConfig {
-  if (options.path) return readObject(options.path, true) as RingkoConfig;
+  if (options.path !== undefined) return readObject(options.path, true) as RingkoConfig;
 
   const settings = readObject(settingsPath(options.env), false) as RingkoConfig;
   const providerFile = readObject(providerPath(options.env), false);
@@ -177,35 +182,12 @@ export function loadConfig(options: LoadConfigOptions = {}): RingkoConfig {
 }
 
 function writeJson(path: string, value: Record<string, unknown>): string {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
-  try {
-    chmodSync(path, 0o600);
-  } catch {
-    // best effort (e.g. Windows)
-  }
-  return path;
+  return replaceJson(path, value);
 }
 
 /** Persist a trusted, explicitly selected config without changing user-level settings. */
 export function saveConfigFile(config: RingkoConfig, path: string): string {
-  const data = `${JSON.stringify(config, null, 2)}\n`;
-  const target = existsSync(path) ? realpathSync(path) : path;
-  const temporary = `${target}.${randomUUID()}.tmp`;
-  mkdirSync(dirname(target), { recursive: true });
-  const descriptor = openSync(temporary, "wx", 0o600);
-  try {
-    try {
-      writeFileSync(descriptor, data, "utf8");
-      fsyncSync(descriptor);
-    } finally {
-      closeSync(descriptor);
-    }
-    renameSync(temporary, target);
-  } finally {
-    rmSync(temporary, { force: true });
-  }
-  return path;
+  return replaceJson(path, config);
 }
 
 /** Persist the config: providers/selection to `provider.json`, the rest to `settings.local.json`. */

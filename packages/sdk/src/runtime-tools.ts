@@ -1,4 +1,4 @@
-import type { RingkoConfig, Skill } from "@ringko-ai/config";
+import { isPermissionPreset, permissionPresetFor, type RingkoConfig, type Skill } from "@ringko-ai/config";
 import { sessionTodos, type SessionHandle } from "@ringko-ai/session";
 import {
   Sandbox,
@@ -28,7 +28,8 @@ export function registerRuntimeTools(
   session?: SessionHandle,
   skills?: readonly Skill[],
 ): Sandbox {
-  const sandbox = new Sandbox({ workspace, mode: config.sandbox?.mode, additionalWritableRoots: config.sandbox?.additionalWritableRoots });
+  const sandbox = new Sandbox({ workspace, mode: config.sandbox?.mode, additionalWritableRoots: config.sandbox?.additionalWritableRoots,
+    allowApprovedWrites: isPermissionPreset(config.permissionPreset) && permissionPresetFor(config) === config.permissionPreset });
   registerWorkspaceTools(agent.tools, { workspace, sandbox });
   const todos = createTodoStore(items => {
     if (session) { session.appendEvent("session/todo", { todos: items }); session.flush(); }
@@ -46,4 +47,3 @@ export function registerRuntimeTools(
   applyToolPolicy(agent, resolveWorkflow(config.workflow));
   return sandbox;
 }
-

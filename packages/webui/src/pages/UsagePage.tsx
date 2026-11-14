@@ -9,6 +9,7 @@ import { UsageTrend } from '@/components/usage-trend'
 import { useI18n } from '@/i18n'
 import { localDateInput, usageRange, USAGE_PAGE_SIZE, USAGE_REFRESH_MS, type UsageRange } from '@/lib/usage-statistics'
 import { useApp } from '@/store'
+import { isPendingSessionId } from '@/lib/conversations'
 
 const SELECT_CLASS = 'h-9 w-full min-w-0 rounded-md border bg-background px-2 text-sm'
 const CALL_KINDS: UsageCallKind[] = ['primary', 'task', 'compaction', 'metadata', 'unknown']
@@ -44,7 +45,7 @@ function UsageDashboard() {
   const key = JSON.stringify([workspace, range, from, to, scope, app.sessionId, provider, model, kind, offset])
   const data = result?.key === key && result.data.workspace === workspace ? result.data : null
   const validRange = usageRange(range, from, to) !== null
-  const noSession = scope === 'session' && !app.sessionId
+  const noSession = scope === 'session' && (!app.sessionId || isPendingSessionId(app.sessionId))
   const number = (value: number | null | undefined) => value == null ? '—' : new Intl.NumberFormat(locale).format(value)
   const percent = (value: number | null | undefined) => value == null ? t('usage.unavailable') : new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 1 }).format(value)
   const milliseconds = (value: number | null | undefined) => value == null ? '—' : `${new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value / 1000)} s`

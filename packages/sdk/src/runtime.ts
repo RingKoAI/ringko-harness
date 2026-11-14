@@ -107,8 +107,8 @@ export class RuntimeManager {
   /** Begin MCP connections during host startup, before the first model run. */
   start(sandbox: Sandbox = this.sandbox, permissions?: Readonly<Record<string, unknown>>): ReturnType<McpManager["start"]> { return this.mcp.start(sandbox, permissions); }
 
-  async resetMcp(): Promise<void> {
-    await this.mcp.reset();
+  async resetMcp(sandbox?: Sandbox, permissions?: Readonly<Record<string, unknown>>): Promise<void> {
+    await this.mcp.reset(sandbox, permissions);
   }
 
   /** Current immutable capabilities (plugins, skills, MCP servers). */

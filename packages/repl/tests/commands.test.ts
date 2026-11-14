@@ -38,6 +38,12 @@ describe("parseInput", () => {
 });
 
 describe("registry", () => {
+  it("routes permission modes and rule management through separate command paths", () => {
+    const selections: string[] = []; let rules = 0;
+    const context = { pickPermissions: (arg: string) => selections.push(arg), managePermissions: () => { rules++; } } as unknown as SlashContext;
+    findCommand("permissions")!.run(context, ""); findCommand("permission")!.run(context, "read-only"); findCommand("permissions")!.run(context, "rules");
+    expect(selections).toEqual(["", "read-only"]); expect(rules).toBe(1);
+  });
   it("routes status to a read-only host view and includes it in completion", () => {
     let opened = 0;
     findCommand("status")!.run({ showStatus: () => { opened++; } } as unknown as SlashContext, "");

@@ -1,7 +1,7 @@
-import { SYNC_LIMITS, type Approval, type LoopStatus, type QuestionRequest } from "@ringko-ai/protocol";
+import { applyToolInputDelta, SYNC_LIMITS, type PartialResponse, type Approval, type LoopStatus, type QuestionRequest } from "@ringko-ai/protocol";
 
 export interface RunState {
-  partial: { content: string; reasoning: string } | null;
+  partial: PartialResponse | null;
   approvals: Map<string, Approval>;
   questions: Map<string, QuestionRequest>;
   loop: LoopStatus | null;
@@ -25,13 +25,17 @@ export class RunStateManager {
       const partial = state.partial ?? { content: "", reasoning: "" };
       partial[key] = (partial[key] + delta.text).slice(0, SYNC_LIMITS.partialCharacters);
       state.partial = partial;
+    } else if (event === "tool_input") {
+      const partial = state.partial ?? { content: "", reasoning: "" };
+      state.partial = { ...partial, toolInputs: applyToolInputDelta(partial.toolInputs, data) };
     } else if (event === "assistant") state.partial = null;
+    else if (event === "cancelled") { state.partial = null; state.error = null; }
     else if (event === "approval") { const value = data as Approval; state.approvals.set(value.id, value); }
     else if (event === "approval_closed") state.approvals.delete((data as { id: string }).id);
     else if (event === "ask") { const value = data as QuestionRequest; state.questions.set(value.id, value); }
     else if (event === "ask_closed") state.questions.delete((data as { id: string }).id);
     else if (event === "loop") state.loop = data as LoopStatus;
-    else if (event === "error") state.error = (data as { message: string }).message;
+    else if (event === "error") { state.error = (data as { message: string }).message; state.partial = null; }
   }
   finish(id: string): void {
     const error = this.states.get(id)?.error;

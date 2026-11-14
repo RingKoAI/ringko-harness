@@ -51,7 +51,9 @@ export function createWriteTool(workspace: Workspace, tracker: FileTracker = new
     taskAccess: "write",
     concurrency: "exclusive",
     description:
-      "Atomically create or overwrite a regular UTF-8 file (up to 64 MiB). Overwrites and external targets require approval; writes outside sandbox-authorized roots are denied even when approved. Directory write access is required for atomic replacement.",
+      sandbox.allowApprovedWrites
+        ? "Atomically create or overwrite a regular UTF-8 file (up to 64 MiB). Default mode allows workspace writes. Read-only writes and external targets require explicit approval scoped to this file and invocation. Directory write access is required for atomic replacement."
+        : "Atomically create or overwrite a regular UTF-8 file (up to 64 MiB). Overwrites and external targets require approval; writes outside sandbox-authorized roots are denied even when approved. Directory write access is required for atomic replacement.",
     inputSchema: {
       type: "object",
       properties: { path: { type: "string" }, content: { type: "string" } },
@@ -65,17 +67,18 @@ export function createWriteTool(workspace: Workspace, tracker: FileTracker = new
       const alternates = alternateSpellings(target);
       const extra = { targetExists, ...(alternates.length > 0 ? { alternates } : {}) };
       if (!target.insideWorkspace) {
-        return { kind: "external_file", reason: `Write outside the workspace: ${target.absolute}.`, target: target.absolute, ...extra };
+        return { kind: "external_file", ...(sandbox.allowApprovedWrites && sandbox.mode !== "danger-full-access" ? { requiresExplicitApproval: true } : {}), reason: `Write outside the workspace: ${target.absolute}.`, target: target.absolute, ...extra };
       }
+      if (sandbox.mode === "read-only" && sandbox.allowApprovedWrites) return { kind: "workspace_write", level: "medium", requiresExplicitApproval: true, reason: `Write to a read-only workspace requires approval: ${target.relative}.`, target: target.absolute, ...extra };
       if (targetExists) {
-        return { kind: "workspace_write", level: "medium", reason: `Overwrite ${target.relative}.`, target: target.absolute, ...extra };
+        return { kind: "workspace_write", level: sandbox.allowApprovedWrites ? "low" : "medium", reason: `Overwrite ${target.relative}.`, target: target.absolute, ...extra };
       }
       return { kind: "workspace_write", level: "low", reason: `Create ${target.relative}.`, target: target.absolute, ...extra };
     },
     async execute({ path, content }, context) {
       const target = await resolveWriteTarget(workspace, path);
       if (context?.approvedTarget && context.approvedTarget !== target.absolute) throw new Error("Write target changed after approval; retry the call.");
-      sandbox.assertWrite(target.absolute);
+      sandbox.assertWrite(target.absolute, context);
       context?.signal?.throwIfAborted();
       const result = await safeFileOperation(target.absolute, { kind: "write", content, expectAbsent: context?.approvedTargetExists === false }, context?.signal);
       tracker.record(target.absolute, result);

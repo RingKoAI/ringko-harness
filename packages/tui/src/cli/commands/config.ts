@@ -3,6 +3,7 @@ import {
   parseConfigValue,
   providerPath,
   saveConfig,
+  saveConfigFile,
   setConfigValue,
   settingsPath,
   unsetConfigValue,
@@ -14,17 +15,17 @@ export function configCommand(parsed: ParsedArgs, io: CliIo): number {
   const [sub, key, value] = parsed.positionals;
   const config = readConfig(parsed, io);
   if (!config) return 2;
+  const paths = parsed.config ? [parsed.config] : [settingsPath(), providerPath()];
+  const save = (updated: typeof config) => parsed.config ? [saveConfigFile(updated, parsed.config)] : saveConfig(updated);
 
   switch (sub) {
     case undefined:
     case "show":
-      io.out(settingsPath());
-      io.out(providerPath());
+      for (const path of paths) io.out(path);
       io.out(`${JSON.stringify(config, null, 2)}`);
       return 0;
     case "path":
-      io.out(settingsPath());
-      io.out(providerPath());
+      for (const path of paths) io.out(path);
       return 0;
     case "get": {
       if (!key) {
@@ -41,7 +42,7 @@ export function configCommand(parsed: ParsedArgs, io: CliIo): number {
         return 2;
       }
       const updated = setConfigValue(config, key, parseConfigValue(value));
-      for (const path of saveConfig(updated)) io.out(path);
+      for (const path of save(updated)) io.out(path);
       return 0;
     }
     case "unset": {
@@ -49,7 +50,7 @@ export function configCommand(parsed: ParsedArgs, io: CliIo): number {
         io.err("config unset requires a key.");
         return 2;
       }
-      for (const path of saveConfig(unsetConfigValue(config, key))) io.out(path);
+      for (const path of save(unsetConfigValue(config, key))) io.out(path);
       return 0;
     }
     default:

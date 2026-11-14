@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Check, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
-import { setAccess, type AccessMode } from '@/api'
+import { setPermissionPreset, type AccessMode, type PermissionPreset } from '@/api'
 import { Button } from '@/components/ui/button'
 import {
   AlertDialog,
@@ -22,10 +22,10 @@ import {
 import { useI18n, type MessageKey } from '@/i18n'
 import { useApp } from '@/store'
 
-const MODES: { value: AccessMode; label: MessageKey; description: MessageKey }[] = [
-  { value: 'approval', label: 'access.approval', description: 'access.approval.desc' },
-  { value: 'assist', label: 'access.assist', description: 'access.assist.desc' },
-  { value: 'full', label: 'access.full', description: 'access.full.desc' },
+const MODES: { value: PermissionPreset; label: MessageKey; description: MessageKey }[] = [
+  { value: 'read-only', label: 'access.readOnly', description: 'access.readOnly.desc' },
+  { value: 'default', label: 'access.default', description: 'access.default.desc' },
+  { value: 'full-access', label: 'access.full', description: 'access.full.desc' },
 ]
 
 /** Switching into full access is a security boundary and needs a second confirmation. */
@@ -36,22 +36,25 @@ export function requiresFullAccessConfirmation(current: AccessMode, next: Access
 export function AccessPicker() {
   const { t } = useI18n()
   const app = useApp()
-  const current = app.info?.accessMode ?? 'approval'
-  const currentLabel = MODES.find((mode) => mode.value === current)?.label ?? 'access.approval'
+  const current = app.info?.permissionPreset ?? 'custom'
+  const currentLabel = MODES.find((mode) => mode.value === current)?.label ?? 'access.custom'
   const [confirming, setConfirming] = useState(false)
+  const [saving, setSaving] = useState(false)
 
-  function apply(mode: AccessMode): void {
-    setAccess(mode)
+  function apply(mode: PermissionPreset): void {
+    if (saving) return
+    setSaving(true)
+    setPermissionPreset(mode)
       .then(() => {
         app.refreshInfo()
         toast.success(t('access.changed'))
       })
       .catch((cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)))
+      .finally(() => setSaving(false))
   }
 
-  function choose(mode: AccessMode): void {
-    if (mode === current) return
-    if (requiresFullAccessConfirmation(current, mode)) {
+  function choose(mode: PermissionPreset): void {
+    if (mode === 'full-access' && current !== 'full-access') {
       setConfirming(true)
       return
     }
@@ -62,7 +65,7 @@ export function AccessPicker() {
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground" title={t('access.title')}>
+          <Button variant="ghost" size="sm" disabled={saving || app.busy || !app.info} className="gap-1.5 text-muted-foreground" title={t('access.title')}>
             <ShieldCheck className="size-3.5 shrink-0" />
             <span className="truncate">{t(currentLabel)}</span>
           </Button>
@@ -90,7 +93,7 @@ export function AccessPicker() {
             <AlertDialogAction
               onClick={() => {
                 setConfirming(false)
-                apply('full')
+                apply('full-access')
               }}
             >
               {t('access.full.confirm')}

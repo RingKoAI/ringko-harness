@@ -26,6 +26,7 @@ export interface ProviderInfo {
 }
 
 export type AccessMode = 'approval' | 'assist' | 'full'
+export type PermissionPreset = 'read-only' | 'default' | 'full-access'
 
 export interface ProjectEntry {
   id: string;
@@ -48,6 +49,8 @@ export interface Info {
   auth: { required: boolean };
   access: Access;
   accessMode: AccessMode;
+  permissionPreset?: PermissionPreset | 'custom';
+  sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access';
   permission: AccessMode;
   mode: { id: string; label: string; description: string | null };
   workflows: { id: string; label: string; description: string | null }[];

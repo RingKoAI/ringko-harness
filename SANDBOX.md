@@ -2,8 +2,9 @@
 
 The sandbox limits host **writes** and process lifecycles. It is not a VM, a
 secret vault, or a claim that every readable host file is isolated. The active
-mode is independent of the tool approval mode: approval never removes an OS
-sandbox boundary.
+mode is independent of the tool approval mode: ordinary approval does not remove
+an OS sandbox boundary. Named permission presets coordinate both settings;
+explicit per-invocation exceptions are described below.
 
 ## Policy and authority
 
@@ -102,6 +103,20 @@ the profile. `sandbox-exec` availability is a platform prerequisite and has no
 ordinary-shell fallback.
 
 ## Execution and credentials
+
+### Explicit permission-preset exceptions
+
+Selecting a named preset enables host-mediated, single-invocation exceptions.
+Read-only write/edit requests and default-mode external file targets require a
+fresh human approval bound to the canonical assessed target. Remembered allow
+rules cannot create this authority; native file identity/no-follow checks remain
+in force. The selected sandbox mode is not mutated by an approved file operation.
+
+Shell `sandbox_permissions` can request `workspace-write` or `danger-full-access`
+for one command. An escalation requires explicit approval bound to that exact
+command and uses a separate sandbox instance. Legacy sandbox objects retain strict
+write boundaries unless the host explicitly enables preset-controlled exceptions.
+This does not add network isolation: default-mode shells still require approval.
 
 Shell tools, terminals, local stdio MCP, explicit embedded-REPL `!command`, and
 workspace Git diffs use the runner. Direct write/edit tools default to the same

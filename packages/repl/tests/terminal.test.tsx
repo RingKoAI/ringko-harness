@@ -82,7 +82,7 @@ describe("terminal component interactions", () => {
     const model: ModelClient = async () => ({ content: "", toolCalls: [] });
     const app = render(<Repl workspace={root} model={model} modelLabel="test" config={{}} />, { stdin: io.input as unknown as NodeJS.ReadStream, stdout: io.output as unknown as NodeJS.WriteStream, stderr: io.output as unknown as NodeJS.WriteStream, exitOnCtrlC: false });
     try {
-      await settle(); io.input.write("/permissions"); await settle(); io.input.write("\r"); await settle();
+      await settle(); io.input.write("/permissions rules"); await settle(); io.input.write("\r"); await settle();
       await waitForRender(() => io.read().includes("Permission rules"), "permission rules picker");
       expect(io.read()).toContain("Permission rules");
       expect(io.read()).toContain("echo fixture");

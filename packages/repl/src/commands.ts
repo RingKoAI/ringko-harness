@@ -20,6 +20,7 @@ export interface SlashContext {
   sessionId?: string;
   toolNames(): string[];
   managePermissions?(): void;
+  pickPermissions?(arg: string): void;
   showTodos?(): void;
   showStatus?(tab?: StatusTab): void;
   /** Connect to / list providers. */
@@ -69,7 +70,7 @@ export function buildCommands(): SlashCommand[] {
     { name: "agents", description: "switch between main and subagent task views", run: ctx => ctx.pickAgent?.() },
     { name: "loop", description: "repeat a prompt until a completion promise or max iterations", run: (ctx, arg) => ctx.startLoop?.(arg) },
     { name: "cancel-loop", aliases: ["stop-loop"], description: "stop the active loop", run: ctx => ctx.cancelLoop?.() },
-    { name: "permissions", description: "view and remove tool permission rules", run: ctx => ctx.managePermissions?.() },
+    { name: "permissions", aliases: ["permission"], description: "choose read-only, default or full-access; /permissions rules manages tool rules", run: (ctx, arg) => { if (arg.trim() === "rules" || !ctx.pickPermissions) ctx.managePermissions?.(); else ctx.pickPermissions(arg); } },
     { name: "help", aliases: ["?"], description: "show this help", run: (ctx) => ctx.print(helpText()) },
     { name: "shortcuts", aliases: ["keys"], description: "show keyboard shortcuts", run: ctx => ctx.print(SHORTCUT_HELP) },
     { name: "clear", description: "clear the transcript", run: (ctx) => ctx.clear() },
@@ -264,6 +265,6 @@ export function helpText(): string {
     const names = [command.name, ...(command.aliases ?? [])].join(", ");
     lines.push(`  /${names.padEnd(width + 4)} ${command.description}`);
   }
-  lines.push("", "!command runs a local shell command directly; Esc interrupts. Output is not sent to the model.", "Type a message to run the agent; risky tools ask for approval (y/n).");
+  lines.push("", "!command runs a shell command directly without a model call; Esc interrupts. In shared sessions, output is recorded for subsequent model context.", "Type a message to run the agent; risky tools ask for approval (y/n).");
   return lines.join("\n");
 }

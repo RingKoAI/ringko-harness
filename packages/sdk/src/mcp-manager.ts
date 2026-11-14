@@ -62,7 +62,7 @@ export class McpManager {
         if (typeof config.command === "string" && config.command.trim()) await sandbox.prepare(config.env);
         if (this.closed || state !== this.state) return;
         const connection = await openMcpServer(name, config, {
-          sandboxMode: sandbox.mode,
+          sandboxMode: sandbox.effectiveMode,
           wrap: (executable, args, _cwd, environment) => sandbox.wrap(executable, args, configuredCwd, environment),
         });
         if (this.closed || state !== this.state) { await connection.client.close(); return; }
@@ -160,9 +160,11 @@ export class McpManager {
     return state === this.state ? this.snapshot(state) : this.start();
   }
 
-  async reset(): Promise<void> {
+  async reset(sandbox?: Sandbox, authorizations?: Readonly<Record<string, unknown>>): Promise<void> {
     const previous = this.state;
     this.state = newState();
+    if (sandbox) this.sandbox = sandbox;
+    if (authorizations) this.authorizations = authorizations;
     for (const timer of previous.timers.values()) clearTimeout(timer);
     await previous.initial;
     await Promise.allSettled([...previous.pending.values()]);
@@ -175,6 +177,5 @@ export class McpManager {
     return this.reset();
   }
 }
-
 
 

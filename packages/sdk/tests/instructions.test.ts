@@ -157,6 +157,39 @@ it("cancels a pending rule resolver without calling the provider", async () => {
   finally { release("Late instructions"); }
 });
 
+it("persists the user's input when instruction preparation fails and can continue after repair", async () => isolated(async workspace => {
+  const session = new SessionStore({ cwd: workspace }).create(); let broken = true, calls = 0;
+  const agent = createRingKo({ session, resolveInstructions: () => { if (broken) throw new Error("fixture preparation failure"); return "Repaired policy"; }, model: async () => { calls++; return { content: "recovered", toolCalls: [] }; } });
+  try {
+    await expect(agent.run("Keep this failed input")).rejects.toThrow("fixture preparation failure");
+    const restored = new SessionStore({ cwd: workspace }).open(session.id, "read");
+    expect(toChatMessages(restored.all()).filter(message => message.role === "user").map(message => message.content)).toEqual(["Keep this failed input"]);
+    expect(restored.all().filter(event => event.type.startsWith("run/")).map(event => event.type)).toEqual(["run/started", "run/failed"]); restored.close();
+    expect(calls).toBe(0); broken = false; await agent.run("Try again"); expect(calls).toBe(1);
+    expect(toChatMessages(session.all()).filter(message => message.role === "user").map(message => message.content)).toEqual(["Keep this failed input", "Try again"]);
+  } finally { session.close(); }
+}));
+
+it("invalidates cached provider token counts when a failed submission changes saved history", async () => isolated(async workspace => {
+  const session = new SessionStore({ cwd: workspace }).create(); let broken = false;
+  const agent = createRingKo({ session, resolveInstructions: () => { if (broken) throw new Error("fixture failed refresh"); return "Stable policy"; }, model: async () => ({ content: "done", toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 } }) });
+  try {
+    await agent.run("First"); expect(agent.tokens()).toBe(1); broken = true;
+    await expect(agent.run("Keep this failed input ".repeat(200))).rejects.toThrow("fixture failed refresh"); expect(agent.tokens()).toBeGreaterThan(1);
+  } finally { session.close(); }
+}));
+
+it("keeps early cancellation distinct from failed input preparation", async () => isolated(async workspace => {
+  const session = new SessionStore({ cwd: workspace }).create(), entered = Promise.withResolvers<void>(), pending = Promise.withResolvers<string>();
+  const agent = createRingKo({ session, resolveInstructions: () => { entered.resolve(); return pending.promise; }, model: async () => { throw new Error("Unexpected model call"); } });
+  const controller = new AbortController(), run = agent.run("Cancelled before admission", { signal: controller.signal });
+  try {
+    await entered.promise; controller.abort(); await expect(run).rejects.toThrow();
+    expect(session.all().filter(event => event.type === "user/message")).toHaveLength(0);
+    expect(session.all().filter(event => event.type.startsWith("run/")).map(event => event.type)).toEqual(["run/started", "run/cancelled"]);
+  } finally { pending.resolve("Late rules"); session.close(); }
+}));
+
 it("rejects overlapping run and compaction operations instead of losing rebuilt history", async () => {
   let entered!: () => void, release!: () => void;
   const started = new Promise<void>(resolve => { entered = resolve; });

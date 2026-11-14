@@ -13,6 +13,7 @@ import {
   rmSync,
   statSync,
   truncateSync,
+  unlinkSync,
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -325,7 +326,22 @@ export class SessionHandle {
       if (!this.materialized) {
         mkdirSync(this.dir, { recursive: true, mode: 0o700 });
         this.lock = acquireLock(sessionLockPath(this.dir));
-        this.fd = openSync(this.path, "wx", 0o600);
+        try {
+          this.fd = openSync(this.path, "wx", 0o600);
+        } catch (materializeError) {
+          if ((materializeError as NodeJS.ErrnoException).code !== "EEXIST") throw materializeError;
+          // A previous crashed materialization may have created an empty log file
+          // (openSync succeeded but writeSync failed before materialized=true).
+          // Under the exclusive lock, check file size: only reclaim empty files.
+          try {
+            const existing = statSync(this.path);
+            if (existing.size === 0) {
+              unlinkSync(this.path);
+              this.fd = openSync(this.path, "wx", 0o600);
+            } else throw materializeError;
+          } catch (innerError) { if (innerError === materializeError) throw innerError; throw new AggregateError([materializeError, innerError], "Cannot recover a partial session log under the write lock."); }
+        }
+        if (this.fd === undefined) throw new Error("Session log could not be created; the path may be occupied.");
         writeSync(this.fd, serializeHeader(this.header));
         this.materialized = true;
       }

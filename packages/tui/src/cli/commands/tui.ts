@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
-import { defaultProjectWorkspace, selectModel, type RingkoConfig } from "@ringko-ai/config";
-import type { BackendClient } from "@ringko-ai/client";
+import { defaultProjectWorkspace, selectModel, writeDiagnostic, type RingkoConfig } from "@ringko-ai/config";
+import { attachFrontend, type BackendClient } from "@ringko-ai/client";
 import { connectBackend } from "../../backend.ts";
 import { cliCommand } from "../../cli-identity.ts";
 import { printResumeHint } from "../../resume-hint.ts";
@@ -23,6 +23,7 @@ interface ReplModule {
     pickSession?: boolean;
     smallModel?: import("@ringko-ai/sdk").ModelClient;
     backend?: BackendClient;
+    signal?: AbortSignal;
   }): Promise<string | undefined>;
 }
 
@@ -38,6 +39,13 @@ export async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number>
   try { connection = await connectBackend({ workspace, configPath: parsed.config, url: parsed.server }); }
   catch (error) { io.err(error instanceof Error ? error.message : "Cannot connect backend."); return 1; }
   const backend = connection.client;
+  let lease: Awaited<ReturnType<typeof attachFrontend>>;
+  try { lease = await attachFrontend(backend, "cli"); }
+  catch (error) { io.err(error instanceof Error ? error.message : "Cannot attach terminal client."); return 1; }
+  const controller = new AbortController();
+  let lost: Error | undefined;
+  void lease.lost.then(error => { lost = error; controller.abort(); });
+  try {
   io.out(`Shared backend: ${connection.url}`);
   const sessions = await backend.sessions();
   const resumeSessionId = parsed.session ?? (parsed.resume ? sessions[0]?.id : undefined);
@@ -62,6 +70,7 @@ export async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number>
     config,
     workspace: connection.workspace,
     backend,
+    signal: controller.signal,
     version: VERSION,
     backendUrl: connection.url,
     ...(parsed.config ? { configPath: parsed.config } : {}),
@@ -69,8 +78,10 @@ export async function tuiCommand(parsed: ParsedArgs, io: CliIo): Promise<number>
     ...(parsed.sessionPicker ? { pickSession: true } : {}),
     ...(info.modelId ? { modelId: info.modelId } : {}),
   });
+  if (lost) { io.err(lost.message); return 1; }
   if (sessionId && (await backend.sessions()).some(session => session.id === sessionId)) {
     printResumeHint(io, sessionId, resolve(workspace), process.argv[1]);
   }
   return 0;
+  } finally { await lease.close().catch(error => writeDiagnostic("frontend.cli.release", String(error))); }
 }

@@ -30,6 +30,35 @@ ringko info
 `ringko config set` writes the user-level settings file. Secrets belong in
 `~/.ringko/auth/`, not in `settings.local.json`.
 
+## First startup
+
+Launching the terminal UI, a Web backend, or another recognized operational or
+configuration command creates missing `settings.local.json` and `provider.json`
+files. Only the missing file is created when the other exists. Existing files,
+including empty placeholders, are preserved byte-for-byte rather than backfilled.
+Omitted scan fields use the runtime defaults below. Malformed JSON, unreadable
+files and non-file configuration targets report an error and require repair.
+
+Complete temporary files are published exclusively, so concurrent startup cannot
+replace a winner. New files use `0600` on POSIX and a newly created configuration
+directory uses `0700`. Help, version and unknown commands do not generate these
+files. An explicit `--config <path>` also skips user-file initialization;
+`config show/path/set/unset` then operate on that file. The SDK's read-only
+`loadConfig()` function does not generate files.
+
+The default provider file is:
+
+```json
+{ "model": "", "small_model": "", "providers": [] }
+```
+
+No API key or remote model is invented; the existing offline echo behavior remains
+until a provider is configured. Default settings cover updates, permissions,
+sandbox, capabilities, thinking/display, turn limits, compaction, plugin trust,
+subagents and instruction scanning without pinning the launch directory as the
+workspace. Network and shell capabilities default to disabled; the settings
+example below demonstrates explicitly enabling them.
+
 ## settings.local.json
 
 ```json
@@ -73,6 +102,51 @@ ringko info
 | `subagents` | Delegated-provider registry: `default`, `maxActive`, `maxPerRun` and `providers`. See [Subagents](subagents.md). |
 | `updates.checkOnStartup` | Check the latest stable CLI release on startup. Defaults to `true`. |
 | `updates.autoUpdate` | Install an available update during a startup check. Defaults to `false`. |
+| `instructionScan` | Recursive instruction discovery, directory exclusions and resource bounds; see below. |
+
+## Instruction scanning
+
+New settings files contain these defaults. Existing settings files use the same
+defaults without being rewritten:
+
+```json
+{
+  "instructionScan": {
+    "recursive": true,
+    "excludeDirectories": [".git", ".hg", ".svn", "node_modules", "dist", "build", "coverage", ".next", "target", "vendor", "venv", "__pycache__", "bower_components"],
+    "excludeNestedRepositories": true,
+    "maxDepth": 12,
+    "maxDirectories": 4096
+  }
+}
+```
+
+- Recursive discovery adds nested `AGENTS.md` files. Global rules and upward
+  `AGENTS.md` / `CLAUDE.md` precedence stay unchanged, even with `recursive: false`.
+- `excludeNestedRepositories` skips child repositories with `.git` directories,
+  Git worktree `.git` files, or `.hg` / `.svn` markers. The selected workspace
+  itself is still loaded, as are ordinary child directories. Set this to `false`
+  to include nested repositories.
+- A single `excludeDirectories` name matches at any depth; paths containing `/`
+  or `\\` match relative to the workspace root. For example, `Example` matches
+  directories with that name, while `Example/reference` matches only that relative
+  path. Globs, absolute paths and `..` components are not accepted. A custom array
+  **replaces** the built-in exclusion list; `[]` clears it. Dot-prefixed directories
+  and directory symlinks are always skipped. `.gitignore` is not consulted.
+- The workspace has depth `0`. `maxDepth` accepts `0–64`; `maxDirectories` accepts
+  `1–65536`, including the workspace root. Excluded directories and repositories
+  do not consume the budget. Discovery stops descending at the depth boundary;
+  exceeding the directory budget fails instead of silently dropping instructions
+  and requesting the model.
+- Invalid fields fall back individually and produce a diagnostic log entry, plus
+  a notification when the host provides one. The independent instruction budgets
+  remain `256 KiB` per file, `1 MiB` total and `64` files.
+
+For a broad projects directory, prefer selecting the actual project as the
+workspace, or add reference directories such as `Example` while retaining the
+default exclusions you need. Updated backends read saved settings on the next
+run. Restart an existing shared backend after updating program code; an old
+process does not automatically load new code.
 
 ## Version updates
 
@@ -111,6 +185,39 @@ Project-level files can also carry an `mcpServers` map; see
 [MCP servers](mcp.md) for the exact lookup order.
 
 ## Access modes
+
+### Permission presets
+
+The terminal `/permissions` (`/permission`) command and Web composer expose the
+same three presets: `read-only` pairs `approval` with a `read-only` sandbox;
+`default` pairs `approval` with `workspace-write`; `full-access` pairs `full`
+with `danger-full-access`. Both knobs are saved in one configuration replacement.
+Full access requires explicit confirmation; the terminal Config page asks for Y,
+with Esc cancelling. `/permissions rules` retains the original rule manager.
+Shift+Tab continues to change effort.
+
+`permissionPreset` records selection; the effective display is derived from
+`permission` and `sandbox.mode`. Unmatched combinations display Custom permissions.
+Legacy configurations retain their meaning: `permission: full` alone does not
+disable confinement.
+
+In read-only mode, write/edit require per-invocation approval scoped to the exact
+canonical target. Remembered allow rules cannot substitute for that approval.
+Default mode allows ordinary workspace writes and prompts for external targets.
+Shell retries may request `sandbox_permissions: "workspace-write"` or
+`"danger-full-access"`; explicit approval widens only that invocation, not the mode.
+
+Switches keep the existing configuration-level scope, affecting subsequent runs
+sharing that configuration. They are rejected during active runs, uploads or
+interactive terminals; MCP processes are restarted under the selected sandbox.
+Explicit `--config` files remain isolated. These are not session-only overrides.
+
+Disabled shell/network capabilities, explicit deny/ask rules and additional roots
+are preserved. Network tools still request approval. Current process confinement
+does not isolate networking, so default mode still gates shell commands rather
+than claiming Codex-equivalent network isolation with prompt-free arbitrary shells.
+
+### Legacy approval policies
 
 | Mode | Behavior |
 | --- | --- |

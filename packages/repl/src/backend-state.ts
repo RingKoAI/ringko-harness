@@ -18,6 +18,7 @@ export function snapshotItems(snapshot: SessionSnapshot): ReplItem[] {
       ? { ...item, running: true, incomplete: false, text: "" } : item);
   if (snapshot.partial?.reasoning) items.push({ id: nextId(), kind: "thinking", text: snapshot.partial.reasoning });
   if (snapshot.partial?.content) items.push({ id: nextId(), kind: "assistant", text: snapshot.partial.content, running: true });
+  for (const call of snapshot.partial?.toolInputs ?? []) items.push({ id: nextId(), kind: "notice", text: `${call.name}: ${call.complete ? "arguments generated; awaiting validation" : "generating arguments"} (not executed)\n${call.text}${call.truncated ? "\n[preview truncated]" : ""}` });
   if (snapshot.error) {
     const cancelled = snapshot.events.findLast(event => ["run/started", "run/completed", "run/cancelled", "run/failed", "run/error"].includes(event.type))?.type === "run/cancelled";
     items.push({ id: nextId(), kind: cancelled ? "notice" : "assistant", text: `${cancelled ? "Run cancelled" : "Request failed"}: ${snapshot.error.split(" | ")[0]}`, failed: !cancelled, runStart: lastRunStart(snapshot.events), runStatus: cancelled ? "cancelled" : "failed" });

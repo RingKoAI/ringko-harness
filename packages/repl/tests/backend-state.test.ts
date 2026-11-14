@@ -19,6 +19,14 @@ it("restores active tool calls and partial output when a terminal attaches mid-t
   expect(items.some(item => item.kind === "assistant" && item.text === "Shared answer")).toBe(true);
 });
 
+it("renders streaming arguments as unexecuted notices instead of tool results", () => {
+  const value = snapshot(); value.partial = { content: "", reasoning: "", toolInputs: [{ id: "stream", name: "write", text: '{"path":', complete: false, truncated: false }] };
+  const item = snapshotItems(value).at(-1);
+  expect(item).toMatchObject({ kind: "notice" }); expect(item?.text).toContain("generating arguments (not executed)"); expect(item?.text).toContain('{"path":');
+  value.partial.toolInputs![0].complete = true; value.partial.toolInputs![0].truncated = true;
+  expect(snapshotItems(value).at(-1)?.text).toContain("awaiting validation"); expect(snapshotItems(value).at(-1)?.text).toContain("preview truncated");
+});
+
 it("does not show historical tool calls or interrupted subagents as still running", () => {
   const value = snapshot(); value.busy = false; value.partial = null;
   value.events.push({ seq: 1, time: 2, type: "task/started", data: { type: "started", taskId: "task", parentCallId: null, description: "Inspect", mode: "read", model: "Fixture/model", time: 2 } });

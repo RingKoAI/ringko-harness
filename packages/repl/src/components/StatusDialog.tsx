@@ -26,6 +26,7 @@ export function StatusDialog({ load, session, columns, height, onClose, onMcp, o
   const [revision, setRevision] = useState(0);
   const [saving, setSaving] = useState(false), [notice, setNotice] = useState("");
   const write = useRef<AbortController | null>(null);
+  const permissionConfirmation = useRef<StatusSetting | null>(null);
   const loaded = useRef<StatusPageReport | null>(null);
   const generation = useRef(0);
   const width = Math.max(1, columns - 2), spacious = height >= 16, splitHeader = width < 40;
@@ -72,11 +73,15 @@ export function StatusDialog({ load, session, columns, height, onClose, onMcp, o
     ? statisticsLines(state.report.statistics, period, statsView, width)
     : lines.map(text => ({ text })), [tab, state, period, statsView, width, lines]);
   const end = Math.max(0, displayLines.length - count), active = Math.min(offset, end);
-  function change(setting: StatusSetting): void {
+  function change(setting: StatusSetting, confirmed = false): void {
     if (write.current || !onConfigChange) return;
     if (setting.disabledReason) { setNotice(setting.disabledReason); return; }
     const value = typeof setting.value === "boolean" ? !setting.value : setting.options?.[(setting.options.indexOf(setting.value) + 1) % setting.options.length];
     if (value === undefined) return;
+    if (setting.key === "permissionPreset" && value === "full-access" && !confirmed) {
+      permissionConfirmation.current = setting;
+      setNotice("Disable sandbox + ordinary approvals? Y confirm / Esc cancel."); return;
+    }
     const controller = new AbortController(); write.current = controller; setSaving(true); setNotice("Saving…");
     const timer = setTimeout(() => { controller.abort(); if (write.current === controller) { write.current = null; setSaving(false); setNotice("Save not confirmed; R refresh to verify."); } }, STATUS_OPERATION_MS);
     void Promise.resolve().then(() => { controller.signal.throwIfAborted(); return onConfigChange(setting.key, value, controller.signal); }).then(() => {
@@ -96,6 +101,12 @@ export function StatusDialog({ load, session, columns, height, onClose, onMcp, o
     const rows = (loaded.current?.settings ?? []).filter(setting => `${setting.label} ${setting.key}`.toLowerCase().includes(current.query.toLowerCase()));
     const cursor = Math.max(0, Math.min(current.selected, Math.max(0, rows.length - 1)));
     const scroll = Math.min(current.offset, end);
+    if (permissionConfirmation.current) {
+      const setting = permissionConfirmation.current;
+      if (!key.ctrl && !key.meta && input.toLowerCase() === "y") { permissionConfirmation.current = null; change(setting, true); }
+      else if (key.escape || input.toLowerCase() === "n" || key.ctrl && input === "c") { permissionConfirmation.current = null; setNotice("Permission change cancelled."); }
+      return;
+    }
     if (key.escape || (key.ctrl && input === "c")) {
       if (current.tab === "Config" && (current.searching || current.query)) { move({ searching: false, query: "", selected: 0, offset: 0 }); return; }
       write.current?.abort(); onClose(); return;

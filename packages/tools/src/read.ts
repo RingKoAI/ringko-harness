@@ -242,10 +242,12 @@ export function createReadTool(workspace: Workspace, tracker: FileTracker = new 
         const all = (await readdir(target.absolute)).sort();
         context?.signal?.throwIfAborted();
         if ((await resolvePathTarget(workspace, path)).absolute !== target.absolute) throw new Error("Read target changed while listing; retry the call.");
+        const filtered = all.filter(name => !name.startsWith("."));
+        const entries = filtered.slice(0, MAX_ENTRIES);
         return {
           path: shown,
-          entries: all.slice(0, MAX_ENTRIES),
-          ...(all.length > MAX_ENTRIES ? { truncated: true } : {}),
+          entries,
+          ...(filtered.length > MAX_ENTRIES ? { truncated: true } : {}),
         };
       }
 

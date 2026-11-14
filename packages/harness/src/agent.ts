@@ -70,15 +70,25 @@ export interface ModelTurn {
 }
 
 export interface ModelRequest {
+  /** Transport-only conversation identity; never part of model messages. */
+  sessionId?: string;
+  /** Host-owned transport headers (e.g. provider conversation routing). */
+  headers?: Record<string, string>;
   messages: readonly ChatMessage[];
   tools: readonly ToolMetadata[];
   /** Aborts the underlying provider request (e.g. the user pressed Esc). */
   signal?: AbortSignal;
   /** Transient presentation chunks; only the completed turn enters history. */
   onDelta?: (delta: ModelDelta) => void;
+  onToolInput?: (delta: ModelToolInputDelta) => void;
 }
 
 export interface ModelDelta { kind: "text" | "reasoning"; text: string }
+/** Presentation only: partial arguments never authorize or execute a tool. */
+export type ModelToolInputDelta =
+  | { kind: "start"; id: string; name: string }
+  | { kind: "delta"; id: string; text: string }
+  | { kind: "end"; id: string };
 
 export type ModelClient = (request: ModelRequest) => Promise<ModelTurn>;
 
@@ -111,6 +121,7 @@ export interface ToolExecutionResult extends ToolExecutionEvent {
 }
 
 export interface AgentOptions {
+  onToolInput?: (delta: ModelToolInputDelta) => void;
   onDelta?: (delta: ModelDelta) => void;
   jobs?: JobManager;
   model: ModelClient;
@@ -156,6 +167,7 @@ function serialize(value: unknown): string {
 }
 
 export class Agent {
+  private readonly onToolInput?: AgentOptions["onToolInput"];
   private readonly onDelta?: (delta: ModelDelta) => void;
   private readonly model: ModelClient;
   private readonly jobs?: JobManager;
@@ -185,6 +197,7 @@ export class Agent {
       throw new TypeError("maxTurns must be a positive integer.");
     }
     this.model = options.model;
+    this.onToolInput = options.onToolInput;
     this.onDelta = options.onDelta;
     this.jobs = options.jobs;
     this.tools = options.tools;
@@ -230,6 +243,7 @@ export class Agent {
       const response = await abortable(this.model({
         messages,
         tools: this.tools.list(),
+        ...(this.onToolInput ? { onToolInput: (delta: ModelToolInputDelta) => { this.signal?.throwIfAborted(); this.onToolInput?.(delta); } } : {}),
         ...(this.onDelta ? { onDelta: (delta: ModelDelta) => { this.signal?.throwIfAborted(); this.onDelta?.(delta); } } : {}),
         ...(this.signal ? { signal: this.signal } : {}),
       }), this.signal);

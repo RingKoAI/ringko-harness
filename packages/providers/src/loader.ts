@@ -5,9 +5,11 @@
 // hosted providers are built by importing the configured module at run time
 // (kept external to the binary).
 import * as bundledProviders from "@ringko-ai/providers";
+import { canonicalProviderType } from "./registry.ts";
+import { createEchoProvider } from "./echo.ts";
 import type { ModelClient } from "@ringko-ai/harness";
 import {
-  getApiKey,
+  resolveProviderApiKey,
   modelLabel,
   selectModel,
   type ModelSelection,
@@ -44,29 +46,7 @@ const defaultImporter: ProviderImporter = (specifier) =>
     ? Promise.resolve(bundledModule)
     : (import(specifier) as Promise<Record<string, unknown>>);
 
-/** Provider type ids understood by the bundled providers module. */
-const TYPE_ALIASES: Record<string, string> = {
-  openai: "openai",
-  "openai-oauth": "openai-oauth",
-  oauth: "openai-oauth",
-  chatgpt: "openai-oauth",
-  "github-copilot": "github-copilot",
-  copilot: "github-copilot",
-  anthropic: "anthropic",
-  "anthropic-oauth": "anthropic-oauth",
-  "claude-oauth": "anthropic-oauth",
-  "xai-oauth": "xai-oauth",
-  xai: "xai-oauth",
-  grok: "xai-oauth",
-  google: "google",
-  gemini: "google",
-  "google-generative-ai": "google",
-  "openai-compatible": "openai-compatible",
-  openaicompatible: "openai-compatible",
-  compatible: "openai-compatible",
-  customendpoint: "openai-compatible",
-  echo: "echo",
-};
+export { createEchoProvider } from "./echo.ts";
 
 /** Strip the chat-completions path so a full model URL becomes a base URL. */
 export function baseUrlFromChatUrl(url: string): string {
@@ -78,7 +58,7 @@ export function resolveProviderConfig(selection: ModelSelection | undefined): Pr
   if (!selection) return { provider: "echo" };
   const { provider, model } = selection;
   const rawType = (provider.type ?? provider.vendor ?? "").toLowerCase();
-  const type = rawType.length > 0 ? TYPE_ALIASES[rawType] ?? rawType : "echo";
+  const type = rawType.length > 0 ? canonicalProviderType(rawType) : "echo";
   const baseURL =
     provider.baseURL ??
     (model.url ? baseUrlFromChatUrl(model.url) : provider.url ? baseUrlFromChatUrl(provider.url) : undefined);
@@ -89,19 +69,8 @@ export function resolveProviderConfig(selection: ModelSelection | undefined): Pr
     name: provider.name,
     baseURL,
     // Credentials live in auth.json; provider.json may still carry a key.
-    apiKey: provider.apiKey ?? getApiKey(provider.name),
+    apiKey: resolveProviderApiKey(provider),
     maxOutputTokens: model.maxOutputTokens,
-  };
-}
-
-/**
- * A deterministic, offline model provider. It echoes the last message so the
- * binary and the tool pipeline can be exercised without a provider module.
- */
-export function createEchoProvider(): ModelClient {
-  return async (request) => {
-    const last = request.messages.at(-1)?.content ?? "";
-    return { content: `echo: ${last}`, toolCalls: [] };
   };
 }
 

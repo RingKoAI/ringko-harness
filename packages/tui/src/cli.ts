@@ -1,4 +1,4 @@
-import { access, loopPrompt, promiseText, type ApprovalHandler, type ChatMessage } from "@ringko-ai/sdk";
+import { access, isAccessMode, loopPrompt, promiseText, type ApprovalHandler, type ChatMessage } from "@ringko-ai/sdk";
 import { cliCommand } from "./cli-identity.ts";
 import { RuntimeManager } from "@ringko-ai/sdk/runtime";
 import { connectBackend } from "./backend.ts";
@@ -9,6 +9,7 @@ import {
   selectModel,
   resolveSelectionContext,
   writeDiagnostic,
+  initializeConfig,
   type RingkoConfig,
 } from "@ringko-ai/config";
 import {
@@ -27,6 +28,7 @@ import { pluginsCommand } from "./cli/commands/plugins.ts";
 import { modelsCommand } from "./cli/commands/models.ts";
 import { webCommand } from "./cli/commands/web.ts";
 import { sessionCommand } from "./cli/commands/session.ts";
+import { serveBackendCommand } from "./cli/commands/backend.ts";
 import { skillsCommand } from "./cli/commands/skills.ts";
 import { subagentsCommand } from "./cli/commands/subagents.ts";
 import { tuiCommand } from "./cli/commands/tui.ts";
@@ -48,7 +50,7 @@ Usage:
 Commands:
   run <prompt>         Run the agent
   loop <prompt>        Repeat a prompt until --completion-promise or --max-iterations
-  web                  Start the local backend and browser UI
+  web                  Enable a Web frontend on the shared backend
   service start|status|stop  Manage the shared backend of this workspace
   tools                List the registered tools
   skills               List installed skills (~/.ringko/skills, ~/.agents/skills)
@@ -63,7 +65,7 @@ Commands:
   subagents            List configured subagent providers
   session list         List stored sessions (~/.ringko/sessions)
   models [provider]    Discover a provider's models and save them
-  auth login [provider]  Sign in via OAuth (openai | github-copilot; --device for headless)
+  auth login [provider]  Sign in via OAuth (openai | github-copilot | xai | anthropic; --device)
   auth status          List stored credentials (~/.ringko/auth/auth.json)
   auth set <prov> <key>  Store an API key for a provider
   auth logout <prov>   Remove stored credentials
@@ -103,6 +105,7 @@ function denyApprovals(io: CliIo): ApprovalHandler {
 
 /** Dash-prefixed first tokens that are commands, not options of the default command. */
 const DASH_COMMANDS = new Set(["--help", "-h", "--version", "-v"]);
+const CONFIG_COMMANDS = new Set(["tui", "run", "loop", "web", "service", "tools", "skills", "mcp", "plugins", "subagents", "session", "models", "auth", "config", "update", "info"]);
 
 function parseArgs(argv: readonly string[]): ParsedArgs {
   const [first, ...rest] = argv;
@@ -110,6 +113,9 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   // must not be mistaken for a command name.
   const command = first !== undefined && (!first.startsWith("-") || DASH_COMMANDS.has(first)) ? first : undefined;
   const args = command === undefined ? argv : rest;
+  // Help must never fall through to an execution prompt or a mutating command.
+  const boundary = args.indexOf("--");
+  if (args.slice(0, boundary < 0 ? args.length : boundary).some(arg => arg === "--help" || arg === "-h")) return { command: "help", positionals: [] };
   const positionals: string[] = [];
   let config: string | undefined;
   let provider: string | undefined;
@@ -123,6 +129,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
   let shared: boolean | undefined;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
+    if (arg === "--") { positionals.push(...args.slice(i + 1)); break; }
     if (arg === "--shared") { shared = true; continue; }
     if (arg === "--server" || arg === "--port") {
       const value = args[++i];
@@ -147,7 +154,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
     }
     if (arg === "--config" || arg === "--provider" || arg === "--model" || arg === "--workspace") {
       const value = args[i + 1];
-      if (value === undefined) throw new TypeError(`Missing value for ${arg}.`);
+      if (value === undefined || !value.trim() || value.startsWith("--")) throw new TypeError(`Missing value for ${arg}.`);
       if (arg === "--config") config = value;
       else if (arg === "--provider") provider = value;
       else if (arg === "--model") model = value;
@@ -288,6 +295,7 @@ async function loopCommand(parsed: ParsedArgs, io: CliIo): Promise<number> {
       const value = tokens[index + 1];
       if (value === undefined || !/^\d+$/.test(value)) { io.err("--max-iterations must be a non-negative integer."); return 2; }
       maxIterations = Number(value);
+      if (!Number.isSafeInteger(maxIterations)) { io.err("--max-iterations must be a safe non-negative integer."); return 2; }
       index += 1;
       continue;
     }
@@ -314,6 +322,10 @@ export async function runCli(argv: readonly string[], io: CliIo, options: { star
     return 2;
   }
 
+  if (parsed.command === undefined || CONFIG_COMMANDS.has(parsed.command)) {
+    try { for (const path of initializeConfig({ path: parsed.config })) writeDiagnostic("config.initialize", `Created default configuration: ${path}`); }
+    catch (error) { io.err(error instanceof Error ? error.message : "Cannot initialize user configuration."); return 2; }
+  }
   if (options.startupUpdates && await startupUpdate(parsed, io)) return 0;
 
   switch (parsed.command) {
@@ -331,7 +343,10 @@ export async function runCli(argv: readonly string[], io: CliIo, options: { star
       io.out(`${cliCommand()} ${VERSION}`);
       return 0;
     case "info": {
-      const mode = access();
+      const config = readConfig(parsed, io); if (!config) return 2;
+      const selected = config.permission ?? config.mode;
+      if (selected !== undefined && !isAccessMode(selected)) { io.err("Invalid configured permission mode."); return 2; }
+      const mode = access(selected);
       io.out(`${mode.label} (${mode.id})`);
       io.out(mode.summary);
       return 0;
@@ -361,7 +376,7 @@ export async function runCli(argv: readonly string[], io: CliIo, options: { star
     case "subagents":
       return subagentsCommand(parsed, io);
     case "session":
-      return sessionCommand(io);
+      return sessionCommand(parsed, io);
     case "models":
       return modelsCommand(parsed, io);
     case "auth":
@@ -370,10 +385,15 @@ export async function runCli(argv: readonly string[], io: CliIo, options: { star
       return webCommand(parsed, io);
     case "service": {
       const action = parsed.positionals[0] ?? "status";
+      if (action === "serve") {
+        try { return await serveBackendCommand(parsed, io); }
+        catch (error) { io.err(error instanceof Error ? error.message : "Backend startup failed."); return 1; }
+      }
       if (action !== "start" && action !== "status" && action !== "stop") { io.err(`Usage: ${cliCommand()} service start|status|stop`); return 2; }
       try {
         const config = readConfig(parsed, io); if (!config) return 2;
         const connection = await connectBackend({ workspace: parsed.workspace ?? config.workspace ?? process.cwd(), configPath: parsed.config, url: parsed.server, startIfMissing: action === "start" });
+        if (action === "start") await connection.client.request("/api/backend/persist", {});
         if (action === "stop") { await connection.client.request("/api/backend/stop", {}); io.out("Shared backend stopped."); }
         else io.out(`Shared backend: ${connection.url}\nWorkspace: ${connection.workspace}`);
         return 0;

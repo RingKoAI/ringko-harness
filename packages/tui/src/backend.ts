@@ -9,9 +9,11 @@ export { sharedPort } from "@ringko-ai/client/local";
 const START_TIMEOUT_MS = 15_000;
 const PROBE_TIMEOUT_MS = 1_000;
 const RETRY_MS = 200;
+const START_RETRY_MS = 1_000;
+const MAX_START_ATTEMPTS = 3;
 /** A registration this old whose URL does not answer is stale, even if its PID was reused. */
 const STALE_REGISTRATION_MS = 10_000;
-export interface ConnectOptions { workspace: string; configPath?: string; url?: string; start?: (port: number) => void; startIfMissing?: boolean }
+export interface ConnectOptions { workspace: string; configPath?: string; url?: string; port?: number; shared?: boolean; start?: (port: number) => void; startIfMissing?: boolean }
 export interface LiveBackend { client: BackendClient; url: string; workspace: string }
 
 type Probe = { status: "ok" } | { status: "mismatch"; message: string } | { status: "unreachable" };
@@ -31,6 +33,7 @@ async function probe(client: BackendClient, workspace: string, configPath: strin
     identity = await client.identity(AbortSignal.timeout(PROBE_TIMEOUT_MS));
   } catch (error) {
     if (error instanceof BackendError) {
+      if (error.status === 503) return { status: "unreachable" };
       return { status: "mismatch", message: `Backend rejected the connection (HTTP ${error.status}).` };
     }
     return { status: "unreachable" };
@@ -96,24 +99,30 @@ export async function connectBackend(options: ConnectOptions): Promise<LiveBacke
   const live = await findLiveBackend({ workspace, configPath });
   if (live) return live;
   if (options.startIfMissing === false) throw new Error(`No backend running at ${workspace}.`);
-  const port = sharedPort(workspace, configPath);
-  if (options.start) options.start(port);
-  else {
+  const port = options.port ?? sharedPort(workspace, configPath);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new TypeError("Invalid backend port.");
+  let attempts = 0, lastStart = 0, workerExited = false;
+  const launch = async () => {
+    attempts++; lastStart = Date.now(); workerExited = false;
+    if (options.start) { options.start(port); workerExited = true; return; }
     const executable = process.execPath;
     const script = process.argv[1];
     const compiled = script?.includes("$bunfs") || script?.includes("~BUN") || script === executable;
-    const args = [...(!compiled && script ? [resolve(script)] : []), "web", "--shared", "--port", String(port), "--workspace", workspace, ...(configPath ? ["--config", configPath] : [])];
+    const args = [...(!compiled && script ? [resolve(script)] : []), "service", "serve", ...(options.shared ? ["--shared"] : []), "--port", String(port), "--workspace", workspace, ...(configPath ? ["--config", configPath] : [])];
     const child = spawn(executable, args, { cwd: workspace, env: process.env, detached: true, stdio: "ignore", windowsHide: true });
+    child.once("exit", () => { workerExited = true; });
     const spawned = new Promise<void>((ready, reject) => { child.once("spawn", ready); child.once("error", reject); });
     child.unref();
     await spawned;
-  }
+  };
+  await launch();
   const url = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + START_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await new Promise(resolveWait => setTimeout(resolveWait, RETRY_MS));
-    const client = clientFor(url, workspace);
-    if ((await probe(client, workspace, configPath)).status === "ok") return { client, url, workspace };
+    const live = await findLiveBackend({ workspace, configPath });
+    if (live) return live;
+    if (workerExited && attempts < MAX_START_ATTEMPTS && Date.now() - lastStart >= START_RETRY_MS && !readBackendRegistration(workspace, configPath)) await launch();
   }
-  throw new Error(`Shared backend did not start at ${url}. Run ${cliCommand()} web --port ${port} --workspace "${workspace}" --shared to inspect the error.`);
+  throw new Error(`Shared backend did not start at ${url}. Run ${cliCommand()} service serve --port ${port} --workspace "${workspace}" to inspect the error.`);
 }

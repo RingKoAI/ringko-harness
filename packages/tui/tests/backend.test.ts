@@ -148,3 +148,17 @@ it("discards a registration whose PID was reused by another process", async () =
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+it("retries a worker lost to a startup/shutdown race without creating a second live owner", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rkh-start-race-")), previous = process.env.RINGKO_HOME, previousServer = process.env.RINGKO_SERVER;
+  process.env.RINGKO_HOME = root; delete process.env.RINGKO_SERVER;
+  let app: ReturnType<typeof startServer> | undefined, starts = 0;
+  try {
+    const connection = await connectBackend({ workspace: root, start: port => { if (++starts === 2) app = startServer({ workspace: root, port, shared: true }); } });
+    expect(starts).toBe(2); expect(connection.url).toBe(app!.url);
+  } finally {
+    await app?.stop(); if (previous === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previous;
+    if (previousServer === undefined) delete process.env.RINGKO_SERVER; else process.env.RINGKO_SERVER = previousServer;
+    rmSync(root, { recursive: true, force: true });
+  }
+});

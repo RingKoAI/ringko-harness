@@ -163,6 +163,20 @@ describe("SessionStore", () => {
     expect(store().open("exists").all()).toHaveLength(1);
   });
 
+  it("recovers an empty log file left by a crashed materialization under the lock", () => {
+    const session = store().create({ id: "crash-recovery" });
+    session.appendEvent("user/message", { text: "recovered" });
+    // Simulate a crash after openSync("wx") but before the header write: an
+    // empty log file occupies the path while no lock is held.
+    const dir = sessionDir(root, cwd, "crash-recovery");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(sessionLogPath(dir), "");
+    session.flush();
+    session.close();
+    const reopened = store().open("crash-recovery", "read");
+    expect(reopened.all()[0]).toMatchObject({ type: "user/message", data: { text: "recovered" } });
+  });
+
   it("reads legacy layouts while separating colliding workspace names", () => {
     const firstCwd = join(root, "a-b", "c"), secondCwd = join(root, "a", "b-c");
     const first = new SessionStore({ root, cwd: firstCwd }), second = new SessionStore({ root, cwd: secondCwd });

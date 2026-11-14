@@ -370,6 +370,24 @@ interface RawToolCall {
   toolCallId: string;
   toolName: string;
   input: unknown;
+  invalid?: boolean;
+}
+
+export const TOOL_STREAM_LIMITS = { calls: 128, argumentCharacters: 1_048_576, totalCharacters: 4_194_304, identifierCharacters: 512 } as const;
+
+/** Classify a provider tool failure without echoing its body into the user-facing error. */
+export function toolFailureMessage(error: unknown): string {
+  const record = asRecord(error);
+  const text = (
+    typeof error === "string" ? error
+      : `${typeof record?.name === "string" ? record.name : ""} ${typeof record?.message === "string" ? record.message : ""}`
+  ).toLowerCase();
+  if (text.includes("no such tool") || text.includes("tool not found") || text.includes("unknown tool")) {
+    return "Model requested a tool that is not registered; nothing was executed.";
+  }
+  return text.includes("input") || text.includes("json") || text.includes("schema")
+    ? "Model returned invalid tool arguments; no tools were executed."
+    : "The provider reported a tool failure before the harness could execute the call.";
 }
 
 /** Normalize a completed call into a harness turn. */
@@ -380,6 +398,7 @@ function toTurn(
   reasoning: string,
   reasoningDetails: readonly ReasoningDetail[],
 ): ModelTurn {
+  if (calls.some(call => call.invalid)) throw new Error("Model returned invalid tool arguments; no tools were executed.");
   const toolCalls: ModelToolCall[] = calls.map((call) => ({
     id: call.toolCallId,
     name: call.toolName,
@@ -427,23 +446,61 @@ export function createAiSdkModelClient(model: LanguageModel, options: AiSdkModel
       ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
       ...(options.maxOutputTokens !== undefined ? { maxOutputTokens: options.maxOutputTokens } : {}),
       ...(request.signal ? { abortSignal: request.signal } : {}),
+      ...(request.headers ? { headers: request.headers } : {}),
       ...providerOptionsFor(options),
     };
 
     // Streaming transport: the Codex `/responses` backend rejects `stream: false`.
-    if (options.stream || request.onDelta) {
+    if (options.stream || request.onDelta || request.onToolInput) {
       let delivered = false;
       const consume = async (input: typeof base) => {
+        const controller = new AbortController();
+        const signal = request.signal ? AbortSignal.any([request.signal, controller.signal]) : controller.signal;
+        const pending = new Map<string, { size: number; ended: boolean }>();
+        let total = 0;
         // Errors are propagated below; avoid the SDK logging raw provider bodies.
-        const result = streamText({ ...input, onError: () => {} });
+        const result = streamText({ ...input, abortSignal: signal, onError: () => {} });
+        try {
         for await (const part of result.fullStream) {
           request.signal?.throwIfAborted();
           if (part.type === "text-delta" || part.type === "reasoning-delta") {
             delivered = true;
             request.onDelta?.({ kind: part.type === "text-delta" ? "text" : "reasoning", text: part.text });
+          } else if (part.type === "tool-input-start") {
+            delivered = true;
+            if (!part.id || !part.toolName || part.id.length > TOOL_STREAM_LIMITS.identifierCharacters || part.toolName.length > TOOL_STREAM_LIMITS.identifierCharacters || pending.has(part.id) || pending.size >= TOOL_STREAM_LIMITS.calls) throw new Error("Invalid or excessive streamed tool calls.");
+            pending.set(part.id, { size: 0, ended: false });
+            request.onToolInput?.({ kind: "start", id: part.id, name: part.toolName });
+          } else if (part.type === "tool-input-delta") {
+            delivered = true;
+            const call = pending.get(part.id);
+            if (!call || call.ended) throw new Error("Out-of-order streamed tool arguments.");
+            call.size += part.delta.length; total += part.delta.length;
+            if (call.size > TOOL_STREAM_LIMITS.argumentCharacters || total > TOOL_STREAM_LIMITS.totalCharacters) throw new Error("Streamed tool arguments exceed the size limit.");
+            request.onToolInput?.({ kind: "delta", id: part.id, text: part.delta });
+          } else if (part.type === "tool-input-end") {
+            const call = pending.get(part.id);
+            if (!call || call.ended) throw new Error("Out-of-order streamed tool completion.");
+            call.ended = true;
+            request.onToolInput?.({ kind: "end", id: part.id });
+          } else if (part.type === "tool-call") {
+            delivered = true;
+          } else if (part.type === "tool-error") {
+            // Never echo the provider's raw tool error: only its class decides
+            // whether this was unparsable arguments or an execution failure.
+            throw new Error(toolFailureMessage(part.error));
+          } else if (part.type === "tool-output-denied") {
+            throw new Error("The provider denied a tool output before the harness could execute the call.");
           } else if (part.type === "error") throw part.error;
         }
-        return toTurn(await result.text, await result.toolCalls as readonly RawToolCall[], await result.usage, (await result.reasoningText) ?? "", toReasoningDetails(await result.reasoning));
+        request.signal?.throwIfAborted();
+        const calls = await result.toolCalls as readonly RawToolCall[];
+        // Preview end events are presentation-only: tolerate a missing end when
+        // the authoritative call exists, but never accept a truncated call.
+        if ([...pending].some(([id]) => !calls.some(complete => complete.toolCallId === id))) throw new Error("Tool arguments ended before a complete tool call was received.");
+        for (const [id, call] of pending) if (!call.ended) request.onToolInput?.({ kind: "end", id });
+        return toTurn(await result.text, calls, await result.usage, (await result.reasoningText) ?? "", toReasoningDetails(await result.reasoning));
+        } finally { controller.abort(); }
       };
       try {
         return await consume(base);
@@ -474,6 +531,7 @@ export function createAiSdkModelClient(model: LanguageModel, options: AiSdkModel
             ...(instructions ? { instructions } : {}),
             ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
             ...(request.signal ? { abortSignal: request.signal } : {}),
+            ...(request.headers ? { headers: request.headers } : {}),
             ...providerOptionsFor(options),
           });
         } catch (retryError) {

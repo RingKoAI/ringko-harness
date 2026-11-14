@@ -275,7 +275,7 @@ export class InProcessProvider implements SubagentProvider {
         signal: controller.signal,
       });
       const agent = new Agent({
-        model: child.model,
+        model: request => child.model({ ...request, sessionId: child.sessionId ?? child.id }),
         tools,
         signal: controller.signal,
         maxTurns: this.maxTurns,

@@ -44,7 +44,7 @@ export const ACCESS_MODES: Record<AccessMode, Access> = Object.freeze({
   full: Object.freeze({
     id: "full" as const,
     label: "Full access",
-    summary: "Unrestricted access to the internet and any file on your computer.",
+    summary: "Ordinary approval prompts are disabled. The configured sandbox and explicit permission rules still apply.",
     permissions: Object.freeze({
       workspaceFiles: "allowed",
       workspaceWrites: "allowed",

@@ -48,6 +48,19 @@ describe("terminal interaction logic", () => {
     expect(nextModel(items, items[1].value, 1)).toBe(items[0].value);
     expect(nextModel([], "", -1)).toBeUndefined();
   });
+  it("ranks exact provider names and aliases above broad protocol matches", () => {
+    const items = [
+      { label: "Gateway", value: "preset:gateway", description: "openai-compatible" },
+      { label: "OpenAI OAuth", value: "preset:oauth", aliases: ["openai-codex"] },
+      { label: "OpenAI", value: "preset:openai", aliases: ["openai"] },
+      { label: "OpenCode Go", value: "preset:opencode-go", aliases: ["opencode-go", "go"] },
+    ];
+    expect(filterItems(items, "openai", true)[0]?.value).toBe("preset:openai");
+    for (const query of ["opencodego", "OpenCode Go", "opencode-go", "ＧＯ", "go"]) expect(filterItems(items, query, true)[0]?.value).toBe("preset:opencode-go");
+    expect(filterItems(items, "openai oauth", true)[0]?.value).toBe("preset:oauth");
+    expect(filterItems(items, "", true)).toEqual(items); expect(filterItems(items, "not-a-provider", true)).toEqual([]);
+    expect(filterItems(items, "openai")[0]?.value).toBe("preset:gateway");
+  });
   it("resolves Pi shortcuts with portable reverse cycling and no plain-letter collisions", () => {
     expect(shortcut("p", { ...keys, ctrl: true })).toBe("nextModel");
     expect(shortcut("p", { ...keys, meta: true })).toBe("previousModel");

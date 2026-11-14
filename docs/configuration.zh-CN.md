@@ -29,6 +29,29 @@ ringko info
 `ringko config set` 写入用户级设置文件。凭证应放在 `~/.ringko/auth/`，不要写进
 `settings.local.json`。
 
+## 首次启动
+
+首次启动终端 UI、Web 后端或其他有效的配置/运行命令时，RingKo 会自动创建缺失的
+`settings.local.json` 和 `provider.json`。只缺一个文件时只创建那一个；已有文件
+（包括空占位文件）按原样保留，不回填或覆盖用户字段。省略的扫描字段使用下文的运行时
+默认值。损坏的 JSON、不可读文件或目录占用配置路径会报错，需修复后重试。
+
+创建使用完整临时文件和排他发布，并发启动不会覆盖先完成的文件。新文件在 POSIX 上为
+`0600`，新建的配置目录为 `0700`。帮助、版本和未知命令不会生成这两份配置；指定
+`--config <path>` 时也不会创建用户级配置，`config show/path/set/unset` 均操作指定文件。
+SDK 的纯读取函数 `loadConfig()` 不会自行生成文件。
+
+默认供应商文件为：
+
+```json
+{ "model": "", "small_model": "", "providers": [] }
+```
+
+它不会生成 API key 或选择远程模型；配置供应商前保留原有的离线 echo 行为。默认设置
+包含更新检查、权限、沙盒、能力开关、思考/显示、回合上限、压缩、插件信任、子代理和指令
+扫描参数，不固定启动目录为工作区。其中网络和 shell 能力默认关闭。下方设置示例演示了
+如何显式开启它们。
+
 ## settings.local.json
 
 ```json
@@ -72,6 +95,42 @@ ringko info
 | `subagents` | 委派 provider 注册表：`default`、`maxActive`、`maxPerRun`、`providers`。见[子代理](subagents.zh-CN.md)。 |
 | `updates.checkOnStartup` | 启动时检查 CLI 最新稳定版，默认 `true`。 |
 | `updates.autoUpdate` | 启动检测发现新版本后自动安装，默认 `false`。 |
+| `instructionScan` | 指令文件的递归范围、排除目录及资源上限，见下文。 |
+
+## 指令扫描
+
+以下是首次生成的 `instructionScan` 默认值；旧设置文件不必改写也会使用这些默认值：
+
+```json
+{
+  "instructionScan": {
+    "recursive": true,
+    "excludeDirectories": [".git", ".hg", ".svn", "node_modules", "dist", "build", "coverage", ".next", "target", "vendor", "venv", "__pycache__", "bower_components"],
+    "excludeNestedRepositories": true,
+    "maxDepth": 12,
+    "maxDirectories": 4096
+  }
+}
+```
+
+- 递归扫描只补充工作区下的 `AGENTS.md`；全局指令和从工作区向上的
+  `AGENTS.md` / `CLAUDE.md` 查找优先级保持原有规则。关闭 `recursive` 不会关闭这些指令。
+- `excludeNestedRepositories` 默认跳过子目录中的独立仓库，包括 `.git` 目录、Git worktree
+  的 `.git` 文件，以及 `.hg` / `.svn` 标记。当前选定的工作区本身不会被跳过，普通子目录
+  仍递归加载。若需要纳入嵌套仓库，可将此项设为 `false`。
+- `excludeDirectories` 中的单个目录名匹配任意层级；含 `/` 或 `\\` 的路径从工作区根目录
+  匹配。例如 `Example` 排除工作区内所有同名目录，`Example/reference` 只排除该相对路径。
+  不支持 glob、绝对路径或 `..`。自定义数组**替换**默认排除表；空数组清空这张表。
+  点开头的目录和目录符号链接始终不遍历；不读取 `.gitignore`。
+- 工作区深度为 `0`，`maxDepth` 可设 `0–64`；`maxDirectories` 可设 `1–65536`，包含工作区
+  根目录。排除的目录和嵌套仓库不计入预算。达到深度边界即停止向下扫描；超过目录预算则
+  报错，不会悄悄忽略指令后继续请求模型。
+- 无效扫描字段会逐项回退，并写入诊断日志；运行宿主提供通知时也会显示提示。每个文件
+  `256 KiB`、合计 `1 MiB`、最多 `64` 份指令的预算不受这些设置影响。
+
+扫描范围过宽时，优先选择实际项目作为工作区，或在排除数组中保留所需默认项并添加
+`Example` 等参考目录。新版后端会在下一次运行读取保存后的设置；更新程序代码后须重启
+已有共享后端，旧进程不会自动加载新代码。
 
 ## 版本更新
 
@@ -103,6 +162,39 @@ ringko config set updates.autoUpdate true
 项目级文件也可以带 `mcpServers`；查找顺序见 [MCP server](mcp.zh-CN.md)。
 
 ## 访问模式
+
+### 三档权限预设
+
+终端 `/permissions`（或 `/permission`）和网页输入区的权限菜单使用相同预设：
+
+| 预设 | 审批策略 | 沙盒 |
+| --- | --- | --- |
+| 只读 `read-only` | `approval` | `read-only` |
+| 默认 `default` | `approval` | `workspace-write` |
+| 完全访问 `full-access` | `full` | `danger-full-access` |
+
+切换时审批与沙盒在一次配置替换中同时保存。完全访问需要明确确认；终端 Config 页切入
+完全访问时按 `Y` 确认，Esc 取消。`/permissions read-only` 等命令也可直接选择，
+`/permissions rules` 保留原来的规则查看、移除入口。Shift+Tab 仍切思考档位。
+
+配置中保存 `permissionPreset`、`permission` 和 `sandbox.mode`；界面根据实际后两项
+推导有效预设。手工修改导致组合不匹配时显示「自定义权限」，不会仅凭旧预设名称放宽限制。
+现有旧配置保持原义，特别是单独的 `permission: full` 不会自动解除沙盒。
+
+只读档中的 write/edit 必须逐次审批，授权只适用于当次风险评估的规范化目标；保存的 allow
+规则不能代替这次授权。默认档的工作区内写入无需普通审批，外部文件需要逐次审批。
+Shell 在需要更宽范围时可请求 `sandbox_permissions: "workspace-write"` 或
+`"danger-full-access"`，批准后仅这条命令使用更宽沙盒，活动模式不变。
+
+切换沿用现有**配置级**作用域，影响共享此配置的后续运行，不会追溯修改已启动的执行。
+服务端会拒绝在活跃运行、上传或交互终端期间切换，并重建 MCP 连接，避免沿用旧模式进程。
+显式 `--config` 只更新指定文件；否则更新用户设置，而非单个会话的临时覆盖。
+
+权限预设不会启用已被宿主关闭的 shell/network 能力，也不会删除显式 deny/ask 规则或
+额外可写目录设置。网络工具仍经过审批；当前进程沙盒未隔离网络，因此默认档仍要求 Shell
+命令审批，不宣称具有 Codex 的「任意命令免审批且网络受隔离」能力。
+
+### 兼容的底层审批策略
 
 | 模式 | 行为 |
 | --- | --- |

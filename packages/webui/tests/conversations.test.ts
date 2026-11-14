@@ -4,11 +4,22 @@ import type { ChatHandlers } from '../src/api'
 import type { SessionSnapshot } from '@ringko-ai/client'
 
 function fixture() {
-  const calls: { input: { sessionId?: string; prompt: string }; handlers: ChatHandlers; aborted: boolean }[] = []
+  const calls: { input: { sessionId?: string; prompt: string; attachments: string[]; loop?: { args: string } }; handlers: ChatHandlers; aborted: boolean }[] = []
   const errors: (string | undefined)[] = []
   const manager = new Conversations((input, handlers) => { const call = { input, handlers, aborted: false }; calls.push(call); return { abort() { call.aborted = true } } }, error => errors.push(error))
   return { manager, calls, errors }
 }
+it('streams tool previews separately from messages and clears them on completion or cancellation', () => {
+  const { manager, calls } = fixture(); manager.send('a', 'read')
+  calls[0].handlers.onToolInput?.({ kind: 'start', id: 'call', name: 'read' })
+  calls[0].handlers.onToolInput?.({ kind: 'delta', id: 'call', text: '{"path":' })
+  expect(manager.get('a').partial?.toolInputs?.[0].text).toBe('{"path":')
+  expect(manager.get('a').messages).toHaveLength(1)
+  calls[0].handlers.onAssistant({ content: '', reasoning: null, toolCalls: [{ id: 'call', name: 'read', arguments: { path: 'a' } }], turn: 1 })
+  expect(manager.get('a').partial).toBeNull()
+  manager.stop('a'); calls[0].handlers.onToolInput?.({ kind: 'start', id: 'late', name: 'write' })
+  expect(manager.get('a').partial).toBeNull()
+});
 it('isolates simultaneous session streams, approvals, reasoning and tool events', () => {
   const { manager, calls } = fixture()
   manager.send('a', 'A'); manager.send('b', 'B')
@@ -34,6 +45,8 @@ it('queues editable messages in order and continues exactly once after completio
   calls[0].handlers.onDone({ sessionId: 'a', content: 'duplicate', turns: 1 })
   await Promise.resolve()
   expect(calls).toHaveLength(2); expect(calls[1].input.prompt).toBe('edited second')
+  expect(manager.get('a').queue).toHaveLength(1)
+  calls[1].handlers.onSession?.('a')
   expect(manager.get('a').queue).toHaveLength(0)
 })
 it('stops only the selected run, ignores late callbacks and pauses its queue', async () => {
@@ -57,6 +70,7 @@ it('seeds a new conversation and migrates to the backend-created session', () =>
   expect(created).toBe('real-session')
   expect(manager.peek(pending)).toBeUndefined()
   expect(manager.get('real-session').messages[0]).toMatchObject({ role: 'user', content: 'hello' })
+  calls[0].handlers.onSession?.('different-session'); expect(created).toBe('real-session'); expect(manager.peek('different-session')).toBeUndefined()
   calls[0].handlers.onAssistant({ content: 'answer', reasoning: null, toolCalls: [], turn: 1 })
   calls[0].handlers.onDone({ sessionId: 'real-session', content: 'answer', turns: 1 })
   expect(manager.get('real-session').messages.at(-1)?.content).toBe('answer')
@@ -71,6 +85,37 @@ it('rejects stale history loads, oversized input and excessive queued work', () 
   for (let index = 0; index < CONVERSATION_LIMITS.queued; index++) manager.send('a', `queued ${index}`)
   expect(() => manager.send('a', 'excess')).toThrow('full')
   expect(() => manager.send('b', 'x'.repeat(CONVERSATION_LIMITS.prompt + 1))).toThrow('size')
+})
+
+it('keeps streamed text when the user stops or another client cancels', () => {
+  const { manager, calls } = fixture()
+  manager.send('a', 'write it'); calls[0].handlers.onDelta?.({ kind: 'text', text: 'Partial answer' })
+  calls[0].handlers.onToolInput?.({ kind: 'start', id: 'c1', name: 'write' })
+  manager.stop('a')
+  expect(manager.get('a')).toMatchObject({ busy: false, partial: null, error: null })
+  expect(manager.get('a').messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Partial answer', runStatus: 'cancelled' })
+  expect(manager.get('a').messages.filter(message => message.role === 'user').map(message => message.runStatus)).toEqual(['cancelled'])
+
+  manager.send('b', 'second'); calls[1].handlers.onDelta?.({ kind: 'text', text: 'Another prefix' })
+  calls[1].handlers.onCancelled?.()
+  expect(manager.get('b').partial).toBeNull()
+  expect(manager.get('b').messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Another prefix', runStatus: 'cancelled' })
+  calls[1].handlers.onDone({ sessionId: 'b', content: 'late', turns: 1 }); calls[1].handlers.onError('late failure')
+  expect(manager.get('b').messages.at(-1)?.content).toBe('Another prefix')
+  expect(manager.get('b').error).toBeNull()
+})
+
+it('does not invent an assistant message when cancellation had no text', () => {
+  const { manager, calls } = fixture(); manager.send('a', 'silent')
+  manager.stop('a'); expect(manager.get('a').messages).toHaveLength(1)
+  manager.send('b', 'reasoning'); calls[1].handlers.onDelta?.({ kind: 'reasoning', text: 'thought' })
+  calls[1].handlers.onCancelled?.(); expect(manager.get('b').messages).toHaveLength(1)
+})
+
+it('pauses the queue after external cancellation instead of auto-sending', async () => {
+  const { manager, calls } = fixture(); manager.send('a', 'first'); manager.send('a', 'queued')
+  calls[0].handlers.onDelta?.({ kind: 'text', text: 'Partial' }); calls[0].handlers.onCancelled?.()
+  await Promise.resolve(); expect(calls).toHaveLength(1); expect(manager.get('a').queue).toHaveLength(1)
 })
 
 function snapshot(id = 'a'): SessionSnapshot {
@@ -123,4 +168,175 @@ it('marks only the owned input cancelled and ignores a late terminal callback', 
   manager.send('a', 'second'); manager.stop('a')
   calls[1].handlers.onDone({ sessionId: 'a', content: 'late', turns: 1 })
   expect(manager.get('a').messages.filter(message => message.role === 'user').map(message => message.runStatus)).toEqual(['completed', 'cancelled'])
+})
+
+it('retains rejected new input as a draft and retries creation without a fake session id', () => {
+  const { manager, calls } = fixture(); let created: string | undefined
+  const pending = manager.sendNew('keep my message', [], undefined, id => { created = id })
+  calls[0].handlers.onError('model setup failed')
+  expect(manager.get(pending)).toMatchObject({ busy: false, draft: 'keep my message', error: 'model setup failed' })
+  manager.send(pending, 'keep my message')
+  expect(calls[1].input.sessionId).toBeUndefined(); expect(manager.get(pending).messages).toHaveLength(1)
+  calls[0].handlers.onSession?.('stale-session')
+  expect(created).toBeUndefined(); expect(manager.peek('stale-session')).toBeUndefined()
+  calls[1].handlers.onSession?.('real-session'); expect(created).toBe('real-session'); expect(manager.peek(pending)).toBeUndefined()
+  calls[1].handlers.onError('instruction scan failed')
+  expect(manager.get('real-session').draft).toBe('keep my message')
+})
+
+it('does not replace a newer draft with the failed request text', () => {
+  const { manager, calls } = fixture(); manager.send('a', 'old input'); manager.patch('a', { draft: 'my newer draft' })
+  calls[0].handlers.onError('failed'); expect(manager.get('a').draft).toBe('my newer draft')
+})
+
+it('returns the actual session identity when the transport reports it synchronously', () => {
+  const manager = new Conversations((_input, handlers) => { handlers.onSession?.('immediate-session'); return { abort() {} } }, () => {})
+  expect(manager.sendNew('hello')).toBe('immediate-session'); expect(manager.get('immediate-session').messages[0].content).toBe('hello')
+  manager.dispose()
+})
+
+it('bounds pending creations and allows discarded failures to release cache entries', () => {
+  const { manager, calls } = fixture(), pending: string[] = []
+  for (let index = 0; index < CONVERSATION_LIMITS.cached; index++) pending.push(manager.sendNew('pending'))
+  expect(() => manager.sendNew('overflow')).toThrow('cache is full')
+  manager.discardPending(pending[0]); expect(manager.peek(pending[0])).toBeDefined()
+  calls[0].handlers.onError('rejected'); manager.discardPending(pending[0]); expect(manager.peek(pending[0])).toBeUndefined()
+  expect(manager.sendNew('available')).toStartWith('pending:'); manager.dispose()
+})
+
+it('directly sends a selected paused item, preserves attachments and loop options, then resumes the remaining FIFO', async () => {
+  const { manager, calls } = fixture()
+  manager.send('a', 'active'); manager.send('a', 'first'); manager.send('a', 'selected', ['attachment'], { args: 'fixture --max-iterations 1' }); manager.send('a', 'last'); manager.stop('a')
+  const item = manager.get('a').queue[1]
+  expect(await manager.sendQueuedNow('a', item.id, async () => { throw new Error('Idle sessions must not be stopped') })).toBe(true)
+  expect(calls[1].input).toEqual({ sessionId: 'a', prompt: 'selected', attachments: ['attachment'], loop: { args: 'fixture --max-iterations 1' } })
+  expect(manager.get('a').queue.map(item => item.prompt)).toEqual(['first', 'selected', 'last'])
+  calls[1].handlers.onSession?.('a')
+  expect(manager.get('a').queue.map(item => item.prompt)).toEqual(['first', 'last'])
+  calls[1].handlers.onDone({ sessionId: 'a', content: 'done', turns: 1 }); await Promise.resolve()
+  expect(calls[2].input.prompt).toBe('first')
+  calls[2].handlers.onSession?.('a'); calls[2].handlers.onDone({ sessionId: 'a', content: 'done', turns: 1 }); await Promise.resolve()
+  expect(calls[3].input.prompt).toBe('last')
+})
+
+it('waits for interruption before dispatch, blocks duplicate selection and ignores old callbacks and snapshots', async () => {
+  const { manager, calls } = fixture(), ready = Promise.withResolvers<void>()
+  manager.send('a', 'active'); manager.send('a', 'first'); manager.send('a', 'selected'); manager.send('b', 'other session')
+  const selected = manager.get('a').queue[1], seen: string[] = []
+  const sending = manager.sendQueuedNow('a', selected.id, async id => { seen.push(id); await ready.promise })
+  expect(manager.get('a')).toMatchObject({ busy: true, sendingQueued: selected.id })
+  expect(calls[0].aborted).toBe(true); expect(calls[1].aborted).toBe(false)
+  expect(await manager.sendQueuedNow('a', selected.id, async () => { throw new Error('duplicate') })).toBe(false)
+  calls[0].handlers.onAssistant({ content: 'stale', reasoning: null, toolCalls: [], turn: 1 }); calls[0].handlers.onError('stale error')
+  manager.synchronize({ ...snapshot(), busy: false, error: null })
+  manager.send('a', 'new tail'); manager.resume('a'); await Promise.resolve()
+  expect(calls).toHaveLength(2); expect(manager.get('a').sendingQueued).toBe(selected.id)
+  ready.resolve(); expect(await sending).toBe(true)
+  expect(seen).toEqual(['a']); expect(calls[2].input.prompt).toBe('selected')
+  calls[2].handlers.onSession?.('a')
+  expect(manager.get('a').queue.map(item => item.prompt)).toEqual(['first', 'new tail'])
+  expect(manager.get('a').messages.some(message => message.content === 'stale')).toBe(false)
+})
+
+it('keeps a selected message and its attachments on stop failure without resuming on a healthy snapshot', async () => {
+  const { manager, calls } = fixture()
+  manager.send('a', 'active'); manager.send('a', 'selected', ['attachment'])
+  const item = manager.get('a').queue[0]
+  await expect(manager.sendQueuedNow('a', item.id, async () => { throw new Error('Stop failed') })).rejects.toThrow('Stop failed')
+  await Promise.resolve()
+  expect(manager.get('a')).toMatchObject({ busy: false, sendingQueued: null, queue: [item], error: 'Stop failed' })
+  manager.synchronize({ ...snapshot(), busy: false, error: null }); await Promise.resolve()
+  expect(calls).toHaveLength(1)
+  expect(await manager.sendQueuedNow('a', item.id, async () => {})).toBe(true)
+  expect(calls[1].input.attachments).toEqual(['attachment'])
+})
+
+it('cancels an in-flight direct send without dispatching a late replacement', async () => {
+  const { manager, calls } = fixture(), ready = Promise.withResolvers<void>(); let signal: AbortSignal | undefined
+  manager.send('a', 'active'); manager.send('a', 'selected')
+  const item = manager.get('a').queue[0]
+  const sending = manager.sendQueuedNow('a', item.id, async (_id, current) => { signal = current; await ready.promise })
+  manager.stop('a'); expect(signal?.aborted).toBe(true); ready.resolve()
+  expect(await sending).toBe(false); expect(calls).toHaveLength(1)
+  expect(manager.get('a')).toMatchObject({ busy: false, sendingQueued: null, queue: [item] })
+})
+
+it('retains unaccepted queued requests on transport rejection and does not duplicate them into drafts', async () => {
+  const { manager, calls } = fixture()
+  manager.send('a', 'active'); manager.send('a', 'selected', ['attachment']); manager.stop('a')
+  const item = manager.get('a').queue[0]
+  await manager.sendQueuedNow('a', item.id, async () => {})
+  calls[1].handlers.onError('Admission rejected')
+  expect(manager.get('a')).toMatchObject({ queue: [item], draft: '', busy: false, sendingQueued: null })
+  manager.synchronize({ ...snapshot(), busy: false, error: null }); await Promise.resolve()
+  expect(calls).toHaveLength(2)
+  await manager.sendQueuedNow('a', item.id, async () => {})
+  calls[1].handlers.onSession?.('a'); expect(manager.get('a').queue).toHaveLength(1)
+  calls[2].handlers.onSession?.('a'); calls[2].handlers.onSession?.('a')
+  expect(manager.get('a').queue).toHaveLength(0)
+})
+
+it('does not auto-resume after stop wins against a completion microtask', async () => {
+  const { manager, calls } = fixture(); manager.send('a', 'active'); manager.send('a', 'queued')
+  calls[0].handlers.onDone({ sessionId: 'a', content: 'done', turns: 1 }); manager.stop('a'); await Promise.resolve()
+  expect(calls).toHaveLength(1); expect(manager.get('a').queue).toHaveLength(1)
+})
+
+it('does not auto-resume when stop wins against a synchronization microtask', async () => {
+  const { manager, calls } = fixture()
+  manager.patch('a', { queue: [{ id: 'queued', prompt: 'queued', attachments: [] }] })
+  manager.synchronize({ ...snapshot(), busy: false, error: null }); manager.stop('a'); await Promise.resolve()
+  expect(calls).toHaveLength(0); expect(manager.get('a').queue).toHaveLength(1)
+})
+
+it('keeps queued loop arguments consistent with edits and accepts queued creation retries', async () => {
+  const { manager, calls } = fixture(), pending = manager.sendNew('initial')
+  manager.send(pending, '/loop original', [], { args: 'original' }); const item = manager.get(pending).queue[0]
+  manager.editQueued(pending, item.id, '/loop edited --max-iterations 1')
+  expect(manager.get(pending).queue[0].loop?.args).toBe('edited --max-iterations 1')
+  expect(() => manager.editQueued(pending, item.id, '/loop')).toThrow('require arguments')
+  calls[0].handlers.onError('creation failed'); manager.resume(pending)
+  expect(calls[1].input.loop?.args).toBe('edited --max-iterations 1')
+  expect(calls[1].input.sessionId).toBeUndefined()
+  calls[1].handlers.onSession?.('real'); expect(manager.get('real').queue).toEqual([]); expect(manager.get('real').sendingQueued).toBeNull()
+  manager.send('real', '/loop another', [], { args: 'another' }); const another = manager.get('real').queue[0]
+  manager.editQueued('real', another.id, 'ordinary message'); expect(manager.get('real').queue[0].loop).toBeUndefined()
+})
+
+it('rejects pending-session direct sends, missing selections and disposed managers without stopping anything', async () => {
+  const { manager, calls } = fixture(); const pending = manager.sendNew('create')
+  manager.send(pending, 'queued'); const item = manager.get(pending).queue[0]
+  const interrupt = async () => { throw new Error('Should not interrupt') }
+  await expect(manager.sendQueuedNow(pending, item.id, interrupt)).rejects.toThrow('session to be created')
+  expect(await manager.sendQueuedNow('existing', 'missing', interrupt)).toBe(false)
+  manager.dispose(); await expect(manager.sendQueuedNow('existing', 'missing', interrupt)).rejects.toThrow('closed')
+  expect(calls).toHaveLength(1)
+})
+
+it('does not dispatch an item removed during interruption or after disposal', async () => {
+  for (const dispose of [false, true]) {
+    const { manager, calls } = fixture(), ready = Promise.withResolvers<void>()
+    manager.send('a', 'active'); manager.send('a', 'selected'); const item = manager.get('a').queue[0]
+    const sending = manager.sendQueuedNow('a', item.id, async () => { await ready.promise })
+    if (dispose) manager.dispose(); else manager.removeQueued('a', item.id)
+    ready.resolve(); expect(await sending).toBe(false); expect(calls).toHaveLength(1)
+    expect(manager.get('a').sendingQueued).toBeNull()
+  }
+})
+
+it('keeps the queue bounded while a selected message is waiting for backend admission', async () => {
+  const { manager, calls } = fixture(); manager.send('a', 'active')
+  for (let index = 0; index < CONVERSATION_LIMITS.queued; index++) manager.send('a', `queued ${index}`)
+  manager.stop('a'); const item = manager.get('a').queue.at(-1)!
+  await manager.sendQueuedNow('a', item.id, async () => {})
+  expect(() => manager.send('a', 'overflow')).toThrow('full')
+  calls[1].handlers.onSession?.('a'); manager.send('a', 'available')
+  expect(manager.get('a').queue).toHaveLength(CONVERSATION_LIMITS.queued)
+})
+
+it('resumes newly queued work after a successful manual retry of a failed run', async () => {
+  const { manager, calls } = fixture(); manager.send('a', 'initial'); calls[0].handlers.onError('failed')
+  manager.send('a', 'retry'); manager.send('a', 'after retry')
+  calls[1].handlers.onDone({ sessionId: 'a', content: 'success', turns: 1 }); await Promise.resolve()
+  expect(calls[2].input.prompt).toBe('after retry')
 })

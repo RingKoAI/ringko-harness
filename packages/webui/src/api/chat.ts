@@ -1,7 +1,7 @@
 // Chat streaming, task, job and question endpoints.
 
-import { consumeSse, type TodoItem, type SessionUsage } from "@ringko-ai/client";
-import { BASE, UnauthorizedError, authHeaders, getJson } from "./http";
+import { consumeSse, isToolInputDelta, type ToolInputDelta, type TodoItem, type SessionUsage } from "@ringko-ai/client";
+import { BASE, UnauthorizedError, authHeaders, backendClient, getJson } from "./http";
 import type { Approval, ServerMessage, ToolCall } from "../api";
 
 export interface LoopStatus {
@@ -11,6 +11,7 @@ export interface LoopStatus {
 }
 
 export interface ChatHandlers {
+  onToolInput?(delta: ToolInputDelta): void;
   onDelta?(delta: { kind: 'text' | 'reasoning'; text: string }): void;
   onJob?(event: JobUpdate): void;
   onAsk?(event: QuestionRequest): void;
@@ -27,6 +28,8 @@ export interface ChatHandlers {
   onDone(result: { sessionId: string; content: string; turns: number }): void;
   /** A background title/summary update was persisted for this session. */
   onSessionMeta?(): void;
+  /** The run was cancelled; streamed output is already persisted. */
+  onCancelled?(): void;
   onError(message: string): void;
   onUnauthorized?(): void;
 }
@@ -60,10 +63,37 @@ export async function cancelTask(sessionId: string, taskId: string): Promise<voi
   }
 }
 
-export async function stopSession(id: string): Promise<void> {
-  const response = await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST', headers: authHeaders() });
+export async function stopSession(id: string, signal?: AbortSignal): Promise<void> {
+  const response = await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST', headers: authHeaders(), signal });
   if (response.status === 401) throw new UnauthorizedError();
   if (!response.ok && response.status !== 404) throw new Error(`Stop failed (${response.status}).`);
+}
+
+export const SESSION_STOP_LIMITS = { timeoutMs: 10_000, pollMs: 250 } as const;
+
+/** Stop acknowledges cancellation, not resource release; wait before starting a replacement. */
+export async function stopSessionAndWait(id: string, cancel: AbortSignal): Promise<void> {
+  const timeout = AbortSignal.timeout(SESSION_STOP_LIMITS.timeoutMs), signal = AbortSignal.any([cancel, timeout]);
+  try {
+    signal.throwIfAborted();
+    await stopSession(id, signal);
+    for (;;) {
+      signal.throwIfAborted();
+      const snapshot = await backendClient.snapshot(id, signal);
+      signal.throwIfAborted();
+      if (!snapshot || typeof snapshot.busy !== 'boolean') throw new Error('Invalid session state while waiting for the current run to stop.');
+      if (!snapshot.busy) return;
+      await new Promise<void>((resolve, reject) => {
+        const cancelled = () => { clearTimeout(timer); signal.removeEventListener('abort', cancelled); reject(signal.reason); };
+        const timer = setTimeout(() => { signal.removeEventListener('abort', cancelled); resolve(); }, SESSION_STOP_LIMITS.pollMs);
+        signal.addEventListener('abort', cancelled, { once: true });
+        if (signal.aborted) cancelled();
+      });
+    }
+  } catch (error) {
+    if (timeout.aborted && !cancel.aborted) throw new Error('The current run has not stopped yet. The queued message was kept; try again.');
+    throw error;
+  }
 }
 
 export interface QuestionRequest { id: string; input: { questions: Array<{ id: string; question: string; header?: string; detail?: string; multiSelect?: boolean; options?: Array<{ label: string; description?: string }> }> } }
@@ -112,7 +142,7 @@ export function streamChat(
     let terminal = false;
     try {
       await consumeSse(response, (event, payload) => {
-        if (event === 'done' || event === 'error') terminal = true;
+        if (event === 'done' || event === 'error' || event === 'cancelled') terminal = true;
         dispatch(event, payload);
       }, controller.signal);
       if (!terminal && !controller.signal.aborted) handlers.onError("Stream disconnected. The backend keeps running; synchronizing the session.");
@@ -123,6 +153,7 @@ export function streamChat(
 
   function dispatch(event: string, payload: unknown): void {
     switch (event) {
+      case "tool_input": if (isToolInputDelta(payload)) handlers.onToolInput?.(payload); break;
       case "delta": {
         const delta = payload as { kind?: unknown; text?: unknown };
         if ((delta.kind === 'text' || delta.kind === 'reasoning') && typeof delta.text === 'string') handlers.onDelta?.({ kind: delta.kind, text: delta.text });
@@ -162,6 +193,9 @@ export function streamChat(
         break;
       case "session_meta":
         handlers.onSessionMeta?.();
+        break;
+      case "cancelled":
+        handlers.onCancelled?.();
         break;
       case "done":
         handlers.onDone(payload as Parameters<ChatHandlers["onDone"]>[0]);

@@ -88,7 +88,7 @@ export class AgentFactory {
     const agent = createRingKo({
       ...options, log: this.deps.log, scheduler: this.deps.scheduler,
       resolveInstructions: async () => [
-        instructionsText(loadInstructions({ cwd: this.deps.workspace })),
+        instructionsText(loadInstructions({ cwd: this.deps.workspace, scan: config.instructionScan, warn: message => { writeDiagnostic("instructions.config", message); host.report?.(message); } })),
         workflowInstructions(workflow),
         options.resolveInstructions ? await options.resolveInstructions() : undefined,
       ].filter(Boolean).join("\n\n"),

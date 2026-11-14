@@ -65,6 +65,7 @@ const PROVIDER_ALIASES: Record<string, string> = {
   "anthropic-oauth": "anthropic", "claude-oauth": "anthropic",
   copilot: "github-copilot", "xai-oauth": "xai", grok: "xai",
   gemini: "google", "google-generative-ai": "google",
+  opencodego: "opencode-go",
 };
 
 function endpoint(value: string | undefined): string | undefined {

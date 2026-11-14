@@ -31,6 +31,7 @@
 | `anthropic` | Anthropic Messages API |
 | `google` | Google Generative AI |
 | `openai-compatible` | 任意 OpenAI 兼容 chat-completions 端点；必须提供 `baseURL` |
+| `opencode-go` | OpenCode Go；通过官方 Chat Completions 兼容接口访问所有 Go 文本模型 |
 | `openai-oauth` | 通过 OAuth 账号访问 OpenAI |
 | `anthropic-oauth` | 通过 OAuth 账号访问 Anthropic |
 | `github-copilot` | GitHub Copilot |
@@ -39,9 +40,57 @@
 
 托管供应商必须写 `type`；省略时选择离线 `echo` 供应商。`gemini`、`grok`、
 `copilot`、`chatgpt`、`compatible` 等常用别名会映射到正式类型；完整列表见
-`packages/providers/src/loader.ts` 中的 `TYPE_ALIASES`。
+各运行时提供商文件中的 `aliases`，由 `packages/providers/src/registry.ts` 注册。
+
+### 源码组织
+
+每个提供商的预设独立维护在 `packages/config/src/providers/<id>.ts`，包括名称、
+端点、环境变量、快捷搜索别名和密钥要求；`presets.ts` 负责显式注册。
+运行时适配位于 `packages/providers/src/<type>.ts`，各自维护模型创建、发现请求、
+鉴权和特殊传输设置，`registry.ts` 与 `index.ts` 负责注册分发。
+例如 OpenCode Go 对应 `providers/opencode-go.ts`；DeepSeek 的配置位于
+`config/src/providers/deepseek.ts`，传输复用 OpenAI-compatible 适配器。
 
 ## 自定义端点
+
+### 在 CLI 中配置
+
+输入不带参数的 `/connect`，直接输入提供商名称或 ID，再按 Enter。
+名称与快捷别名会优先匹配，例如输入 `opencodego` 或 `go` 即可进入 OpenCode Go。
+也可直接输入 `/connect opencode-go`。快捷流程只需：
+
+1. 粘贴 API key，按 Enter；预设名称和地址自动使用默认值。
+2. 自动获取模型后，输入模型名称或 ID，再按 Enter 使用。
+
+界面只用星号显示密钥；留空则保留已有凭证或使用支持的环境变量。
+自定义提供商先输入 API 根地址，再进入密钥输入。需要改名、改地址或手工指定模型时，
+按 Tab 进入完整表单，之后可用 Enter 逐项完成；模型 ID 用英文逗号分隔，填写后跳过发现。
+Ctrl+S 直接保存，Esc 取消。输入已配置的提供商名称可重新配置；模型切换也可用 `/model`。
+失败时保留表单以便修改重试。密钥单独保存在用户的 `auth/auth.json`，
+不会写入聊天记录或项目配置；使用 `--config` 时，提供商设置写入指定文件。
+
+### OpenCode Go
+
+在 [OpenCode Console](https://opencode.ai/console) 开通 Go 并取得 API key，然后使用
+`/connect opencode-go`。也可设置 `OPENCODE_API_KEY`，并在表单中将密钥留空。
+Go 默认根地址为 `https://opencode.ai/inference/go/openai/v1`；模型列表使用官方公开
+接口 `https://opencode.ai/inference/go/v1/models`，查询列表时不发送 API key。
+
+```json
+{
+  "name": "opencode-go",
+  "type": "opencode-go",
+  "models": [{ "id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro" }]
+}
+```
+
+OpenCode 官方支持将 Go 文本模型转换为 Chat Completions，RingKo 使用该接口访问
+DeepSeek、Kimi、GLM、Claude、Gemini、GPT 等模型，无需按模型名猜测原生协议。
+每次推理请求带有 RingKo User-Agent 和稳定的 `x-opencode-session`；会话标识经过
+哈希，只用于传输，不进入模型消息。模型可用性与额度由 Go 账号决定。
+参见 [OpenCode Go 官方说明](https://opencode.ai/docs/go/)。
+
+### 自定义 OpenAI 兼容接口
 
 ```json
 {

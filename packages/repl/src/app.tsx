@@ -39,10 +39,25 @@ import {
   writeDiagnostic,
   configurationStatus,
   updatePolicy,
+  parseProviderConnection,
+  saveProviderConnection,
+  ProviderConnectionError,
+  PROVIDER_CONNECT_LIMITS,
+  resolveProviderApiKey,
+  validateProviderConnectionCredentials,
+  applyPermissionPreset,
+  permissionPresetFor,
+  isPermissionPreset,
+  PERMISSION_PRESETS,
+  type PermissionPreset,
+  type ProviderConnectionInput,
+  type ProviderPreset,
+  type ProviderDefinition,
   type RingkoConfig,
   type SkillInstallScope,
 } from "@ringko-ai/config";
-import { discoverModels } from "@ringko-ai/providers";
+import { canonicalProviderType, discoverModels } from "@ringko-ai/providers";
+import { baseUrlFromChatUrl } from "@ringko-ai/providers/loader";
 import { loginAnthropic, loginGitHubCopilot, loginOpenAiBrowser, loginOpenAiDevice, loginXaiDevice, openBrowser } from "@ringko-ai/auth";
 import { Banner } from "./components/Banner.tsx";
 import { Transcript } from "./components/Transcript.tsx";
@@ -50,6 +65,7 @@ import { Spinner } from "./components/Spinner.tsx";
 import { PromptInput } from "./components/PromptInput.tsx";
 import { StatusBar } from "./components/StatusBar.tsx";
 import { StatusDialog } from "./components/StatusDialog.tsx";
+import { ProviderConnectDialog } from "./components/ProviderConnectDialog.tsx";
 import { ApprovalDialog } from "./components/ApprovalDialog.tsx";
 import { AskDialog } from "./components/AskDialog.tsx";
 import { AuthDialog, type AuthBox } from "./components/AuthDialog.tsx";
@@ -162,6 +178,7 @@ export function Repl(props: ReplProps) {
   const [statusOpen, setStatusOpen] = useState(false);
   const [statusTab, setStatusTab] = useState<StatusTab>("Stats");
   const [statusCommand, setStatusCommand] = useState("status");
+  const [connection, setConnection] = useState<{ preset: ProviderPreset; initial?: ProviderDefinition } | null>(null);
   const [picker, updatePicker] = useState<PickerState | null>(null);
   const pickerRefreshRef = useRef<(() => void) | undefined>(undefined);
   const setPicker = useCallback((next: PickerState | null): void => {
@@ -243,12 +260,15 @@ export function Repl(props: ReplProps) {
     }, notice => {
       if (notice.kind === "session" || notice.kind === "activity" || configRequest) return;
       configRequest = true;
-      void backend.request<{ model: string | null; modelId: string | null; thinking: string | null; expandThinking: boolean; expandTools: boolean; tools: string[]; providers: Array<{ name: string; type: string | null; models: string[] }> }>("/api/info")
+      void backend.request<{ model: string | null; modelId: string | null; thinking: string | null; expandThinking: boolean; expandTools: boolean; tools: string[]; accessMode?: string; permissionPreset?: string; sandboxMode?: "read-only" | "workspace-write" | "danger-full-access"; providers: Array<{ name: string; type: string | null; models: string[] }> }>("/api/info")
         .then(info => {
           setModelLabelText(info.model ?? "No model configured"); setModelId(info.modelId ?? undefined);
           setThinking(info.thinking ?? "high"); setExpandThinking(info.expandThinking); setExpandTools(info.expandTools);
           remoteToolsRef.current = info.tools;
           setConfig(previous => ({ ...previous, ...(info.modelId ? { model: info.modelId } : {}), thinking: info.thinking ?? "high",
+            ...(info.accessMode ? { permission: info.accessMode, mode: info.accessMode } : {}),
+            ...(info.sandboxMode ? { sandbox: { ...previous.sandbox, mode: info.sandboxMode } } : {}),
+            permissionPreset: isPermissionPreset(info.permissionPreset) ? info.permissionPreset : undefined,
             providers: info.providers.map(provider => {
               const existing = previous.providers?.find(entry => entry.name === provider.name);
               return { ...existing, name: provider.name, ...(provider.type ? { type: provider.type } : {}), models: provider.models.map(id => existing?.models?.find(model => model.id === id) ?? { id, name: id }) };
@@ -576,7 +596,7 @@ export function Repl(props: ReplProps) {
       askRef.current = null;
       ringkoRef.current = null;
     };
-  }, [backend, modelVersion, modelId, workspace, config.mode, config.permission, config.workflow, config.compaction, config.providers, config.capabilities?.network, config.capabilities?.shell, sessionId, print, createModel]);
+  }, [backend, modelVersion, modelId, workspace, config.mode, config.permission, config.sandbox, config.workflow, config.compaction, config.providers, config.capabilities?.network, config.capabilities?.shell, sessionId, print, createModel]);
 
   const applyModel = useCallback(
     async (value: string): Promise<void> => {
@@ -874,13 +894,58 @@ export function Repl(props: ReplProps) {
     [runLogin, print],
   );
 
-  const connect = useCallback((): void => {
+  const latestApplyModel = useRef(applyModel); latestApplyModel.current = applyModel;
+  const loadConnectionInitial = useCallback(async (signal: AbortSignal): Promise<ProviderDefinition | undefined> => {
+    if (!backend || !connection) return connection?.initial;
+    const file = await backend.request<{ providers: ProviderDefinition[] }>("/api/providers", undefined, "GET", signal);
+    const name = connection.initial?.name ?? connection.preset.id;
+    const provider = file.providers.find(entry => entry.name === name);
+    if (!provider) { if (connection.initial) throw new Error("Provider was removed."); return undefined; }
+    const baseURL = provider.baseURL ?? (provider.url ? baseUrlFromChatUrl(provider.url) : undefined);
+    if (baseURL) {
+      if (typeof baseURL !== "string" || baseURL.length > PROVIDER_CONNECT_LIMITS.url || /[\u0000-\u001f\u007f-\u009f]/.test(baseURL)) throw new Error("Invalid stored endpoint.");
+      const url = new URL(baseURL);
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error("Invalid stored endpoint.");
+    }
+    return { name: provider.name, type: connection.preset.type, ...(baseURL ? { baseURL } : {}) };
+  }, [backend, connection]);
+  const saveConnection = useCallback(async (input: ProviderConnectionInput, signal: AbortSignal): Promise<void> => {
+    let provider: ProviderDefinition;
+    if (backend) {
+      try { provider = (await backend.request<{ provider: ProviderDefinition }>("/api/providers/connect", input, "POST", signal)).provider; }
+      catch (error) { throw error instanceof BackendError ? new ProviderConnectionError(error.message) : error; }
+    } else {
+      const parsed = parseProviderConnection(input);
+      const target = { ...parsed, apiKey: parsed.apiKey ?? config.providers?.find(entry => entry.name === parsed.name)?.apiKey };
+      validateProviderConnectionCredentials(target);
+      let models;
+      try { models = parsed.modelIds?.length ? parsed.modelIds.map(id => ({ id, name: id })) : await discoverModels({ type: parsed.type, baseURL: parsed.baseURL, apiKey: resolveProviderApiKey(target), providerId: parsed.name }, { strict: true, signal, bounded: true }); }
+      catch { throw new ProviderConnectionError("Model discovery failed. Check the endpoint/key or enter model IDs."); }
+      signal.throwIfAborted();
+      const result = saveProviderConnection(config, parsed, models, { path: props.configPath });
+      writeDiagnostic("provider.connect", `Saved ${result.provider.name} (${parsed.type}), ${result.provider.models?.length ?? 0} models; credentials ${parsed.apiKey ? "updated" : "unchanged"}.`);
+      setConfig(result.config); provider = result.provider;
+    }
+    signal.throwIfAborted();
+    if (backend) setConfig(previous => ({ ...previous, providers: [...(previous.providers ?? []).filter(entry => entry.name !== provider.name), provider] }));
+    setConnection(null); print(`saved ${provider.name} with ${provider.models?.length ?? 0} models.`);
+    setPicker({ title: `${provider.name} models`, rankedSearch: true, searchHint: "type a model name or ID, then Enter", selectHint: "Enter use model", items: (provider.models ?? []).map(model => ({ value: `${provider.name}/${model.id}`, label: model.name, description: model.id, aliases: [model.id] })), onSelect: model => { setPicker(null); void latestApplyModel.current(model); } });
+  }, [backend, config, props.configPath, print]);
+
+  const connect = useCallback((arg = ""): void => {
+    const requested = arg.trim().toLowerCase();
+    if (requested) {
+      const preset = PROVIDER_PRESETS.find(entry => entry.id === requested || entry.aliases?.includes(requested));
+      if (preset?.auth !== "oauth" && preset) { setPicker(null); setConnection({ preset, initial: config.providers?.find(provider => provider.name === preset.id) }); return; }
+      if (!preset) { print("Unknown provider preset. Use /connect to choose a provider."); return; }
+    }
     const providers = config.providers ?? [];
     const presetItems: SelectorItem[] = PROVIDER_PRESETS.map((preset) => ({
       label: preset.label,
       value: `preset:${preset.id}`,
       group: "Presets",
       description: `${preset.type}${preset.baseURL ? ` · ${preset.baseURL}` : ""}`,
+      aliases: [preset.id, ...(preset.aliases ?? [])],
     }));
     const configuredItems: SelectorItem[] = providers.map((provider) => ({
       label: provider.name,
@@ -890,11 +955,17 @@ export function Repl(props: ReplProps) {
     }));
     setPicker({
       title: "Connect a provider",
+      rankedSearch: true,
+      searchHint: "type a provider name or ID, then Enter",
+      selectHint: "Enter configure",
       items: [...presetItems, ...configuredItems],
       onSelect: (value) => {
         if (value.startsWith("preset:")) {
           const preset = PROVIDER_PRESETS.find((entry) => entry.id === value.slice("preset:".length));
           if (!preset) return;
+          if (preset.auth !== "oauth") {
+            setPicker(null); setConnection({ preset, initial: config.providers?.find(provider => provider.name === preset.id) }); return;
+          }
           if ((config.providers ?? []).some((provider) => provider.name === preset.id)) {
             setPicker(null);
             print(`${preset.id} is already configured.`);
@@ -919,6 +990,13 @@ export function Repl(props: ReplProps) {
         }
         if (value.startsWith("provider:")) {
           const name = value.slice("provider:".length);
+          const provider = providers.find(entry => entry.name === name);
+          const declaredType = provider?.type ?? provider?.vendor;
+          const type = typeof declaredType === "string" ? canonicalProviderType(declaredType.toLowerCase()) : "";
+          const preset = PROVIDER_PRESETS.find(entry => entry.id === name && entry.type === type)
+            ?? PROVIDER_PRESETS.find(entry => entry.type === type && entry.baseURL === provider?.baseURL)
+            ?? PROVIDER_PRESETS.find(entry => entry.id === (type === "openai-compatible" ? "custom" : type));
+          if (provider && preset && preset.auth !== "oauth") { setPicker(null); setConnection({ preset, initial: provider }); return; }
           const current = selectModel(config);
           const options = modelItems(config, current ? `${current.provider.name}/${current.model.id}` : "").filter((item) => item.group === name);
           if (!options.length) {
@@ -1003,7 +1081,7 @@ export function Repl(props: ReplProps) {
       const localLimits = backend ? undefined : await resolveSelectionContext(selectModel(config));
       const localAccess = [config.permission, config.mode].find(value => value !== undefined && ["approval", "assist", "full"].includes(value)) ?? "approval";
       const info = backend ? await backend.request<StatusConfigInfo & { model: string | null; context: { limit: number } }>("/api/info", undefined, "GET", signal) : {
-        expandThinking, expandTools, thinking, accessMode: localAccess,
+        expandThinking, expandTools, thinking, accessMode: localAccess, permissionPreset: permissionPresetFor(config),
         updates: updatePolicy(config, message => writeDiagnostic("updates.config", message)), model: modelLabelText, context: { limit: localLimits?.contextWindow ?? 0 },
       };
       const report = await loadStatus(signal);
@@ -1028,18 +1106,22 @@ export function Repl(props: ReplProps) {
 
   const changeStatusSetting = useCallback(async (key: StatusSettingKey, value: boolean | string, signal: AbortSignal): Promise<void> => {
     if (!validStatusSetting(key, value)) throw new Error("Invalid setting value.");
+    if (key === "permissionPreset" && !isPermissionPreset(value)) throw new Error("Custom permission state is not a selectable preset.");
     signal.throwIfAborted();
     if (busyRef.current) throw new StatusUnavailableError("Wait for the current run before changing configuration.");
     if (backend) {
-      const route = key === "thinking" ? "/api/thinking" : key === "accessMode" ? "/api/access" : key === "checkOnStartup" || key === "autoUpdate" ? "/api/updates" : "/api/ui";
-      const body = key === "thinking" ? { level: value } : key === "accessMode" ? { mode: value } : { [key]: value };
+      const route = key === "thinking" ? "/api/thinking" : key === "accessMode" || key === "permissionPreset" ? "/api/access" : key === "checkOnStartup" || key === "autoUpdate" ? "/api/updates" : "/api/ui";
+      const body = key === "thinking" ? { level: value } : key === "permissionPreset" ? { preset: value } : key === "accessMode" ? { mode: value } : { [key]: value };
       const info = await backend.request<StatusConfigInfo>(route, body, "POST", signal);
       statusSettings(info); signal.throwIfAborted();
       setExpandThinking(info.expandThinking); setExpandTools(info.expandTools); setThinking(info.thinking ?? "high");
-      setConfig(previous => ({ ...previous, expandThinking: info.expandThinking, expandTools: info.expandTools, thinking: info.thinking ?? "high", permission: info.accessMode, mode: info.accessMode, updates: info.updates }));
+      setConfig(previous => ({ ...previous, expandThinking: info.expandThinking, expandTools: info.expandTools, thinking: info.thinking ?? "high", permission: info.accessMode, mode: info.accessMode, updates: info.updates,
+        permissionPreset: isPermissionPreset(info.permissionPreset) ? info.permissionPreset : undefined,
+        ...(info.sandboxMode ? { sandbox: { ...previous.sandbox, mode: info.sandboxMode } } : {}),
+      }));
       return;
     }
-    const next = { ...config };
+    const next = key === "permissionPreset" && isPermissionPreset(value) ? applyPermissionPreset(config, value) : { ...config };
     let candidate: ModelClient | undefined;
     if (key === "thinking" && typeof value === "string") {
       if (!createModel) throw new StatusUnavailableError("This host does not provide a configurable model client.");
@@ -1058,9 +1140,32 @@ export function Repl(props: ReplProps) {
     }
   }, [backend, config, createModel, props.configPath]);
 
+  const openPermissionPicker = useCallback((arg = ""): void => {
+    if (busyRef.current) { print("Wait for the current run before changing permissions."); return; }
+    const show = (current: string): void => {
+      const apply = (preset: PermissionPreset): void => {
+        setPicker(null);
+        void changeStatusSetting("permissionPreset", preset, AbortSignal.timeout(10_000)).then(() => print(`Permissions: ${PERMISSION_PRESETS[preset].label}. Applies to subsequent runs using this configuration.`)).catch(error => print(error instanceof Error ? error.message : "Permission switch failed; refresh to verify."));
+      };
+      const choose = (preset: PermissionPreset): void => {
+        if (preset === "full-access") {
+          setPicker({ title: "Enable full access? Disables sandbox confinement and ordinary approval prompts.",
+            items: [{ value: "cancel", label: "Cancel - keep current permissions" }, { value: "confirm", label: "Enable full access" }],
+            onSelect: value => { if (value === "confirm") apply(preset); else setPicker(null); } });
+        } else apply(preset);
+      };
+      if (arg) { if (isPermissionPreset(arg)) choose(arg); else print("Usage: /permissions [read-only|default|full-access|rules]"); return; }
+      setPicker({ title: `Permissions (${current})`, rankedSearch: true,
+        items: Object.entries(PERMISSION_PRESETS).map(([id, entry]) => ({ value: id, label: entry.label, description: entry.description, current: id === current })),
+        onSelect: value => { if (isPermissionPreset(value)) choose(value); } });
+    };
+    show(permissionPresetFor(config));
+  }, [changeStatusSetting, config, print]);
+
   const slash = useMemo<SlashContext>(
     () => ({
       print,
+      pickPermissions: arg => openPermissionPicker(arg.trim()),
       showStatus: tab => { setStatusTab(tab ?? "Stats"); setStatusCommand(tab?.toLowerCase() ?? "status"); setStatusOpen(true); },
       sendPrompt: text => { void submit(text); },
       clear: () => { setItems([]); setScrollOffset(0); },
@@ -1147,6 +1252,7 @@ export function Repl(props: ReplProps) {
     [
       print,
       exit,
+      openPermissionPicker,
       modelLabelText,
       workspace,
       sessionId,
@@ -1379,11 +1485,11 @@ export function Repl(props: ReplProps) {
     }
   }
 
-  const modal = Boolean(pending || question?.input || authBox || picker || renameTarget || statusOpen);
+  const modal = Boolean(pending || question?.input || authBox || picker || renameTarget || statusOpen || connection);
   const layout = terminalLayout(size.rows, modal);
   const selectedTask = taskViews.find(task => task.id === viewedTaskId);
   const visibleItems = selectedTask?.items ?? items;
-  if (statusOpen && !pending && !question?.input && !authBox && !picker && !renameTarget) return (
+  if (statusOpen && !pending && !question?.input && !authBox && !picker && !renameTarget && !connection) return (
     <Box flexDirection="column" width={size.columns} height={layout.height}>
       <StatusDialog load={loadSettingsPage} command={statusCommand} initialTab={statusTab} onConfigChange={changeStatusSetting} session={{ id: sessionId, title, version: props.version, peer: backend ? props.backendUrl ?? "Connected backend" : undefined }} columns={size.columns} height={layout.height}
         onClose={() => setStatusOpen(false)} onMcp={() => { setStatusOpen(false); openMcpPicker(); }} />
@@ -1411,6 +1517,8 @@ export function Repl(props: ReplProps) {
           onCopied={(label) => print(`${label} copied to clipboard.`)}
           onClose={() => setAuthBox(null)}
         />
+      ) : connection ? (
+        <ProviderConnectDialog preset={connection.preset} initial={connection.initial} loadInitial={backend ? loadConnectionInitial : undefined} onSave={saveConnection} onClose={() => setConnection(null)} />
       ) : renameTarget ? (
         <RenameInput initial={renameTarget.title} onSubmit={applyRename} onCancel={() => setRenameTarget(null)} />
       ) : picker ? (
@@ -1420,13 +1528,16 @@ export function Repl(props: ReplProps) {
           onSelect={picker.onSelect}
           onCancel={() => setPicker(null)}
           actions={picker.actions}
+          rankedSearch={picker.rankedSearch}
+          searchHint={picker.searchHint}
+          selectHint={picker.selectHint}
         />
       ) : (
         <PromptInput maxEditorLines={layout.inputRows} running={running || switching} editor={editor} onEdit={setEditor} history={history} onSubmit={submit} onShortcut={handleShortcut} onInterrupt={interrupt} />
       )}
       {!modal && taskViews.length > 0 ? <TaskTree tasks={taskViews} selectedId={selectedTask?.id} columns={size.columns} maxRows={layout.compact ? 1 : Math.min(4, Math.floor(layout.height / 6) + 1)} /> : null}
       <StatusBar
-        modelLabel={thinking === "off" ? `${modelLabelText} • thinking off` : `${modelLabelText} • ${thinking}`}
+        modelLabel={`[${permissionPresetFor(config)}] ${modelLabelText} • ${thinking === "off" ? "thinking off" : thinking}`}
         workspace={workspace}
         title={selectedTask ? `Subagent: ${selectedTask.description}` : title}
         columns={size.columns}

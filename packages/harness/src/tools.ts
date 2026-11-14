@@ -24,9 +24,13 @@ export interface ToolExecutionContext {
   approvedTarget?: string;
   /** Existence observed during risk assessment, for exclusive file creation. */
   approvedTargetExists?: boolean;
+  /** True only after this invocation received explicit human approval. */
+  approvalGranted?: boolean;
 }
 
 export interface ToolRiskAssessment {
+  /** Host-owned per-invocation escalation cannot be approved by a remembered allow rule. */
+  requiresExplicitApproval?: boolean;
   targetExists?: boolean;
   kind: RiskKind;
   level?: RiskLevel;
@@ -294,6 +298,7 @@ async function executeToolUnlocked<Input, Output>(
     risk.reason.trim().length === 0 ||
     (risk.target !== undefined && typeof risk.target !== "string") ||
     (risk.targetExists !== undefined && typeof risk.targetExists !== "boolean") ||
+    (risk.requiresExplicitApproval !== undefined && typeof risk.requiresExplicitApproval !== "boolean") ||
     (risk.alternates !== undefined && (!Array.isArray(risk.alternates) || risk.alternates.length > 16 ||
       risk.alternates.some(alternate => typeof alternate !== "string" || alternate.length === 0 || alternate.length > 8192)))
   ) {
@@ -317,8 +322,9 @@ async function executeToolUnlocked<Input, Output>(
   );
 
   if (policy === "ask") decision = gate({ kind: "shell", description: "Explicit permission rule requires confirmation." }, "approval");
+  if (risk.requiresExplicitApproval) decision = gate({ kind: "shell", description: risk.reason }, "approval");
   let approved = false;
-  if (policy !== "allow" && decision.approvalRequired) {
+  if ((policy !== "allow" || risk.requiresExplicitApproval) && decision.approvalRequired) {
     if (!requestApproval) {
       throw new ApprovalHandlerUnavailableError(tool.name, decision);
     }
@@ -347,7 +353,7 @@ async function executeToolUnlocked<Input, Output>(
       (current === "default" && policy === "allow" && decision.approvalRequired)) throw new ToolApprovalRejectedError(tool.name);
   }
   context?.signal?.throwIfAborted();
-  return tool.execute(input, { ...context, requestApproval, accessMode: mode, approvedTarget: risk.target, approvedTargetExists: risk.targetExists });
+  return tool.execute(input, { ...context, requestApproval, accessMode: mode, approvedTarget: risk.target, approvedTargetExists: risk.targetExists, approvalGranted: approved });
 }
 
 /**

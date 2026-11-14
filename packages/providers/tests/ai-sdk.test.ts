@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { MockLanguageModelV4 } from "ai/test";
-import type { ChatMessage, ToolMetadata } from "@ringko-ai/harness";
-import { createAiSdkModelClient, reasoningReplayFor, toModelMessages } from "../src/ai-sdk.ts";
+import type { ChatMessage, ModelToolInputDelta, ToolMetadata } from "@ringko-ai/harness";
+import { createAiSdkModelClient, reasoningReplayFor, toModelMessages, toolFailureMessage, TOOL_STREAM_LIMITS } from "../src/ai-sdk.ts";
 
 const usage = {
   inputTokens: { total: 1, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
@@ -17,6 +17,90 @@ const echoMetadata: ToolMetadata[] = [
 ];
 
 describe("AI SDK model client", () => {
+  it("rejects malformed final tool JSON rather than treating it as executable input", async () => {
+    for (const stream of [false, true]) {
+      const model = new MockLanguageModelV4({
+        doGenerate: async () => ({ content: [{ type: "tool-call", toolCallId: "bad", toolName: "echo", input: '{"text":' }], finishReason: { unified: "tool-calls", raw: undefined }, usage, warnings: [] }),
+        doStream: async () => ({ stream: new ReadableStream({ start(controller) {
+          controller.enqueue({ type: "stream-start", warnings: [] });
+          controller.enqueue({ type: "tool-call", toolCallId: "bad", toolName: "echo", input: '{"text":' });
+          controller.enqueue({ type: "finish", finishReason: { unified: "tool-calls", raw: undefined }, usage }); controller.close();
+        } }) }),
+      });
+      await expect(createAiSdkModelClient(model, { stream })({ messages: [{ role: "user", content: "go" }], tools: echoMetadata })).rejects.toThrow("invalid tool arguments");
+    }
+  });
+
+  it("rejects oversized streamed arguments and duplicate starts", async () => {
+    for (const duplicate of [false, true]) {
+      const model = new MockLanguageModelV4({ doStream: async () => ({ stream: new ReadableStream({ start(controller) {
+        controller.enqueue({ type: "stream-start", warnings: [] });
+        controller.enqueue({ type: "tool-input-start", id: "a", toolName: "echo" });
+        if (duplicate) controller.enqueue({ type: "tool-input-start", id: "a", toolName: "echo" });
+        else controller.enqueue({ type: "tool-input-delta", id: "a", delta: 'x'.repeat(TOOL_STREAM_LIMITS.argumentCharacters + 1) });
+        controller.close();
+      } }) }) });
+      await expect(createAiSdkModelClient(model, { stream: true })({ messages: [{ role: "user", content: "go" }], tools: echoMetadata })).rejects.toThrow(duplicate ? "Invalid or excessive" : "size limit");
+    }
+  });
+  it("classifies provider tool failures without echoing their text", () => {
+    expect(toolFailureMessage("AI_InvalidToolInputError: JSON parsing failed: Text: {\"secret\":1}")).toContain("invalid tool arguments");
+    expect(toolFailureMessage(new Error("NoSuchToolError: no such tool 'shell'"))).toContain("not registered");
+    expect(toolFailureMessage("provider blew up with api-key=sk-live-123")).toBe("The provider reported a tool failure before the harness could execute the call.");
+    expect(toolFailureMessage("provider blew up")).not.toContain("sk-live");
+  });
+
+  it("streams interleaved tool arguments before the completed turn without executing them", async () => {
+    const ready = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    const events: ModelToolInputDelta[] = [];
+    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: new ReadableStream({ async start(controller) {
+      controller.enqueue({ type: "stream-start", warnings: [] });
+      for (const id of ["a", "b"]) controller.enqueue({ type: "tool-input-start", id, toolName: "echo" });
+      controller.enqueue({ type: "tool-input-delta", id: "a", delta: '{"text":"你' });
+      controller.enqueue({ type: "tool-input-delta", id: "b", delta: '{"text":"second"}' });
+      await release.promise;
+      controller.enqueue({ type: "tool-input-delta", id: "a", delta: '好"}' });
+      for (const [id, text] of [["a", "你好"], ["b", "second"]]) {
+        controller.enqueue({ type: "tool-input-end", id });
+        controller.enqueue({ type: "tool-call", toolCallId: id, toolName: "echo", input: JSON.stringify({ text }) });
+      }
+      controller.enqueue({ type: "finish", finishReason: { unified: "tool-calls", raw: undefined }, usage }); controller.close();
+    } }) }) });
+    let finished = false;
+    const pending = createAiSdkModelClient(model)({ messages: [{ role: "user", content: "go" }], tools: echoMetadata, onToolInput: event => { events.push(event); if (events.length === 4) ready.resolve(); } }).then(turn => { finished = true; return turn; });
+    await ready.promise; expect(finished).toBe(false); expect(events[2]).toEqual({ kind: "delta", id: "a", text: '{"text":"你' });
+    release.resolve(); const turn = await pending;
+    expect(turn.toolCalls).toEqual([{ id: "a", name: "echo", arguments: { text: "你好" } }, { id: "b", name: "echo", arguments: { text: "second" } }]);
+    expect(events.filter(event => event.kind === "end")).toHaveLength(2);
+  });
+
+  it("does not retry after streamed tool input and rejects incomplete tool calls", async () => {
+    for (const fail of [true, false]) {
+      let attempts = 0;
+      const model = new MockLanguageModelV4({ doStream: async () => {
+        attempts++;
+        return { stream: new ReadableStream({ start(controller) {
+          controller.enqueue({ type: "stream-start", warnings: [] });
+          controller.enqueue({ type: "tool-input-start", id: "a", toolName: "echo" });
+          controller.enqueue({ type: "tool-input-delta", id: "a", delta: '{"text":' });
+          if (fail) controller.enqueue({ type: "error", error: Object.assign(new Error("invalid_parameter"), { statusCode: 400 }) });
+          else controller.enqueue({ type: "finish", finishReason: { unified: "length", raw: undefined }, usage });
+          controller.close();
+        } }) };
+      } });
+      await expect(createAiSdkModelClient(model, { maxOutputTokens: 100, stream: true })({ messages: [{ role: "user", content: "go" }], tools: echoMetadata })).rejects.toThrow();
+      expect(attempts).toBe(1);
+    }
+  });
+
+  it("cancels a tool argument stream without returning executable calls", async () => {
+    const controller = new AbortController();
+    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: new ReadableStream({ start(stream) {
+      stream.enqueue({ type: "stream-start", warnings: [] }); stream.enqueue({ type: "tool-input-start", id: "a", toolName: "echo" });
+      stream.enqueue({ type: "tool-input-delta", id: "a", delta: '{"text":"partial' });
+    } }) }) });
+    await expect(createAiSdkModelClient(model)({ messages: [{ role: "user", content: "go" }], tools: echoMetadata, signal: controller.signal, onToolInput: () => controller.abort() })).rejects.toThrow();
+  });
   it("retries a rejected stream token limit before delivering any output", async () => {
     let attempts = 0;
     const model = new MockLanguageModelV4({ doStream: async options => {

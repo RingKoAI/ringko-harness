@@ -3,12 +3,15 @@
 // Mirrors opencode's rule: one global file (first existing wins), then the
 // project's files found by walking up from the workspace. The first file type
 // with matches wins, so AGENTS.md and CLAUDE.md are not stacked together.
-import { closeSync, fstatSync, openSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { closeSync, fstatSync, lstatSync, openSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { agentsRoot, findProjectRoot, ringkoRoot } from "./paths.ts";
+import { instructionScanPolicy, type InstructionScanConfig, type InstructionScanPolicy } from "./instruction-policy.ts";
+import { writeDiagnostic } from "./diagnostics.ts";
 
 export const INSTRUCTION_FILE_NAMES = ["AGENTS.md", "CLAUDE.md"] as const;
 export const INSTRUCTION_LIMITS = { fileBytes: 256 * 1024, totalBytes: 1024 * 1024, files: 64 } as const;
+const REPOSITORY_MARKERS = [".git", ".hg", ".svn"] as const;
 
 export type InstructionScope = "global" | "project";
 
@@ -69,32 +72,39 @@ function findUp(file: string, from: string, stop: string): string[] {
 export interface LoadInstructionsOptions {
   env?: NodeJS.ProcessEnv;
   cwd?: string;
-  /** Scan `AGENTS.md` under the workspace recursively (default true). */
+  /** Explicit per-call override for recursive discovery. */
   recursive?: boolean;
+  scan?: InstructionScanConfig;
+  warn?: (message: string) => void;
 }
 
-const IGNORED_SCAN_DIRS = new Set([".git", ".hg", ".svn", "node_modules", "dist", "build", "coverage", ".next", "target", "vendor"]);
-const MAX_SCAN_DEPTH = 12;
-const MAX_SCAN_DIRS = 4_096;
-
 /** Breadth-first `AGENTS.md` discovery below the workspace. Symlinks are skipped. */
-function scanAgentsFiles(root: string): string[] {
+function scanAgentsFiles(root: string, policy: InstructionScanPolicy): string[] {
   const start = resolve(root);
   const out: string[] = [];
   const queue: { dir: string; depth: number }[] = [{ dir: start, depth: 0 }];
-  let directories = 0;
-  while (queue.length > 0) {
-    const { dir, depth } = queue.shift()!;
-    if (++directories > MAX_SCAN_DIRS) throw new Error("Instruction scan exceeds the directory limit.");
+  const normalize = (path: string) => process.platform === "win32" ? path.toLowerCase() : path;
+  const excludes = new Set(policy.excludeDirectories.map(normalize));
+  for (let cursor = 0; cursor < queue.length; cursor++) {
+    const { dir, depth } = queue[cursor]!;
     let entries;
     try { entries = readdirSync(dir, { withFileTypes: true }); }
-    catch { continue; }
+    catch { throw new Error(`Cannot scan instruction directory "${dir}". Check access or configure instructionScan.excludeDirectories.`); }
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
-      if (entry.isFile() && entry.name === "AGENTS.md") out.push(join(dir, entry.name));
-      if (entry.isDirectory() && depth < MAX_SCAN_DEPTH && !entry.name.startsWith(".") && !IGNORED_SCAN_DIRS.has(entry.name)) {
-        queue.push({ dir: join(dir, entry.name), depth: depth + 1 });
+      if (entry.isFile() && entry.name === "AGENTS.md") {
+        if (out.length >= INSTRUCTION_LIMITS.files) throw new Error("Too many instruction files.");
+        out.push(join(dir, entry.name));
       }
+      if (!entry.isDirectory() || entry.isSymbolicLink() || depth >= policy.maxDepth || entry.name.startsWith(".")) continue;
+      const child = join(dir, entry.name), local = relative(start, child).replace(/\\/g, "/");
+      if (excludes.has(normalize(entry.name)) || excludes.has(normalize(local))) continue;
+      if (policy.excludeNestedRepositories && REPOSITORY_MARKERS.some(marker => {
+        try { lstatSync(join(child, marker)); return true; }
+        catch (error) { if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return false; throw new Error(`Cannot inspect instruction repository boundary "${child}".`); }
+      })) continue;
+      if (queue.length >= policy.maxDirectories) throw new Error(`Instruction scan exceeds the directory limit (${policy.maxDirectories}). Configure instructionScan.excludeDirectories or choose a narrower workspace.`);
+      queue.push({ dir: child, depth: depth + 1 });
     }
   }
   return out;
@@ -104,6 +114,8 @@ function scanAgentsFiles(root: string): string[] {
 export function loadInstructions(options: LoadInstructionsOptions = {}): InstructionFile[] {
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
+  const warn = options.warn ?? (message => { writeDiagnostic("instructions.config", message); });
+  const policy = instructionScanPolicy(options.scan, warn);
   const files: InstructionFile[] = [];
   const seen = new Set<string>();
   let bytes = 0;
@@ -137,8 +149,8 @@ export function loadInstructions(options: LoadInstructionsOptions = {}): Instruc
 
   // Nested project instructions are additive: the nearest/root rules above
   // keep precedence, while subdirectories can add local guidance.
-  if (options.recursive !== false) {
-    for (const path of scanAgentsFiles(cwd)) append(path, "project");
+  if (options.recursive ?? policy.recursive) {
+    for (const path of scanAgentsFiles(cwd, policy)) append(path, "project");
   }
 
   return files;

@@ -1,19 +1,65 @@
-// Built-in provider presets (data, not code). Each entry maps to a ringko provider
-// type; most are OpenAI-compatible endpoints. Model lists are discovered live or
-// filled from the catalog, so presets stay small and current.
-export interface ProviderPreset {
-  /** Stable id (used as the default provider name). */
-  id: string;
-  label: string;
-  /** ringko provider type: openai | anthropic | google | openai-compatible | openai-oauth | github-copilot | xai-oauth. */
-  type: string;
-  /** Base URL for OpenAI-compatible (or custom) endpoints. */
-  baseURL?: string;
-  /** Suggested API-key environment variable name. */
-  apiKeyEnv?: string;
-  auth?: "apikey" | "oauth";
-  docs?: string;
-}
+// Explicit registration keeps standalone builds deterministic; provider details live in their own files.
+import openai from "./providers/openai.ts";
+import openaiCodex from "./providers/openai-codex.ts";
+import anthropic from "./providers/anthropic.ts";
+import anthropicOauth from "./providers/anthropic-oauth.ts";
+import google from "./providers/google.ts";
+import xai from "./providers/xai.ts";
+import githubCopilot from "./providers/github-copilot.ts";
+import githubModels from "./providers/github-models.ts";
+import opencodeGo from "./providers/opencode-go.ts";
+import xaiApi from "./providers/xai-api.ts";
+import deepseek from "./providers/deepseek.ts";
+import groq from "./providers/groq.ts";
+import mistral from "./providers/mistral.ts";
+import openrouter from "./providers/openrouter.ts";
+import together from "./providers/together.ts";
+import fireworks from "./providers/fireworks.ts";
+import cerebras from "./providers/cerebras.ts";
+import perplexity from "./providers/perplexity.ts";
+import cohere from "./providers/cohere.ts";
+import baseten from "./providers/baseten.ts";
+import nvidia from "./providers/nvidia.ts";
+import huggingface from "./providers/huggingface.ts";
+import vercelAiGateway from "./providers/vercel-ai-gateway.ts";
+import novita from "./providers/novita.ts";
+import sambanova from "./providers/sambanova.ts";
+import hyperbolic from "./providers/hyperbolic.ts";
+import siliconflow from "./providers/siliconflow.ts";
+import dashscope from "./providers/dashscope.ts";
+import moonshotai from "./providers/moonshotai.ts";
+import moonshotaiCn from "./providers/moonshotai-cn.ts";
+import minimax from "./providers/minimax.ts";
+import zai from "./providers/zai.ts";
+import zhipu from "./providers/zhipu.ts";
+import meta from "./providers/meta.ts";
+import poe from "./providers/poe.ts";
+import lmstudio from "./providers/lmstudio.ts";
+import ollama from "./providers/ollama.ts";
+import vllm from "./providers/vllm.ts";
+import llamaCpp from "./providers/llama-cpp.ts";
+import jan from "./providers/jan.ts";
+import azureOpenai from "./providers/azure-openai.ts";
+import geminiOpenai from "./providers/gemini-openai.ts";
+import minimaxCn from "./providers/minimax-cn.ts";
+import deepinfra from "./providers/deepinfra.ts";
+import nebius from "./providers/nebius.ts";
+import featherless from "./providers/featherless.ts";
+import kluster from "./providers/kluster.ts";
+import friendli from "./providers/friendli.ts";
+import requesty from "./providers/requesty.ts";
+import ai21 from "./providers/ai21.ts";
+import upstage from "./providers/upstage.ts";
+import baichuan from "./providers/baichuan.ts";
+import stepfun from "./providers/stepfun.ts";
+import hunyuan from "./providers/hunyuan.ts";
+import volcengineArk from "./providers/volcengine-ark.ts";
+import qianfan from "./providers/qianfan.ts";
+import spark from "./providers/spark.ts";
+import custom from "./providers/custom.ts";
+import type { ProviderPreset } from "./providers/types.ts";
+
+export type { ProviderPreset } from "./providers/types.ts";
 
 export const OAUTH_DOMAIN_BY_TYPE: Record<string, string> = {
   "openai-oauth": "openai-oauth",
@@ -22,70 +68,15 @@ export const OAUTH_DOMAIN_BY_TYPE: Record<string, string> = {
 };
 
 export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
-  // First-party / OAuth
-  { id: "openai", label: "OpenAI", type: "openai", apiKeyEnv: "OPENAI_API_KEY", auth: "apikey", docs: "https://platform.openai.com/docs" },
-  { id: "openai-codex", label: "OpenAI (ChatGPT OAuth)", type: "openai-oauth", auth: "oauth" },
-  { id: "anthropic", label: "Anthropic (Claude)", type: "anthropic", apiKeyEnv: "ANTHROPIC_API_KEY", auth: "apikey", docs: "https://docs.anthropic.com" },
-  { id: "anthropic-oauth", label: "Anthropic (Claude Pro/Max OAuth)", type: "anthropic-oauth", auth: "oauth" },
-  { id: "google", label: "Google (Gemini)", type: "google", apiKeyEnv: "GEMINI_API_KEY", auth: "apikey", docs: "https://ai.google.dev" },
-  { id: "xai", label: "xAI (Grok OAuth)", type: "xai-oauth", auth: "oauth" },
-  { id: "github-copilot", label: "GitHub Copilot", type: "github-copilot", auth: "oauth" },
-  { id: "github-models", label: "GitHub Models", type: "openai-compatible", baseURL: "https://models.github.ai/inference", apiKeyEnv: "GITHUB_TOKEN", auth: "apikey" },
-
-  // OpenAI-compatible gateways / APIs
-  { id: "xai-api", label: "xAI (API key)", type: "openai-compatible", baseURL: "https://api.x.ai/v1", apiKeyEnv: "XAI_API_KEY", auth: "apikey" },
-  { id: "deepseek", label: "DeepSeek", type: "openai-compatible", baseURL: "https://api.deepseek.com/v1", apiKeyEnv: "DEEPSEEK_API_KEY", auth: "apikey" },
-  { id: "groq", label: "Groq", type: "openai-compatible", baseURL: "https://api.groq.com/openai/v1", apiKeyEnv: "GROQ_API_KEY", auth: "apikey" },
-  { id: "mistral", label: "Mistral", type: "openai-compatible", baseURL: "https://api.mistral.ai/v1", apiKeyEnv: "MISTRAL_API_KEY", auth: "apikey" },
-  { id: "openrouter", label: "OpenRouter", type: "openai-compatible", baseURL: "https://openrouter.ai/api/v1", apiKeyEnv: "OPENROUTER_API_KEY", auth: "apikey" },
-  { id: "together", label: "Together AI", type: "openai-compatible", baseURL: "https://api.together.xyz/v1", apiKeyEnv: "TOGETHER_API_KEY", auth: "apikey" },
-  { id: "fireworks", label: "Fireworks AI", type: "openai-compatible", baseURL: "https://api.fireworks.ai/inference/v1", apiKeyEnv: "FIREWORKS_API_KEY", auth: "apikey" },
-  { id: "cerebras", label: "Cerebras", type: "openai-compatible", baseURL: "https://api.cerebras.ai/v1", apiKeyEnv: "CEREBRAS_API_KEY", auth: "apikey" },
-  { id: "perplexity", label: "Perplexity", type: "openai-compatible", baseURL: "https://api.perplexity.ai", apiKeyEnv: "PERPLEXITY_API_KEY", auth: "apikey" },
-  { id: "cohere", label: "Cohere", type: "openai-compatible", baseURL: "https://api.cohere.ai/compatibility/v1", apiKeyEnv: "COHERE_API_KEY", auth: "apikey" },
-  { id: "baseten", label: "Baseten", type: "openai-compatible", baseURL: "https://inference.baseten.co/v1", apiKeyEnv: "BASETEN_API_KEY", auth: "apikey" },
-  { id: "nvidia", label: "NVIDIA NIM", type: "openai-compatible", baseURL: "https://integrate.api.nvidia.com/v1", apiKeyEnv: "NVIDIA_API_KEY", auth: "apikey" },
-  { id: "huggingface", label: "Hugging Face", type: "openai-compatible", baseURL: "https://router.huggingface.co/v1", apiKeyEnv: "HF_TOKEN", auth: "apikey" },
-  { id: "vercel-ai-gateway", label: "Vercel AI Gateway", type: "openai-compatible", baseURL: "https://ai-gateway.vercel.sh/v1", apiKeyEnv: "AI_GATEWAY_API_KEY", auth: "apikey" },
-  { id: "novita", label: "Novita AI", type: "openai-compatible", baseURL: "https://api.novita.ai/v3/openai", apiKeyEnv: "NOVITA_API_KEY", auth: "apikey" },
-  { id: "sambanova", label: "SambaNova", type: "openai-compatible", baseURL: "https://api.sambanova.ai/v1", apiKeyEnv: "SAMBANOVA_API_KEY", auth: "apikey" },
-  { id: "hyperbolic", label: "Hyperbolic", type: "openai-compatible", baseURL: "https://api.hyperbolic.xyz/v1", apiKeyEnv: "HYPERBOLIC_API_KEY", auth: "apikey" },
-  { id: "siliconflow", label: "SiliconFlow", type: "openai-compatible", baseURL: "https://api.siliconflow.cn/v1", apiKeyEnv: "SILICONFLOW_API_KEY", auth: "apikey" },
-  { id: "dashscope", label: "Alibaba Cloud (DashScope)", type: "openai-compatible", baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", apiKeyEnv: "DASHSCOPE_API_KEY", auth: "apikey" },
-  { id: "moonshotai", label: "Moonshot (Kimi, global)", type: "openai-compatible", baseURL: "https://api.moonshot.ai/v1", apiKeyEnv: "MOONSHOT_API_KEY", auth: "apikey" },
-  { id: "moonshotai-cn", label: "Moonshot (Kimi, CN)", type: "openai-compatible", baseURL: "https://api.moonshot.cn/v1", apiKeyEnv: "MOONSHOT_API_KEY", auth: "apikey" },
-  { id: "minimax", label: "MiniMax", type: "openai-compatible", baseURL: "https://api.minimax.io/v1", apiKeyEnv: "MINIMAX_API_KEY", auth: "apikey" },
-  { id: "zai", label: "Z.ai (GLM)", type: "openai-compatible", baseURL: "https://api.z.ai/api/paas/v4", apiKeyEnv: "ZAI_API_KEY", auth: "apikey" },
-  { id: "zhipu", label: "Zhipu (BigModel, CN)", type: "openai-compatible", baseURL: "https://open.bigmodel.cn/api/paas/v4", apiKeyEnv: "ZHIPUAI_API_KEY", auth: "apikey" },
-  { id: "meta", label: "Meta Llama API", type: "openai-compatible", baseURL: "https://api.llama.com/compat/v1", apiKeyEnv: "LLAMA_API_KEY", auth: "apikey" },
-  { id: "poe", label: "Poe", type: "openai-compatible", baseURL: "https://api.poe.com/v1", apiKeyEnv: "POE_API_KEY", auth: "apikey" },
-  { id: "lmstudio", label: "LM Studio (local)", type: "openai-compatible", baseURL: "http://127.0.0.1:1234/v1", auth: "apikey" },
-  { id: "ollama", label: "Ollama (local)", type: "openai-compatible", baseURL: "http://127.0.0.1:11434/v1", auth: "apikey" },
-  { id: "vllm", label: "vLLM (local)", type: "openai-compatible", baseURL: "http://localhost:8000/v1", auth: "apikey" },
-  { id: "llama-cpp", label: "llama.cpp server (local)", type: "openai-compatible", baseURL: "http://localhost:8080/v1", auth: "apikey" },
-  { id: "jan", label: "Jan (local)", type: "openai-compatible", baseURL: "http://localhost:1337/v1", auth: "apikey" },
-  { id: "azure-openai", label: "Azure OpenAI", type: "openai-compatible", baseURL: "https://YOUR-RESOURCE.openai.azure.com/openai/v1", apiKeyEnv: "AZURE_OPENAI_API_KEY", auth: "apikey" },
-
-  // More OpenAI-compatible providers
-  { id: "gemini-openai", label: "Gemini (OpenAI-compat)", type: "openai-compatible", baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", apiKeyEnv: "GEMINI_API_KEY", auth: "apikey" },
-  { id: "minimax-cn", label: "MiniMax (CN)", type: "openai-compatible", baseURL: "https://api.minimaxi.com/v1", apiKeyEnv: "MINIMAX_API_KEY", auth: "apikey" },
-  { id: "deepinfra", label: "DeepInfra", type: "openai-compatible", baseURL: "https://api.deepinfra.com/v1/openai", apiKeyEnv: "DEEPINFRA_API_KEY", auth: "apikey" },
-  { id: "nebius", label: "Nebius AI Studio", type: "openai-compatible", baseURL: "https://api.studio.nebius.ai/v1", apiKeyEnv: "NEBIUS_API_KEY", auth: "apikey" },
-  { id: "featherless", label: "Featherless AI", type: "openai-compatible", baseURL: "https://api.featherless.ai/v1", apiKeyEnv: "FEATHERLESS_API_KEY", auth: "apikey" },
-  { id: "kluster", label: "Kluster.ai", type: "openai-compatible", baseURL: "https://api.kluster.ai/v1", apiKeyEnv: "KLUSTER_API_KEY", auth: "apikey" },
-  { id: "friendli", label: "FriendliAI", type: "openai-compatible", baseURL: "https://api.friendli.ai/serverless/v1", apiKeyEnv: "FRIENDLI_TOKEN", auth: "apikey" },
-  { id: "requesty", label: "Requesty", type: "openai-compatible", baseURL: "https://router.requesty.ai/v1", apiKeyEnv: "REQUESTY_API_KEY", auth: "apikey" },
-  { id: "ai21", label: "AI21 Labs", type: "openai-compatible", baseURL: "https://api.ai21.com/studio/v1", apiKeyEnv: "AI21_API_KEY", auth: "apikey" },
-  { id: "upstage", label: "Upstage", type: "openai-compatible", baseURL: "https://api.upstage.ai/v1", apiKeyEnv: "UPSTAGE_API_KEY", auth: "apikey" },
-  { id: "baichuan", label: "Baichuan", type: "openai-compatible", baseURL: "https://api.baichuan-ai.com/v1", apiKeyEnv: "BAICHUAN_API_KEY", auth: "apikey" },
-  { id: "stepfun", label: "StepFun", type: "openai-compatible", baseURL: "https://api.stepfun.com/v1", apiKeyEnv: "STEPFUN_API_KEY", auth: "apikey" },
-  { id: "hunyuan", label: "Tencent Hunyuan", type: "openai-compatible", baseURL: "https://api.hunyuan.cloud.tencent.com/v1", apiKeyEnv: "HUNYUAN_API_KEY", auth: "apikey" },
-  { id: "volcengine-ark", label: "Volcengine Ark (Doubao)", type: "openai-compatible", baseURL: "https://ark.cn-beijing.volces.com/api/v3", apiKeyEnv: "ARK_API_KEY", auth: "apikey" },
-  { id: "qianfan", label: "Baidu Qianfan", type: "openai-compatible", baseURL: "https://qianfan.baidubce.com/v2", apiKeyEnv: "QIANFAN_API_KEY", auth: "apikey" },
-  { id: "spark", label: "iFlytek Spark", type: "openai-compatible", baseURL: "https://spark-api-open.xf-yun.com/v1", apiKeyEnv: "SPARK_API_KEY", auth: "apikey" },
-  { id: "custom", label: "Custom (OpenAI-compatible)", type: "openai-compatible", auth: "apikey" },
+  openai, openaiCodex, anthropic, anthropicOauth, google, xai, githubCopilot, githubModels,
+  opencodeGo, xaiApi, deepseek, groq, mistral, openrouter, together, fireworks, cerebras,
+  perplexity, cohere, baseten, nvidia, huggingface, vercelAiGateway, novita, sambanova,
+  hyperbolic, siliconflow, dashscope, moonshotai, moonshotaiCn, minimax, zai, zhipu,
+  meta, poe, lmstudio, ollama, vllm, llamaCpp, jan, azureOpenai, geminiOpenai, minimaxCn,
+  deepinfra, nebius, featherless, kluster, friendli, requesty, ai21, upstage, baichuan,
+  stepfun, hunyuan, volcengineArk, qianfan, spark, custom,
 ];
 
 export function findProviderPreset(id: string): ProviderPreset | undefined {
-  return PROVIDER_PRESETS.find((preset) => preset.id === id);
+  return PROVIDER_PRESETS.find(preset => preset.id === id);
 }

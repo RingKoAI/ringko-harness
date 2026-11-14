@@ -24,8 +24,11 @@ browser UI; both use the same local server.
 
 ## Run
 
-Node.js 24+ and Bun 1.2+ must be on `PATH`. The published executable is a Bun
-bundle, so Bun is not optional.
+The npm package requires Node.js 24+, **not a Bun installation**. npm selects a
+platform-specific standalone executable; a small Node launcher forwards the CLI
+arguments and terminal. Bun is needed only for source development/builds. This
+packaging takes effect with the next release; older published npm versions may
+still require Bun.
 
 ```sh
 npm install -g @ringko-ai/rkh
@@ -59,6 +62,14 @@ pnpm build      # code, tui and webui
 - **Sessions.** Append-only JSONL. Resume, fork, or inspect events in the
   trajectory view. Usage statistics are available in the Web UI; see
   [Usage statistics](docs/usage-statistics.md) for data semantics and limits.
+- **Message queue.** The Web UI queues submissions during a run, with edit,
+  remove and per-message **Send now** actions. Send now stops and settles the
+  current run before sending the selected item first; remaining items keep their
+  order. Failed interruption or admission retains the message and its attachments
+  for retry.
+- **Streaming tool calls.** Tool arguments stream into a bounded preview marked
+  not-executed; a call runs only after it is complete, validated and approved.
+  Cancelling a turn keeps the text already streamed and marks the turn cancelled.
 - **Delegation.** Subagents run in `read`, `write` or `full` mode with separate
   context and an optional model. Named providers add Claude Code, Codex, ACP and
   generic CLI backends; in-process and CLI children accept follow-ups and cold
@@ -76,12 +87,34 @@ pnpm build      # code, tui and webui
 
 ## Shared sessions
 
-`ringko` and `ringko web` start or reuse one backend per workspace/config pair
-and register it under `~/.ringko/backends/`. Open the printed URL in a browser,
-then select the same session in both clients with `ringko -s <id>`. Messages,
-tool activity, approvals, questions, plans and running state stay in sync. A
-second `web` for the same pair prints the existing URL; a concurrent submit to
-a busy session returns HTTP 409. Disconnecting a client does not cancel a run.
+`ringko` and `ringko web` start or reuse one detached backend per workspace/config
+pair, registered under `~/.ringko/backends/`. The default terminal starts only its
+terminal frontend and necessary API; **pages remain disabled until `web` starts**.
+Each `web` command remains running as a Web frontend owner rather than returning
+after printing a reused URL. Multiple terminal and Web owners can share the engine.
+
+Open the printed URL and use `ringko -s <id>` to select the same session in the
+terminal. Messages, tools, approvals, questions, plans and running state stay in
+sync. Concurrent submissions to the same busy session still return HTTP 409.
+
+- Each terminal/Web **process** holds one renewable lease, refreshed every three
+  seconds. API requests, SSE subscriptions and browser tabs are not extra owners;
+  closing a browser tab does not exit a still-running `web` command.
+- Exiting a terminal or pressing Ctrl+C in `web` releases only that frontend.
+  Remaining owners keep the backend alive. Pages are disabled after the final Web
+  owner leaves without affecting terminal clients.
+- After the final owner leaves, accepted runs/uploads/resource setup finish before
+  a roughly one-second idle grace and graceful shutdown remove the registration.
+  Disconnecting a frontend does not cancel accepted work.
+- A crashed or forcibly closed frontend loses its lease after about 15 seconds.
+  Normal idle shutdown checks then apply.
+- Live terminals pin the workspace so browser project switches cannot change their
+  tool roots. Web-only backends retain project switching unless `--shared` was set.
+
+`ringko service start` explicitly pins a persistent, headless service until
+`service stop`. Explicit development hosts (`pnpm dev` / `pnpm dev:app`) also retain
+their host-owned lifetime. An older running backend without lease support must be
+stopped normally once before restarting; active instances are never force-replaced.
 
 `ringko run`, `ringko loop` and embedded REPL hosts still execute locally. Do not
 point them at a session another backend is writing.

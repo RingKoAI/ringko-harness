@@ -1,6 +1,7 @@
 import { SYNC_LIMITS, type BackendIdentity, type PluginInventory, type RunInput, type SessionMeta, type SessionSnapshot, type SkillEntry, type SkillInstallInput, type SyncNotice } from "@ringko-ai/protocol";
 export * from "@ringko-ai/protocol";
 export * from "./transcript.ts";
+export * from "./lease.ts";
 
 export class BackendError extends Error {
   readonly status: number;

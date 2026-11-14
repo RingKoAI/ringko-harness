@@ -1,5 +1,9 @@
 // Wire contracts are platform-neutral: never import server/SDK modules into browser hosts.
+import type { ClientLifecycleStatus } from "./client-lifecycle.ts";
+import type { PartialResponse } from "./tool-input.ts";
+export * from "./tool-input.ts";
 export * from "./usage-statistics.ts";
+export * from "./client-lifecycle.ts";
 export interface ServerMessage {
   /** Log identity used only by client transcript projections. Never sent to a model. */
   sourceSeq?: number;
@@ -21,7 +25,7 @@ export const SYNC_LIMITS = {
   partialCharacters: 262_144,
 } as const;
 
-export interface BackendIdentity { protocol: number; instance: string; workspace: string; configPath: string | null }
+export interface BackendIdentity { protocol: number; instance: string; workspace: string; configPath: string | null; lifecycle?: ClientLifecycleStatus }
 /** Read-only, allowlisted diagnostics; raw configuration and credentials are excluded. */
 export interface RuntimeStatus { version: string | null; entries: Array<{ label: string; value: string }> }
 export interface SessionMeta { id: string; createdAt: number; cwd: string | null; title?: string | null; summary?: string | null; archived?: boolean; busy?: boolean }
@@ -54,7 +58,7 @@ export interface SessionSnapshot {
   model?: string | null;
   messages: ServerMessage[]; events: SessionEvent[];
   busy: boolean; approvals: Approval[]; questions: QuestionRequest[]; tasks: TaskSummary[]; todos: TodoItem[]; jobs: JobSummary[];
-  partial: { content: string; reasoning: string } | null; loop: LoopStatus | null; error: string | null;
+  partial: PartialResponse | null; loop: LoopStatus | null; error: string | null;
   usage?: SessionUsage | null;
 }
 export interface SyncNotice { instance: string; revision: number; sessionId?: string; kind: "session" | "activity" | "config" | "workspace" | "reset" }

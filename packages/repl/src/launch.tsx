@@ -8,6 +8,7 @@ import { buildPluginCommands, resetPluginCommands, setPluginCommands } from "./c
 import { isolateTerminalDiagnostics } from "./diagnostics.ts";
 
 export interface LaunchReplOptions {
+  signal?: AbortSignal;
   version?: string;
   backendUrl?: string;
   configPath?: string;
@@ -30,6 +31,7 @@ export interface LaunchReplOptions {
 
 /** Render the interactive REPL and resolve with the final session id on exit. */
 export async function launchRepl(options: LaunchReplOptions): Promise<string | undefined> {
+    if (options.signal?.aborted) return undefined;
     let lastSessionId: string | undefined;
     const restoreDiagnostics = isolateTerminalDiagnostics();
     try {
@@ -45,10 +47,14 @@ export async function launchRepl(options: LaunchReplOptions): Promise<string | u
       // Ctrl+C is handled in-app (clear input); exit via /exit.
       { exitOnCtrlC: false, alternateScreen: true, incrementalRendering: true, patchConsole: false },
     );
+    const abort = () => app.unmount();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
     try {
       await app.waitUntilExit();
       return lastSessionId;
     } finally {
+      options.signal?.removeEventListener("abort", abort);
       app.cleanup();
     }
     } finally {

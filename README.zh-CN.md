@@ -23,8 +23,9 @@ RingKo 是一套 Agent Harness。它通过受审批门约束的工具注册表�
 
 ## 运行
 
-`PATH` 上需要 Node.js 24+ 与 Bun 1.2+。发布的可执行文件是 Bun 打包产物，Bun 不是
-可选项。
+npm 安装需要 Node.js 24+，**不需要安装 Bun**。npm 按系统与 CPU 架构安装对应的
+独立二进制包，`ringko` 由轻量 Node 启动器转交执行。Bun 仅是源码开发及构建工具。
+此安装方式随下一次发布生效；已发布旧版 npm 包仍可能要求 Bun。
 
 ```sh
 npm install -g @ringko-ai/rkh
@@ -56,6 +57,11 @@ pnpm build      # code、tui 与 webui
   使用 bubblewrap，macOS 使用 Seatbelt，Windows 使用受限令牌与 Job Object。
 - **会话。** 只追加的 JSONL。可以续接、分叉，或在轨迹视图里检查事件；Web UI 提供
   使用统计，数据口径与限制见[使用统计说明](docs/usage-statistics.md)。
+- **消息队列。** Web UI 在运行期间将新消息排队，支持修改、删除和逐条「直接发送」。
+  直接发送会先停止并等待当前回合结束，再优先发送所选消息；其余消息保留顺序。
+  停止失败或请求尚未被后端接收时，所选消息及附件会保留供重试。
+- **流式工具调用。** 模型生成工具参数时会实时显示为“尚未执行”的预览；参数完整、
+  通过校验并获批准后才执行。取消回合会保留已经流出的回答文本，并标记为已取消。
 - **委派。** 子代理以 `read`、`write` 或 `full` 模式运行，拥有独立上下文和可选模型。
   命名 provider 可接入 Claude Code、Codex、ACP 和通用 CLI 后端；进程内与 CLI 子代理
   支持追加回合和冷恢复。支持后台执行、取消，以及 TUI、Web UI 和 `ringko run` 中的
@@ -70,11 +76,33 @@ pnpm build      # code、tui 与 webui
 
 ## 共享会话
 
-`ringko` 与 `ringko web` 会为同一组 workspace/配置启动或复用一个后端，并登记在
-`~/.ringko/backends/`。用浏览器打开打印出的地址，然后在两个客户端里用
-`ringko -s <id>` 选中同一个会话。消息、工具活动、审批、提问、计划和运行状态保持
-同步。同一组配置再执行一次 `web` 只会打印已有地址；向忙碌会话并发提交会返回
-HTTP 409。断开客户端不会取消正在进行的运行。
+`ringko` 与 `ringko web` 会为同一组 workspace/配置启动或复用一个独立后端，并登记在
+`~/.ringko/backends/`。默认终端只启动终端与必要 API，**不开放网页入口**；执行 `web`
+后才开放网页，并保持该 `web` 前端进程运行。多个终端和多个 `web` 都可复用同一后端。
+
+```powershell
+# 窗口一：纯终端
+bun E:\Code\RingKoAI\RingKo-Harness\packages\tui\src\cli.ts --workspace E:\Code
+# 窗口二：按需开启网页，复用相同后端
+bun E:\Code\RingKoAI\RingKo-Harness\packages\tui\src\cli.ts web --workspace E:\Code
+```
+
+用浏览器打开打印出的地址，终端可通过 `ringko -s <id>` 进入同一会话。消息、工具活动、
+审批、提问、计划和运行状态保持同步；同一忙碌会话的并发提交仍返回 HTTP 409。
+
+- 每个终端和 `web` **进程**各持有一份租约，每 3 秒续约；普通 API 请求、SSE 订阅和
+  浏览器标签页不重复计数。关闭浏览器标签页不会退出仍在运行的 `web` 命令。
+- 终端退出只释放自己的租约。只要 `web` 或其他终端还在，后端继续运行；`web` 的
+  Ctrl+C 也只关闭该前端。最后一个 `web` 退出后，网页入口关闭，终端不受影响。
+- 最后一个前端退出后，后端等待已接收的运行、上传及资源收尾完成，再经过约 1 秒空闲
+  宽限期优雅关闭，清理注册文件。断开前端不会取消已接受的任务。
+- 窗口被强制关闭或进程崩溃时，租约约 15 秒后失效，再执行相同的空闲关闭检查。
+- 终端连接期间工作区保持固定，避免浏览器切项目改变终端工具的目录；只剩 Web 时，
+  未指定 `--shared` 的后端仍可切换项目。
+
+`ringko service start` 显式将后端设为常驻，可用 `service stop` 手动停止；开发入口
+`pnpm dev` / `pnpm dev:app` 也保留显式宿主生命周期。它们不随前端租约归零退出。
+升级前已启动的旧后端不支持租约时，会提示先正常停止旧后端再重启，不强杀运行中的实例。
 
 `ringko run`、`ringko loop` 和嵌入式 REPL 仍在本地执行。不要把它们指向另一个后端
 正在写入的会话。

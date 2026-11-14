@@ -38,6 +38,7 @@ export type {
   ModelDelta,
   ModelRequest,
   ModelToolCall,
+  ModelToolInputDelta,
   ModelTurn,
   ModelUsage,
   ReasoningDetail,

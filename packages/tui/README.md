@@ -17,10 +17,10 @@ ringko mcp                  # configured MCP servers (~/.ringko/.mcp.json)
 ringko run "list the files"  # run the agent (offline `echo` provider by default)
 ringko loop "fix the tests" --max-iterations 10 --completion-promise DONE  # repeat until done
 ringko                       # interactive terminal UI (Ink; requires a TTY; default)
-ringko service start         # automatically start/reuse the workspace backend
+ringko service start         # explicitly keep a headless workspace backend running
 ringko service status        # print backend URL
 ringko service stop          # refuses while a session is running
-ringko web --shared --port 8787    # manually managed foreground server
+ringko web --shared --port 8787    # foreground Web owner; reuse the shared engine
 ```
 
 `run` reads `~/.ringko/settings.local.json` and `~/.ringko/provider.json` (or
@@ -88,11 +88,18 @@ retain the original local, non-persistent shell behavior.
 
 ## Shared backend
 
-The terminal UI starts/reuses a loopback service per canonical workspace/config pair.
-Open the printed URL for WebUI; select the same session to see synchronized state.
+The terminal UI starts/reuses a headless loopback engine per canonical workspace/config
+pair. Run `ringko web` to enable pages at the printed URL and hold a Web owner lease;
+the Web command stays running even when it reuses an existing engine. Select the same
+session in the browser and terminal to see synchronized state.
 Use `--server http://127.0.0.1:<port>` or `RINGKO_SERVER` for explicit connection.
 `RINGKO_WEB_TOKEN`, if configured, must match the backend; do not put credentials
-in URLs. Services survive client exit; stop them explicitly with `service stop`.
+in URLs. Each frontend owns one lease (three-second heartbeat, fifteen-second crash
+expiry). Exiting a frontend releases only its lease; the engine remains while another
+owner or accepted run/upload exists, then shuts down after a one-second idle grace.
+API requests and browser tabs are not extra process owners. The last Web owner leaving
+disables pages without disconnecting terminals. Explicit `service start` pins a
+persistent service until `service stop`; development hosts retain their own lifetime.
 Non-interactive `run`/`loop` and embedded SDK/REPL hosts remain standalone.
 
 ## Build

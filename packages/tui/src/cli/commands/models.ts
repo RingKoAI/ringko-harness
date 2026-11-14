@@ -1,14 +1,14 @@
-import { getApiKey, loadConfig, saveConfig, upsertProviderModels, type RingkoConfig } from "@ringko-ai/config";
+import { getApiKey, loadConfig, saveConfig, saveConfigFile, upsertProviderModels, type RingkoConfig } from "@ringko-ai/config";
 import { discoverProviderModels } from "../../provider.ts";
 import type { CliIo, ParsedArgs } from "../types.ts";
 
-const KNOWN_PROVIDER_TYPES = new Set(["openai", "openai-oauth", "anthropic", "google", "github-copilot", "xai-oauth", "openai-compatible"]);
+const KNOWN_PROVIDER_TYPES = new Set(["openai", "openai-oauth", "anthropic", "anthropic-oauth", "google", "github-copilot", "xai-oauth", "openai-compatible", "opencode-go"]);
 
 /** Discover a provider's models (live or catalog) and persist them to provider.json. */
-export async function syncModels(providerName: string, fallbackType: string, io: CliIo): Promise<number> {
+export async function syncModels(providerName: string, fallbackType: string, io: CliIo, path?: string): Promise<number> {
   let config: RingkoConfig;
   try {
-    config = loadConfig({});
+    config = loadConfig({ path });
   } catch (error) {
     io.err(error instanceof Error ? error.message : "Invalid config.");
     return 2;
@@ -41,7 +41,8 @@ export async function syncModels(providerName: string, fallbackType: string, io:
     io.out(`no models found for ${providerName}.`);
     return 0;
   }
-  saveConfig(upsertProviderModels(config, providerName, type, models));
+  const updated = upsertProviderModels(config, providerName, type, models);
+  if (path !== undefined) saveConfigFile(updated, path); else saveConfig(updated);
   for (const model of models) io.out(model.id);
   io.out(`${models.length} model(s) added for ${providerName}.`);
   return 0;
@@ -52,7 +53,7 @@ export async function modelsCommand(parsed: ParsedArgs, io: CliIo): Promise<numb
   let name: string | undefined = requested;
   if (!name) {
     try {
-      const config = loadConfig({});
+      const config = loadConfig({ path: parsed.config });
       const selected = config.model ?? "";
       const slash = selected.indexOf("/");
       name = slash > 0 ? selected.slice(0, slash) : config.providers?.[0]?.name;
@@ -65,5 +66,5 @@ export async function modelsCommand(parsed: ParsedArgs, io: CliIo): Promise<numb
     io.err("models requires a provider name; none configured.");
     return 2;
   }
-  return syncModels(name, "openai-compatible", io);
+  return syncModels(name, "openai-compatible", io, parsed.config);
 }

@@ -32,6 +32,7 @@ compaction and session metadata.
 | `anthropic` | Anthropic Messages API |
 | `google` | Google Generative AI |
 | `openai-compatible` | Any OpenAI-compatible chat-completions endpoint; `baseURL` is required |
+| `opencode-go` | OpenCode Go through its documented Chat Completions compatibility API |
 | `openai-oauth` | OpenAI through an OAuth account |
 | `anthropic-oauth` | Anthropic through an OAuth account |
 | `github-copilot` | GitHub Copilot |
@@ -40,10 +41,62 @@ compaction and session metadata.
 
 `type` is required for hosted providers; omitting it selects the offline `echo`
 provider. Common aliases such as `gemini`, `grok`, `copilot`, `chatgpt` and
-`compatible` are mapped to their canonical types; see `TYPE_ALIASES` in
-`packages/providers/src/loader.ts` for the full list.
+`compatible` are mapped to their canonical types. Aliases live in the runtime
+provider modules and are registered by `packages/providers/src/registry.ts`.
+
+### Source layout
+
+Each preset has its own `packages/config/src/providers/<id>.ts`, owning its name,
+endpoint, environment variable, search aliases and credential requirements.
+`presets.ts` explicitly registers these modules. Runtime adapters live in
+`packages/providers/src/<type>.ts` and own model construction, discovery,
+authentication and transport settings; `registry.ts` and `index.ts` dispatch them.
+OpenCode Go uses its own `opencode-go.ts`; DeepSeek's preset lives in
+`config/src/providers/deepseek.ts` and reuses the OpenAI-compatible transport.
 
 ## Custom endpoints
+
+### Configure from the terminal
+
+Run `/connect` without arguments, type a provider name or ID, and press Enter.
+Exact names and aliases rank first: `opencodego` or `go` selects OpenCode Go.
+`/connect opencode-go` also opens setup directly. Quick setup uses the preset's
+name and endpoint: paste the API key and press Enter to discover models, then type
+a model name or ID and press Enter to use it. No arrow keys are needed.
+
+Keys are masked; leaving the field empty keeps saved/environment credentials.
+Custom providers ask for the base URL first. Press Tab to edit all defaults,
+including the provider name, endpoint and comma-separated model IDs; Enter then
+advances through the fields. Supplying model IDs skips discovery. Ctrl+S saves
+directly and Esc cancels. Typing a configured provider's name reopens its settings;
+`/model` remains available for model switching. Failures preserve the form. Keys
+are saved separately in the user's `auth/auth.json`, outside chat history and
+project configuration. With `--config`, provider settings go to that file.
+
+### OpenCode Go
+
+Subscribe and obtain a key in the [OpenCode Console](https://opencode.ai/console),
+then use `/connect opencode-go`. Alternatively set `OPENCODE_API_KEY` and leave
+the key field blank. The default base URL is
+`https://opencode.ai/inference/go/openai/v1`; discovery reads the public
+`https://opencode.ai/inference/go/v1/models` directory without sending credentials.
+
+```json
+{
+  "name": "opencode-go",
+  "type": "opencode-go",
+  "models": [{ "id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro" }]
+}
+```
+
+Go officially translates every text model to Chat Completions. RingKo uses that
+compatibility API for DeepSeek, Kimi, GLM, Claude, Gemini, GPT and other Go models,
+without inferring native protocols from names. Requests carry RingKo's user agent
+and a stable, hashed `x-opencode-session`; conversation identity is transport-only
+and never enters model messages. Account permissions and Go quotas still apply.
+See the [official Go documentation](https://opencode.ai/docs/go/).
+
+### Custom OpenAI-compatible APIs
 
 ```json
 {

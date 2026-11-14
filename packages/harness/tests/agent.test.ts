@@ -29,6 +29,22 @@ function echoTool(kind: "safe" | "shell"): ToolDefinition<{ text: string }, stri
 }
 
 describe("agent harness", () => {
+  it("does not execute streamed tool previews before a validated complete turn and approval", async () => {
+    let executed = 0, asked = 0, requests = 0;
+    const ready = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    const tools = new ToolRegistry(); tools.register({ ...echoTool("shell"), execute: ({ text }) => { executed++; return text; } });
+    const model: ModelClient = async request => {
+      if (++requests > 1) return { content: "done", toolCalls: [] };
+      request.onToolInput?.({ kind: "start", id: "a", name: "echo" });
+      request.onToolInput?.({ kind: "delta", id: "a", text: '{"text":' });
+      ready.resolve(); await release.promise;
+      return { content: "", toolCalls: [{ id: "a", name: "echo", arguments: { text: "hello" } }] };
+    };
+    const previews: string[] = [];
+    const run = new Agent({ model, tools, onToolInput: event => previews.push(event.kind), requestApproval: async () => { asked++; return false; } }).run("go");
+    await ready.promise; expect(previews).toEqual(["start", "delta"]); expect(executed).toBe(0); expect(asked).toBe(0);
+    release.resolve(); await run; expect(asked).toBe(1); expect(executed).toBe(0);
+  });
   it("returns a final model response without calling tools", async () => {
     const model: ModelClient = async (request) => {
       expect(request.messages.at(-1)?.content).toBe("hello");

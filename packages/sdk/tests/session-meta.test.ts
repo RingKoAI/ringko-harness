@@ -68,3 +68,12 @@ it("only summarizes the most recent bounded messages", async () => {
   expect(seen[0]).toContain("message-36");
   expect(seen[0]).not.toContain("message-1");
 });
+
+it("forwards the real conversation identity to auxiliary model requests without adding it to prompts", async () => {
+  const recorderState = recorder();
+  const model: ModelClient = async request => {
+    expect(request.sessionId).toBe("metadata-session"); expect(JSON.stringify(request.messages)).not.toContain("metadata-session");
+    return { content: '{"title":"Metadata"}', toolCalls: [] };
+  };
+  await generateSessionMeta(model, conversation, { ...recorderState.handle, id: "metadata-session" });
+});

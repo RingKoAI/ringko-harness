@@ -22,6 +22,18 @@ function terminal() {
 async function wait(predicate: () => boolean): Promise<void> { const end = Date.now() + 5000; while (!predicate() && Date.now() < end) await Bun.sleep(20); expect(predicate()).toBe(true); }
 const initial = (): StatusConfigInfo => ({ expandThinking: false, expandTools: false, thinking: "high", accessMode: "approval", updates: { checkOnStartup: true, autoUpdate: false } });
 
+it("requires explicit Y before the settings page can enable full sandbox access", async () => {
+  const io = terminal(), info = { ...initial(), permissionPreset: "default" as const }; let changes = 0;
+  const app = render(<StatusDialog initialTab="Config" load={async () => ({ version: null, entries: [], settings: statusSettings(info) })} session={{}} columns={109} height={38} onClose={() => {}} onMcp={() => {}} onConfigChange={async (key, value) => { expect(key).toBe("permissionPreset"); expect(value).toBe("full-access"); changes++; }} />, io.options);
+  try {
+    await wait(() => io.read().includes("Permissions: default")); io.input.write("\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B"); await Bun.sleep(60); io.input.write("\r");
+    await wait(() => io.read().includes("Y confirm / Esc cancel")); expect(changes).toBe(0);
+    io.input.write("\r"); await Bun.sleep(60); expect(changes).toBe(0);
+    io.input.write("\x1b"); await Bun.sleep(60); expect(changes).toBe(0);
+    io.input.write("\r"); await Bun.sleep(60); io.input.write("y"); await wait(() => changes === 1);
+  } finally { app.unmount(); io.input.destroy(); io.output.destroy(); }
+});
+
 it("switches the four pages, filters settings, saves an explicit value and changes the statistics range", async () => {
   const io = terminal(), info = initial(), loaded: Array<[StatusTab, string]> = []; let changed = 0, closed = 0;
   const app = render(<StatusDialog load={async (_signal, tab, period) => { loaded.push([tab, period]); return { version: null, entries: [{ label: "Page", value: tab }], ...(tab === "Config" ? { settings: statusSettings(info) } : {}) }; }} session={{}} columns={109} height={38} onClose={() => { closed++; }} onMcp={() => {}} onConfigChange={async (key, value) => { if (key === "expandTools" && typeof value === "boolean") { info.expandTools = value; changed++; } }} />, io.options);

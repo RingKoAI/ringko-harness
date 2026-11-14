@@ -67,6 +67,12 @@ describe("loadConfig", () => {
 
   it("throws when an explicit file is missing", () => {
     expect(() => loadConfig({ path: join(home, "missing.json") })).toThrow("Cannot read config");
+    expect(() => loadConfig({ path: "", env })).toThrow("Cannot read config");
+  });
+
+  it("does not treat an unreadable non-file configuration as an absent optional file", () => {
+    mkdirSync(settingsPath(env), { recursive: true });
+    expect(() => loadConfig({ env })).toThrow();
   });
 });
 

@@ -1,17 +1,20 @@
 import { useState } from 'react'
-import { Check, ListOrdered, Pencil, Play, Trash2, X } from 'lucide-react'
+import { Check, ListOrdered, LoaderCircle, Pencil, Play, Send, Trash2, X } from 'lucide-react'
+import { CONVERSATION_LIMITS, isPendingSessionId } from '@/lib/conversations'
 import { useApp } from '@/store'
 import { useI18n } from '@/i18n'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Textarea } from './ui/textarea'
 
-/** Ordered composer queue: one row per pending submission, sent FIFO after the active run. */
+/** FIFO composer queue with an explicit per-item action to interrupt and send first. */
 export function QueuePanel() {
   const app = useApp()
   const { t } = useI18n()
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  const sending = app.sendingQueued !== null
+  const pending = isPendingSessionId(app.sessionId)
   if (!app.queue.length) return null
   return (
     <section aria-label={t('queue.title')} className="mb-2 w-full min-w-0 rounded-xl border bg-muted/20 p-2.5">
@@ -26,10 +29,10 @@ export function QueuePanel() {
           </Button>
         ) : null}
       </div>
-      <p className="mt-1 text-[11px] text-muted-foreground">{app.busy ? t('queue.hintRunning') : t('queue.hint')}</p>
+      <p aria-live="polite" className="mt-1 text-[11px] text-muted-foreground">{sending ? t('queue.sendingHint') : app.busy ? t('queue.hintRunning') : t('queue.hint')}</p>
       <ol className="mt-2 max-h-40 min-w-0 space-y-1.5 overflow-y-auto">
         {app.queue.map((item, index) => (
-          <li key={item.id} className="min-w-0 rounded-lg border bg-background/70 px-2 py-1.5">
+          <li key={item.id} aria-busy={app.sendingQueued === item.id} className="min-w-0 rounded-lg border bg-background/70 px-2 py-1.5">
             <div className="flex min-w-0 items-start gap-2">
               <span className="mt-1 grid size-5 shrink-0 place-items-center rounded-full bg-muted text-[10px] tabular-nums" aria-hidden="true">{index + 1}</span>
               {editing === item.id ? (
@@ -37,7 +40,8 @@ export function QueuePanel() {
                   aria-label={t('queue.edit')}
                   value={draft}
                   onChange={event => setDraft(event.target.value)}
-                  maxLength={65536}
+                  maxLength={CONVERSATION_LIMITS.prompt}
+                  disabled={sending}
                   className="min-h-16 min-w-0 flex-1 text-sm"
                 />
               ) : (
@@ -49,13 +53,17 @@ export function QueuePanel() {
               <div className="flex shrink-0 items-center">
                 {editing === item.id ? (
                   <>
-                    <Button variant="ghost" size="icon" className="size-7" aria-label={t('queue.save')} disabled={!draft.trim()} onClick={() => { app.editQueued(item.id, draft); setEditing(null) }}><Check className="size-3.5" /></Button>
-                    <Button variant="ghost" size="icon" className="size-7" aria-label={t('queue.cancel')} onClick={() => setEditing(null)}><X className="size-3.5" /></Button>
+                    <Button variant="ghost" size="icon" className="size-7" aria-label={t('queue.save')} disabled={sending || !draft.trim()} onClick={() => { app.editQueued(item.id, draft); setEditing(null) }}><Check className="size-3.5" /></Button>
+                    <Button variant="ghost" size="icon" className="size-7" aria-label={t('queue.cancel')} disabled={sending} onClick={() => setEditing(null)}><X className="size-3.5" /></Button>
                   </>
                 ) : (
                   <>
-                    <Button variant="ghost" size="icon" className="size-7" aria-label={t('queue.edit')} onClick={() => { setEditing(item.id); setDraft(item.prompt) }}><Pencil className="size-3.5" /></Button>
-                    <Button variant="ghost" size="icon" className="size-7" aria-label={t('queue.remove')} onClick={() => app.removeQueued(item.id)}><Trash2 className="size-3.5" /></Button>
+                    <Button variant="outline" size="sm" className="h-8 px-2 text-xs" disabled={sending || pending} title={pending ? t('queue.waitSession') : app.busy ? t('queue.sendNowInterrupt') : t('queue.sendNow')} onClick={() => { void app.sendQueuedNow(item.id) }}>
+                      {app.sendingQueued === item.id ? <LoaderCircle className="size-3.5 motion-safe:animate-spin" aria-hidden="true" /> : <Send className="size-3.5" aria-hidden="true" />}
+                      {app.sendingQueued === item.id ? t('queue.sending') : t('queue.sendNow')}
+                    </Button>
+                    <Button variant="ghost" size="icon" className="size-7" aria-label={t('queue.edit')} disabled={sending} onClick={() => { setEditing(item.id); setDraft(item.prompt) }}><Pencil className="size-3.5" /></Button>
+                    <Button variant="ghost" size="icon" className="size-7" aria-label={t('queue.remove')} disabled={sending} onClick={() => app.removeQueued(item.id)}><Trash2 className="size-3.5" /></Button>
                   </>
                 )}
               </div>

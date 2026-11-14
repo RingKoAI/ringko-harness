@@ -131,6 +131,14 @@ export function toolResultSummary(item: ReplItem): string | undefined {
   } catch {
     // not JSON; fall through
   }
+  if (item.toolName === "shell" && item.text) {
+    // Plain-text shell results: state the exit code, never echo a wall of output.
+    if (item.failed) return truncate(item.text, 160) || "Tool failed";
+    const exit = /^exit code: (\d+)$/m.exec(item.text)?.[1];
+    if (exit !== undefined) return `Exit ${exit}`;
+    if (item.text.trim() === "(no output)") return "Exit 0 · no output";
+    return `${item.text.split("\n").length} lines of output`;
+  }
   if (item.failed) return truncate(item.text, 160) || "Tool failed";
   return item.text ? `${item.text.split("\n").length} lines of output` : "Done";
 }

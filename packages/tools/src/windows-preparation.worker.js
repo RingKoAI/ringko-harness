@@ -29,8 +29,9 @@ async function run({ executable, args, env, timeout, outputLimit, stopTimeout })
     return Buffer.concat(chunks).toString("utf8");
   };
   const timer = setTimeout(() => { failure ??= new Error("Windows sandbox preparation timed out."); void stop(); }, timeout);
+  let stdout, stderr, code;
   try {
-    const [stdout, stderr, code] = await Promise.all([read(child.stdout), read(child.stderr), child.exited]);
+    [stdout, stderr, code] = await Promise.all([read(child.stdout), read(child.stderr), child.exited]);
     if (failure) throw failure;
     if (code !== 0) throw new Error(stderr || stdout || `Preparation process exited (${code}).`);
   } finally {
@@ -38,8 +39,9 @@ async function run({ executable, args, env, timeout, outputLimit, stopTimeout })
     if (child.exitCode === null) await stop();
     if (stopping) await stopping;
   }
+  return { stdout: stdout ?? "", stderr: stderr ?? "" };
 }
 
-try { await run(workerData); parentPort.postMessage({ ok: true }); }
+try { const out = await run(workerData); parentPort.postMessage({ ok: true, stdout: out.stdout }); }
 catch (error) { parentPort.postMessage({ ok: false, message: error instanceof Error ? error.message : "Windows sandbox preparation failed." }); }
 finally { parentPort.close(); }

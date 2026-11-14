@@ -6,11 +6,20 @@ export interface SelectorItem {
   current?: boolean;
   group?: string;
   description?: string;
+  aliases?: readonly string[];
 }
-export function filterItems(items: readonly SelectorItem[], query: string): SelectorItem[] {
+export function filterItems(items: readonly SelectorItem[], query: string, ranked = false): SelectorItem[] {
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  return items.filter(item => words.every(word =>
-    `${item.group ?? ""} ${item.label} ${item.value} ${item.description ?? ""}`.toLowerCase().includes(word)));
+  const text = (item: SelectorItem) => `${item.group ?? ""} ${item.label} ${item.value} ${item.description ?? ""} ${(item.aliases ?? []).join(" ")}`.toLowerCase();
+  if (!ranked || !words.length) return items.filter(item => words.every(word => text(item).includes(word)));
+  const compact = (value: string) => value.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  const needle = compact(query);
+  return items.map((item, index) => {
+    const names = [item.label, ...(item.aliases ?? []), item.value].map(compact);
+    const score = needle && names.includes(needle) ? 0 : needle && names.some(name => name.startsWith(needle)) ? 1 : needle && words.every(word => names.some(name => name.includes(compact(word)))) ? 2 : words.every(word => text(item).includes(word)) ? 3 : undefined;
+    return { item, index, score };
+  }).filter((entry): entry is { item: SelectorItem; index: number; score: number } => entry.score !== undefined)
+    .sort((a, b) => a.score - b.score || a.index - b.index).map(entry => entry.item);
 }
 export function modelItems(config: RingkoConfig, current: string): SelectorItem[] {
   return [...(config.providers ?? [])].sort((a, b) => a.name.localeCompare(b.name)).flatMap(provider =>

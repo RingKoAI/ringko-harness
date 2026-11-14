@@ -11,12 +11,14 @@ export const STATUS_TABS = ["Status", "Config", "Usage", "Stats"] as const;
 export type StatusTab = typeof STATUS_TABS[number];
 export const STATS_PERIODS = ["all", "7d", "30d"] as const;
 export type StatsPeriod = typeof STATS_PERIODS[number];
-export type StatusSettingKey = "expandThinking" | "expandTools" | "checkOnStartup" | "autoUpdate" | "thinking" | "accessMode";
+export type StatusSettingKey = "expandThinking" | "expandTools" | "checkOnStartup" | "autoUpdate" | "thinking" | "accessMode" | "permissionPreset";
 export interface StatusSetting { key: StatusSettingKey; label: string; value: boolean | string; options?: readonly string[]; disabledReason?: string }
 export interface StatusPageReport extends RuntimeStatus { settings?: StatusSetting[]; statistics?: UsageStatistics }
 export interface StatusConfigInfo {
   expandThinking: boolean; expandTools: boolean; thinking: string | null;
   accessMode: string; updates: { checkOnStartup: boolean; autoUpdate: boolean };
+  permissionPreset?: "read-only" | "default" | "full-access" | "custom";
+  sandboxMode?: "read-only" | "workspace-write" | "danger-full-access";
 }
 const BOOLEAN_SETTINGS = ["expandThinking", "expandTools", "checkOnStartup", "autoUpdate"] as const;
 const ENUM_SETTINGS = { thinking: ["off", "low", "high", "max"], accessMode: ["approval", "assist", "full"] } as const;
@@ -31,11 +33,14 @@ export function statusSettings(info: StatusConfigInfo, configurableThinking = tr
     { key: "checkOnStartup", label: "Check updates on startup", value: info.updates.checkOnStartup },
     { key: "autoUpdate", label: "Automatic updates", value: info.updates.autoUpdate, ...(!info.updates.checkOnStartup ? { disabledReason: "Enable startup update checks first." } : {}) },
     { key: "thinking", label: "Thinking effort", value: info.thinking ?? "high", options: ENUM_SETTINGS.thinking, ...(!configurableThinking ? { disabledReason: "This embedded host does not provide a configurable model client." } : {}) },
-    { key: "accessMode", label: "Access mode", value: info.accessMode, options: ENUM_SETTINGS.accessMode },
+    info.permissionPreset !== undefined
+      ? { key: "permissionPreset", label: "Permissions", value: info.permissionPreset, options: ["read-only", "default", "full-access"] }
+      : { key: "accessMode", label: "Access mode", value: info.accessMode, options: ENUM_SETTINGS.accessMode },
   ];
 }
 
 export function validStatusSetting(key: StatusSettingKey, value: boolean | string): boolean {
+  if (key === "permissionPreset") return typeof value === "string" && ["read-only", "default", "full-access", "custom"].includes(value);
   if ((BOOLEAN_SETTINGS as readonly string[]).includes(key)) return typeof value === "boolean";
   const options = key === "thinking" ? ENUM_SETTINGS.thinking : key === "accessMode" ? ENUM_SETTINGS.accessMode : undefined;
   return typeof value === "string" && options !== undefined && (options as readonly string[]).includes(value);

@@ -26,6 +26,12 @@ const echo: ToolDefinition<{ text: string }, string> = {
 };
 
 describe("RingKo SDK facade", () => {
+  it("keeps distinct transport identities for conversations sharing one model client", async () => {
+    const seen: Array<string | undefined> = [];
+    const model: ModelClient = async request => { seen.push(request.sessionId); return { content: "ok", toolCalls: [] }; };
+    const one = createRingKo({ model }), two = createRingKo({ model });
+    await one.run("first"); await one.run("again"); await two.run("other"); expect(seen[0]).toBeDefined(); expect(seen[0]).toBe(seen[1]); expect(seen[1]).not.toBe(seen[2]);
+  });
   it("exposes the access mode", () => {
     const ringko = createRingKo({ model: async () => ({ content: "ok", toolCalls: [] }) });
     expect(ringko.access.id).toBe("approval");
@@ -116,6 +122,44 @@ describe("RingKo SDK facade", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("persists a cancelled turn's streamed text without fabricating tool calls", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ringko-cancel-text-"));
+    try {
+      const store = new SessionStore({ root });
+      const session = store.create(), controller = new AbortController();
+      const ringko = createRingKo({
+        session,
+        model: async request => {
+          request.onDelta?.({ kind: "text", text: "partial answer" });
+          controller.abort();
+          throw Object.assign(new Error("aborted"), { name: "AbortError" });
+        },
+      });
+      await expect(ringko.run("stop me", { signal: controller.signal })).rejects.toThrow();
+      const events = store.open(session.id, "read").all();
+      const assistants = events.filter(event => event.type === "assistant/message");
+      expect(assistants.map(event => (event.data as { content: string }).content)).toEqual(["partial answer"]);
+      expect((assistants[0]?.data as { toolCalls?: unknown }).toolCalls).toBeUndefined();
+      expect(events.filter(event => event.type.startsWith("run/")).map(event => event.type)).toEqual(["run/started", "run/cancelled"]);
+      expect(toChatMessages(events).filter(message => message.role === "assistant").map(message => message.content)).toEqual(["partial answer"]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("drops a cancelled turn's reasoning-only prefix and keeps completed turns untouched", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ringko-cancel-reasoning-"));
+    try {
+      const store = new SessionStore({ root });
+      const session = store.create(), controller = new AbortController();
+      const ringko = createRingKo({ session, model: async request => {
+        request.onDelta?.({ kind: "reasoning", text: "thinking only" });
+        controller.abort();
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      } });
+      await expect(ringko.run("cancel", { signal: controller.signal })).rejects.toThrow();
+      expect(store.open(session.id, "read").all().some(event => event.type === "assistant/message")).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it("runs cleanup and resets the guard when terminal persistence fails", async () => {

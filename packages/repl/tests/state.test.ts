@@ -39,6 +39,21 @@ describe("agentEventToItems", () => {
 });
 
 describe("tool transcript", () => {
+  it("summarizes plain-text shell results, including a silent command", () => {
+    const silent = { id: 1, kind: "tool" as const, toolName: "shell", text: "(no output)" };
+    expect(toolResultSummary(silent)).toBe("Exit 0 · no output");
+    expect(toolOutputText(silent)).toBe("(no output)");
+    const failed = { id: 2, kind: "tool" as const, toolName: "shell", text: "(no output)\nexit code: 2" };
+    expect(toolResultSummary(failed)).toBe("Exit 2");
+    const output = { id: 3, kind: "tool" as const, toolName: "shell", text: "first line\nsecond line" };
+    expect(toolResultSummary(output)).toBe("2 lines of output");
+    expect(toolOutputText(output)).toBe("first line\nsecond line");
+  });
+  it("still summarizes legacy JSON shell results", () => {
+    const legacy = { id: 1, kind: "tool" as const, toolName: "shell", text: JSON.stringify({ command: "true", exitCode: 0, stdout: "", stderr: "" }) };
+    expect(toolResultSummary(legacy)).toBe("Exit 0");
+    expect(toolOutputText(legacy)).toBe("(no output)");
+  });
   it("summarizes tree counts and expands the formatted tree instead of its JSON envelope", () => {
     const item = { id: 1, kind: "tool" as const, toolName: "tree", text: JSON.stringify({ tree: ".\n└── src/\n    └── index.ts", directories: 1, files: 1, truncated: false }) };
     expect(toolResultSummary(item)).toBe("1 directory · 1 file");

@@ -36,6 +36,7 @@ import { useI18n, type MessageKey } from '@/i18n'
 import { useApp } from '@/store'
 import { cn } from '@/lib/utils'
 import { toolTurns } from '@/lib/tool-activity'
+import { isPendingSessionId } from '@/lib/conversations'
 import { isNearBottom, scrollMetrics } from '@/lib/chat-scroll'
 import { CopyButton } from '@/components/chat/copy-button'
 import { ToolCallList, TurnToolActivity, ToolResult, toolSummary } from '@/components/chat/tool-activity'
@@ -107,6 +108,9 @@ function MessageRow({
         <div className="text-xs font-medium text-muted-foreground">
           {isUser ? t('message.you') : isTool ? t('message.tool', { name: message.name ?? '' }) : t('message.assistant')}
         </div>
+        {message.runStatus === 'cancelled' ? (
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">{t('message.cancelled')}</span>
+        ) : null}
       </div>
       <div className="min-w-0 space-y-2">
         {message.reasoning && showThinking ? (
@@ -262,13 +266,13 @@ export function ChatPage() {
 
   // Load the session named by the URL (deep link / refresh).
   useEffect(() => {
-    if (id) app.openSession(id)
+    if (id && !isPendingSessionId(id)) app.openSession(id)
   }, [id, app.openSession])
 
   // Load the per-message ratings for the active session.
   useEffect(() => {
     const current = app.sessionId
-    if (!current) {
+    if (!current || isPendingSessionId(current)) {
       setFeedback({})
       return
     }
@@ -287,12 +291,13 @@ export function ChatPage() {
 
   // Keep the URL in sync with the active session (after the first message).
   useEffect(() => {
-    if (!id && app.sessionId) navigate(`/${app.sessionId}`, { replace: true })
+    if (isPendingSessionId(id)) navigate(app.sessionId && !isPendingSessionId(app.sessionId) ? `/${app.sessionId}` : '/', { replace: true })
+    else if (!id && app.sessionId && !isPendingSessionId(app.sessionId)) navigate(`/${app.sessionId}`, { replace: true })
   }, [id, app.sessionId, navigate])
 
   // Refresh on conversation growth or backend-resolved capacity changes.
   useEffect(() => {
-    if (!app.sessionId) {
+    if (!app.sessionId || isPendingSessionId(app.sessionId)) {
       setContext(null)
       return
     }
@@ -347,10 +352,7 @@ export function ChatPage() {
       const args = prompt.slice('/loop'.length).trim()
       if (args.length === 0) { toast.error(t('loop.usage')); return }
       const paths = attachments.map((file) => file.path)
-      setDraft('')
-      setAttachments([])
-      pinToLatest()
-      app.send(prompt, paths, { args })
+      if (app.send(prompt, paths, { args })) { setAttachments([]); pinToLatest() }
       return
     }
     if (prompt === '/reload') {
@@ -365,7 +367,7 @@ export function ChatPage() {
     }
     if (prompt === '/compact') {
       setDraft('')
-      if (!app.sessionId) {
+      if (!app.sessionId || isPendingSessionId(app.sessionId)) {
         toast.error(t('compact.none'))
         return
       }
@@ -378,10 +380,9 @@ export function ChatPage() {
       return
     }
     const paths = attachments.map((file) => file.path)
-    setDraft('')
+    if (!app.send(prompt, paths)) return
     setAttachments([])
     pinToLatest()
-    app.send(prompt, paths)
     // Busy submissions wait in the same ordered queue as the composer's list.
     if (queued) toast.success(t('queue.added'))
   }
@@ -404,7 +405,7 @@ export function ChatPage() {
 
   async function branch(index: number): Promise<void> {
     const current = app.sessionId
-    if (!current) return
+    if (!current || isPendingSessionId(current)) return
     try {
       const { sessionId } = await forkSession(current, index)
       toast.success(t('message.branched'))
@@ -417,7 +418,7 @@ export function ChatPage() {
 
   async function edit(index: number, content: string): Promise<boolean> {
     const current = app.sessionId
-    if (!current) return false
+    if (!current || isPendingSessionId(current)) return false
     try {
       const { sessionId } = await forkSession(current, index, true)
       toast.success(t('message.edited'))
@@ -432,7 +433,7 @@ export function ChatPage() {
 
   function rate(index: number, value: 'up' | 'down'): void {
     const current = app.sessionId
-    if (!current) return
+    if (!current || isPendingSessionId(current)) return
     const next = feedback[index] === value ? null : value
     setFeedback((previous) => {
       const copy = { ...previous }
@@ -449,7 +450,7 @@ export function ChatPage() {
     if (message.role === 'system' || toolActivity.attached.has(index) || (message.role === 'tool' && !showCalls)) return null
     if (message.role === 'assistant' && !message.content && (!message.reasoning || !showThinking) && !showCalls) return null
     return <MessageRow key={index} message={message} index={index} forkIndex={forkIndexes[index]} showThinking={showThinking} showTools={showTools}
-      onBranch={branch} onEdit={edit} onFeedback={rate} feedback={feedback[index]} toolResults={toolActivity.results.get(index)} busy={app.busy} showCalls={showCalls} toolBusy={toolBusy} />
+      onBranch={branch} onEdit={edit} onFeedback={rate} feedback={feedback[index]} toolResults={toolActivity.results.get(index)} busy={app.busy || isPendingSessionId(app.sessionId)} showCalls={showCalls} toolBusy={toolBusy} />
   }
   const empty = app.messages.length === 0
   const landing = empty && view === 'chat'
@@ -482,9 +483,9 @@ export function ChatPage() {
           </select>
         ) : null}
       </div>
-      {taskView && app.sessionId ? (
+      {taskView && app.sessionId && !isPendingSessionId(app.sessionId) ? (
         <TaskView key={`${app.sessionId}/${taskView}`} sessionId={app.sessionId} taskId={taskView} onBack={() => setTaskView(null)} />
-      ) : view === 'trajectory' ? <TrajectoryView key={app.sessionId ?? 'new'} sessionId={app.sessionId} /> : !empty ? (
+      ) : view === 'trajectory' ? <TrajectoryView key={app.sessionId ?? 'new'} sessionId={isPendingSessionId(app.sessionId) ? undefined : app.sessionId} /> : !empty ? (
         <div ref={scrollRootRef} className="relative flex min-h-0 flex-1 flex-col">
           <ScrollArea data-chat-scroll className="min-h-0 flex-1">
         <div className="px-3 sm:px-4">
@@ -500,6 +501,11 @@ export function ChatPage() {
             {app.partial ? <div aria-live="off" aria-label={t('stream.live')} className="min-w-0">
               {app.partial.reasoning ? <details open={showThinking} className="mb-3 rounded-lg border p-3"><summary className="cursor-pointer text-sm text-muted-foreground">{t('ui.showThinking')}</summary><div className="mt-2 whitespace-pre-wrap break-words text-sm text-muted-foreground">{app.partial.reasoning}</div></details> : null}
               <Markdown content={app.partial.content} />
+              {app.partial.toolInputs?.map(call => <details key={call.id} open={showTools} className="mt-2 min-w-0 rounded-lg border p-3">
+                <summary className="cursor-pointer break-words text-sm"><span className="font-medium">{call.name}</span><span className="ml-2 text-muted-foreground">{t(call.complete ? 'stream.toolReady' : 'stream.toolGenerating')}</span></summary>
+                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all text-xs">{call.text}</pre>
+                {call.truncated ? <p className="mt-1 text-xs text-muted-foreground">{t('stream.toolTruncated')}</p> : null}
+              </details>)}
             </div> : null}
             {app.busy ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">

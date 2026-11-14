@@ -1,7 +1,17 @@
 // Runtime settings and session-control endpoints.
 
 import { BASE, UnauthorizedError, authHeaders } from "./http";
-import type { AccessMode, Info, UploadedFile } from "../api";
+import type { AccessMode, PermissionPreset, Info, UploadedFile } from "../api";
+
+export async function setPermissionPreset(preset: PermissionPreset): Promise<Info> {
+  const response = await fetch(`${BASE}/api/access`, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ preset }) });
+  if (response.status === 401) throw new UnauthorizedError();
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null) as { error?: unknown } | null;
+    throw new Error(typeof detail?.error === "string" ? detail.error : `Permission switch failed (${response.status}).`);
+  }
+  return await response.json() as Info;
+}
 
 export async function setMode(workflow: string): Promise<Info> {
   const response = await fetch(`${BASE}/api/mode`, {

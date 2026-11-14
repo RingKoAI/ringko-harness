@@ -5,6 +5,30 @@ import { join } from "node:path";
 import { McpManager } from "../src/mcp-manager.ts";
 import { Sandbox } from "@ringko-ai/tools";
 
+it("resets MCP under the replacement sandbox instead of restarting with full-access authority", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rkh-mcp-mode-switch-")), previous = process.env.RINGKO_HOME;
+  process.env.RINGKO_HOME = join(root, "home"); let attempts = 0;
+  const remote = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    const body = await request.json() as { id?: string; method: string };
+    if (body.method === "initialize") attempts++;
+    if (!body.id) return new Response(null, { status: 202 });
+    return Response.json({ jsonrpc: "2.0", id: body.id, result: body.method === "initialize" ? { serverInfo: {} } : { tools: [] } });
+  } });
+  writeFileSync(join(root, ".mcp.json"), JSON.stringify({ mcpServers: { fixture: { url: `http://127.0.0.1:${remote.port}` } } }));
+  const manager = new McpManager(root);
+  try {
+    expect((await manager.start(new Sandbox({ workspace: root, mode: "danger-full-access" }))).connections).toHaveLength(1);
+    expect(attempts).toBe(1);
+    await manager.reset(new Sandbox({ workspace: root, mode: "read-only" }), {});
+    expect(manager.current().connections).toHaveLength(0);
+    expect(manager.current().errors[0]?.message).toContain("endpoint authorization"); expect(attempts).toBe(1);
+  } finally {
+    await manager.close(); remote.stop(true);
+    if (previous === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it("reports discovery without starting or probing servers", async () => {
   const root = mkdtempSync(join(tmpdir(), "ringko-mcp-current-"));
   const old = process.env.RINGKO_HOME; process.env.RINGKO_HOME = join(root, "home");

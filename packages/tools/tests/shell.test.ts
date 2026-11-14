@@ -9,7 +9,7 @@ import {
   JobManager,
   type ToolApprovalRequest,
 } from "@ringko-ai/harness";
-import { createShellTool } from "../src/shell.ts";
+import { createShellTool, shellResultMessage, SHELL_NO_OUTPUT } from "../src/shell.ts";
 import { Sandbox } from "../src/sandbox.ts";
 import { findGitBash } from "../src/shell-resolver.ts";
 
@@ -21,6 +21,18 @@ const echo = "echo ringko";
 const PROCESS_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 5_000;
 
 describe("shell tool", () => {
+  it("reports (no output) for a silent command and keeps diagnostics explicit", () => {
+    expect(shellResultMessage({ command: "true", exitCode: 0, stdout: "", stderr: "" })).toBe(SHELL_NO_OUTPUT);
+    expect(SHELL_NO_OUTPUT).toBe("(no output)");
+    expect(shellResultMessage({ command: "x", exitCode: 0, stdout: "\n", stderr: "" })).toBe("(no output)");
+    expect(shellResultMessage({ command: "x", exitCode: 2, stdout: "", stderr: "" })).toBe("(no output)\nexit code: 2");
+    expect(shellResultMessage({ command: "x", exitCode: 0, stdout: "out\n", stderr: "warn\n" })).toBe("out\nstderr:\nwarn");
+    expect(shellResultMessage({ command: "x", exitCode: 0, stdout: "out", stderr: "", timedOut: true, truncated: true })).toBe("out\ntimed out\noutput truncated");
+    const tool = createShellTool({ cwd });
+    expect(tool.toMessage?.({ command: "true", exitCode: 0, stdout: "", stderr: "" })).toEqual({ content: "(no output)" });
+    expect(tool.toMessage?.({ jobId: "job-1", kind: "shell", status: "running" } as never)).toEqual({ content: JSON.stringify({ jobId: "job-1", kind: "shell", status: "running" }) });
+  });
+
   it("uses the host-owned child cwd while preserving shell approval", async () => {
     const child = join(cwd, "child"); mkdirSync(child);
     let approvals = 0;

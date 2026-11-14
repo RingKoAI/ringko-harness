@@ -5,9 +5,24 @@ import { Sandbox, type SandboxedProcess } from "./sandbox.ts";
 import type { ShellKind } from "./shell-resolver.ts";
 
 export const SHELL_LIMITS = Object.freeze({ defaultTimeoutMs: 300_000, commandCharacters: 16_384, outputCharacters: 65_536, outputEvents: 200 });
-export interface ShellInput { command: string; timeout?: number; description?: string; background?: boolean }
+export interface ShellInput { command: string; timeout?: number; description?: string; background?: boolean; sandbox_permissions?: "workspace-write" | "danger-full-access" }
 export interface ShellOutput { command: string; exitCode: number; stdout: string; stderr: string; shell?: ShellKind; timedOut?: boolean; truncated?: boolean; eventsTruncated?: boolean }
 export interface ShellOptions { cwd: string; defaultTimeoutMs?: number; sandbox?: Sandbox }
+/** Shown to the model when a command produced no stdout and no stderr. */
+export const SHELL_NO_OUTPUT = "(no output)";
+
+/** Model-facing text: output first, then only the diagnostics that matter. */
+export function shellResultMessage(output: ShellOutput): string {
+  const lines: string[] = [];
+  const stdout = output.stdout.trimEnd(), stderr = output.stderr.trimEnd();
+  if (stdout) lines.push(stdout);
+  if (stderr) lines.push(`stderr:\n${stderr}`);
+  if (!stdout && !stderr) lines.push(SHELL_NO_OUTPUT);
+  if (output.exitCode !== 0) lines.push(`exit code: ${output.exitCode}`);
+  if (output.timedOut) lines.push("timed out");
+  if (output.truncated) lines.push("output truncated");
+  return lines.join("\n");
+}
 function parseShell(value: unknown): ShellInput {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Expected an object input.");
   const data = value as Record<string, unknown>;
@@ -15,7 +30,9 @@ function parseShell(value: unknown): ShellInput {
   if (data.timeout !== undefined && (typeof data.timeout !== "number" || !Number.isFinite(data.timeout) || data.timeout < 0)) throw new TypeError("timeout must be non-negative milliseconds (0 disables it).");
   if (data.description !== undefined && (typeof data.description !== "string" || data.description.length > 256)) throw new TypeError("Invalid shell description.");
   if (data.background !== undefined && typeof data.background !== "boolean") throw new TypeError("background must be boolean.");
-  return { command: data.command, timeout: data.timeout === undefined ? undefined : data.timeout as number, description: data.description as string | undefined, background: data.background as boolean | undefined };
+  if (data.sandbox_permissions !== undefined && data.sandbox_permissions !== "workspace-write" && data.sandbox_permissions !== "danger-full-access") throw new TypeError("Invalid sandbox_permissions.");
+  return { command: data.command, timeout: data.timeout === undefined ? undefined : data.timeout as number, description: data.description as string | undefined, background: data.background as boolean | undefined,
+    ...(data.sandbox_permissions ? { sandbox_permissions: data.sandbox_permissions as ShellInput["sandbox_permissions"] } : {}) };
 }
 /** Terminate the process tree: Windows taskkill, POSIX process group with direct fallback. */
 async function terminate(proc: ChildProcess): Promise<void> {
@@ -39,17 +56,30 @@ export function createShellTool(options: ShellOptions): ToolDefinition<ShellInpu
   return defineTool({
     name: "shell", concurrency: "exclusive",
     description: "Execute a shell command with approval. The command is killed if it exceeds the timeout: default 300s; pass timeout=0 to run without a timeout. background=true returns a jobId immediately. subscribe reads shell output/exit events; job checks results, cancels or converts foreground execution to background. Output and runtime are bounded.",
-    inputSchema: { type: "object", properties: { command: { type: "string", maxLength: SHELL_LIMITS.commandCharacters }, timeout: { type: "number", description: "Timeout in milliseconds; 0 disables the timeout; optional, defaults to 300000." }, description: { type: "string", maxLength: 256 }, background: { type: "boolean" } }, required: ["command"], additionalProperties: false },
+    inputSchema: { type: "object", properties: { command: { type: "string", maxLength: SHELL_LIMITS.commandCharacters }, timeout: { type: "number", description: "Timeout in milliseconds; 0 disables the timeout; optional, defaults to 300000." }, description: { type: "string", maxLength: 256 }, background: { type: "boolean" },
+      ...(sandbox.allowApprovedWrites ? { sandbox_permissions: { type: "string", enum: ["workspace-write", "danger-full-access"], description: "Request broader permissions for this command only. Explicit approval is required; it does not change the active mode." } } : {}),
+    }, required: ["command"], additionalProperties: false },
     parseInput: parseShell,
-    assessRisk: ({ command, description }) => ({ kind: "shell", reason: description ?? `Run shell command: ${command}`, target: command }),
+    assessRisk: ({ command, description, sandbox_permissions }) => ({ kind: "shell", ...(sandbox_permissions && sandbox.mode !== "danger-full-access" && (sandbox_permissions === "danger-full-access" || sandbox.mode === "read-only") ? { requiresExplicitApproval: true } : {}), reason: sandbox_permissions ? `Request ${sandbox_permissions} for this command only: ${command}` : description ?? `Run shell command: ${command}`, target: command }),
+    toMessage(output) {
+      // Background starts return a job snapshot; keep the structured form.
+      return typeof (output as ShellOutput).stdout === "string" ? { content: shellResultMessage(output as ShellOutput) } : { content: JSON.stringify(output) };
+    },
     async execute(input, context) {
       if (input.background && !context?.jobs) throw new Error("This host does not support background shell jobs.");
+      let executionSandbox = sandbox;
+      const requested = input.sandbox_permissions;
+      const escalation = requested && sandbox.mode !== "danger-full-access" && (requested === "danger-full-access" || sandbox.mode === "read-only");
+      if (escalation) {
+        if (!sandbox.allowApprovedWrites || context?.approvalGranted !== true || context.approvedTarget !== input.command) throw new Error("This sandbox escalation requires explicit approval for this command under a permission preset.");
+        executionSandbox = new Sandbox({ workspace: sandbox.workspaceRoot, mode: requested, additionalWritableRoots: sandbox.additionalWritableRoots });
+      }
       const work = async (signal?: AbortSignal, emit?: (type: string, data: unknown) => void): Promise<ShellOutput> => {
         signal?.throwIfAborted();
-        await sandbox.prepare();
+        await executionSandbox.prepare();
         return await new Promise<ShellOutput>((resolve, reject) => {
         signal?.throwIfAborted();
-        const invocation: SandboxedProcess = sandbox.shell(input.command, context?.cwd ?? options.cwd);
+        const invocation: SandboxedProcess = executionSandbox.shell(input.command, context?.cwd ?? options.cwd);
         const proc = spawn(invocation.executable, invocation.args, { cwd: invocation.cwd, env: invocation.env, windowsVerbatimArguments: invocation.windowsVerbatimArguments, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
         let stdout = "", stderr = "", truncated = false, timedOut = false, chunks = 0, stopping = false, eventsTruncated = false;
         let failure: unknown;
