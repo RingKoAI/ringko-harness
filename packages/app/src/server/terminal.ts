@@ -24,7 +24,7 @@ export async function startInteractiveTerminal(
 ): Promise<InteractiveTerminal> {
   const nodePath = Bun.which("node");
   if (!nativeProtocol && !nodePath) throw new Error("Interactive terminals require Node.js in PATH.");
-  const bridgePath = join(import.meta.dir, "../terminal-bridge.mjs");
+  const bridgePath = process.env.RINGKO_TERMINAL_BRIDGE ?? join(import.meta.dir, "../terminal-bridge.mjs");
   const child = Bun.spawn(nativeProtocol ? [shell, ...args] : [nodePath!, bridgePath], {
     cwd,
     env: environment ?? { ...process.env },

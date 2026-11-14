@@ -89,6 +89,12 @@ jobs:
       - name: Compile ${{ matrix.target }}
         run: bun packages/tui/scripts/compile.mjs dist/${{ matrix.artifact }} ${{ matrix.target }}
 
+      - name: Verify npm binary launcher without external Bun
+        run: |
+          bun packages/tui/scripts/pack-npm.mjs --local-native
+          pnpm test:npm
+          pnpm test:npm:install
+
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
@@ -165,7 +171,9 @@ jobs:
         run: pnpm typecheck
 
       - name: Build npm package
-        run: pnpm build:npm
+        run: |
+          pnpm --filter @ringko-ai/webui build
+          bun packages/tui/scripts/pack-npm.mjs --artifacts "${{ runner.temp }}/native-artifacts"
 
       - name: Verify npm package
         run: pnpm test:npm
@@ -174,6 +182,12 @@ jobs:
         with:
           name: npm-package
           path: dist/npm-tui/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-platform-packages
+          path: dist/npm-platforms/
           if-no-files-found: error
 
   npm-publish:
@@ -199,6 +213,11 @@ jobs:
           name: npm-package
           path: dist/npm-tui
 
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-platform-packages
+          path: dist/npm-platforms
+
       - name: Validate package version
         id: version
         run: |
@@ -217,8 +236,13 @@ jobs:
         run: npm pack --dry-run
 
       - name: Publish to npmjs with OIDC
-        working-directory: dist/npm-tui
-        run: npm publish --access public --tag "${{ steps.version.outputs.tag }}"
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64; do
+            npm publish "./dist/npm-platforms/$target" --access public --tag "${{ steps.version.outputs.tag }}"
+          done
+          npm publish ./dist/npm-tui --access public --tag "${{ steps.version.outputs.tag }}"
 
   github-release:
     name: Publish GitHub Release

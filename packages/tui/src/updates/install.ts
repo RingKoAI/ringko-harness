@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
+import { createRequire } from "node:module";
 import { unzipSync } from "fflate";
 import { x as extractTar } from "tar";
 import { NPM_PACKAGE_NAME } from "../cli-identity.ts";
@@ -24,6 +25,22 @@ export const runUpdateCommand: UpdateRunner = async (command, args) => {
 export type Installation = { kind: "standalone"; executable: string } | { kind: "npm"; packageRoot: string } | { kind: "source" };
 
 export async function detectInstallation(entry = process.argv[1], executable = process.execPath): Promise<Installation> {
+  const npmRoot = process.env.RINGKO_NPM_ROOT;
+  if (npmRoot) {
+    // A wrapper hint alone must never redirect self-update to an unrelated
+    // package. Resolve its exact optional binary and compare canonical paths.
+    try {
+      const packageRoot = await realpath(npmRoot);
+      const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
+      const name = `${NPM_PACKAGE_NAME}-${process.platform}-${process.arch}`;
+      const require = createRequire(join(packageRoot, "package.json"));
+      const binaryManifest = require.resolve(`${name}/package.json`);
+      const platform = JSON.parse(await readFile(binaryManifest, "utf8"));
+      const binary = join(dirname(binaryManifest), "bin", process.platform === "win32" ? "ringko.exe" : "ringko");
+      if (manifest.name === NPM_PACKAGE_NAME && platform.name === name && platform.version === manifest.version && await realpath(binary) === await realpath(executable)) return { kind: "npm", packageRoot };
+    } catch { /* Unverified hints cannot select an npm update target. */ }
+    throw new Error("Cannot verify this npm binary installation. Reinstall RingKo with npm before updating.");
+  }
   if (entry?.includes("$bunfs") || entry?.includes("~BUN") || entry === executable) return { kind: "standalone", executable: await realpath(executable) };
   if (entry) {
     const script = await realpath(entry);

@@ -65,3 +65,6 @@ jobs:
       - name: Verify npm package
         run: pnpm test:npm
 
+      - name: Verify real npm installation without Bun on child PATH
+        run: pnpm test:npm:install
+

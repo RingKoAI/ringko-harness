@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { NPM_BINARY_TARGETS } from "./npm-platforms.mjs";
+import { spawnSync } from "node:child_process";
 
 const source = resolve(import.meta.dir, "../../../dist/npm-tui");
 const root = mkdtempSync(join(tmpdir(), "ringko-npm-check-"));
 const installed = join(root, "package");
 const timeoutMs = 30_000;
 let server;
+let backendUrl;
 
 try {
   // Exercise relocation outside the monorepo, without workspace dependencies.
@@ -18,6 +21,8 @@ try {
   } else assert.equal(manifest.private, undefined);
   assert.equal(manifest.name, "@ringko-ai/rkh");
   assert.equal(manifest.bin.ringko, "bin/ringko.mjs");
+  assert.equal(manifest.engines.bun, undefined);
+  assert.match(readFileSync(join(installed, "bin/ringko.mjs"), "utf8"), /^#!\/usr\/bin\/env node/);
   assert.ok(manifest.dependencies["node-pty"]);
   const runtimeDependencies = { ...manifest.dependencies, ...manifest.optionalDependencies, ...manifest.peerDependencies };
   for (const desktopPackage of ["@ringko-ai/rkh-desktop", "electron", "electron-builder", "electron-vite"]) {
@@ -26,7 +31,22 @@ try {
   assert.equal(existsSync(join(installed, "packages/rkh-desktop")), false, "Desktop workspace must not be shipped in the CLI package");
   assert.ok(existsSync(join(installed, "bin/terminal-bridge.mjs")));
   const cli = join(installed, manifest.bin.ringko);
+  const target = NPM_BINARY_TARGETS.find(target => target.platform === process.platform && target.arch === process.arch);
+  assert.ok(target, "Unsupported verification platform");
+  assert.equal(manifest.optionalDependencies[target.name], manifest.version);
+  // Model npm's platform-selected optional dependency in isolated storage. npm
+  // tarball installation is additionally verified by check-npm-install.mjs.
+  const platformSource = resolve(import.meta.dir, "../../../dist/npm-platforms", `${process.platform}-${process.arch}`);
+  const platformInstalled = join(installed, "node_modules", ...target.name.split("/"));
+  mkdirSync(join(platformInstalled, "bin"), { recursive: true });
+  cpSync(platformSource, platformInstalled, { recursive: true });
+  writeFileSync(join(platformInstalled, "bin", target.binary), readFileSync(join(platformSource, "bin", target.binary)));
+  const node = Bun.which("node"); assert.ok(node, "Verification requires Node.js");
+  // Deliberately remove Bun and all non-system tools from the child PATH.
   const env = { ...process.env, RINGKO_HOME: join(root, "home"), AGENTS_HOME: join(root, "agents") };
+  env.PATH = process.platform === "win32" ? `${process.env.SystemRoot}\\System32;${process.env.SystemRoot}` : "/usr/bin:/bin:/usr/sbin:/sbin";
+  const foundBun = spawnSync(process.platform === "win32" ? join(process.env.SystemRoot, "System32/where.exe") : "/usr/bin/which", ["bun"], { env, encoding: "utf8" });
+  assert.notEqual(foundBun.status, 0, "The runtime probe must not find external Bun.");
   delete env.RINGKO_SERVER;
   delete env.RINGKO_WEBUI_DIR;
   delete env.RINGKO_WEB_TOKEN;
@@ -47,19 +67,19 @@ try {
     [["version"], `ringko ${manifest.version}`],
     [["run", "npm-smoke-test"], "echo: npm-smoke-test"],
   ]) {
-    const result = Bun.spawnSync([process.execPath, cli, ...args], { cwd: root, env, timeout: timeoutMs });
+    const result = Bun.spawnSync([node, cli, ...args], { cwd: root, env, timeout: timeoutMs });
     assert.equal(result.exitCode, 0, result.stderr.toString());
     assert.equal(result.stdout.toString().trim(), expected);
   }
 
-  const help = Bun.spawnSync([process.execPath, cli, "help"], { cwd: root, env, timeout: timeoutMs });
+  const help = Bun.spawnSync([node, cli, "help"], { cwd: root, env, timeout: timeoutMs });
   assert.equal(help.exitCode, 0, help.stderr.toString());
   assert.match(help.stdout.toString(), /ringko <command>/);
 
   const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
   const port = probe.port;
   probe.stop(true);
-  server = Bun.spawn([process.execPath, cli, "web", "--shared", "--port", String(port)], {
+  server = Bun.spawn([node, cli, "web", "--shared", "--port", String(port)], {
     cwd: root, env, stdout: "pipe", stderr: "pipe",
   });
   const stderr = new Response(server.stderr).text();
@@ -70,7 +90,8 @@ try {
     if (server.exitCode !== null) throw new Error(`Packaged backend exited: ${await stderr}`);
     try {
       response = await fetch(url, { signal });
-      break;
+      if (response.ok) break;
+      await response.body?.cancel(); await Bun.sleep(100);
     } catch {
       await Bun.sleep(100);
     }
@@ -86,6 +107,10 @@ try {
   assert.match(script.headers.get("content-type") ?? "", /javascript/);
   await script.body?.cancel();
   const info = await (await fetch(`${url}/api/info`, { signal })).json();
+  assert.equal(info.workspace, realpathSync(root), "Packaged backend belongs to a different workspace");
+  backendUrl = url;
+  const owner = await (await fetch(`${url}/api/backend`, { signal })).json();
+  assert.equal(owner.lifecycle.web, 1, "Packaged Web command must retain one frontend lease");
   const upload = new FormData(); upload.append("file", new File(["native-package-smoke"], "native.txt"));
   const uploaded = await fetch(`${url}/api/upload`, { method: "POST", body: upload, signal });
   assert.equal(uploaded.status, 200, "Relocated package's native file module is unavailable");
@@ -99,11 +124,16 @@ try {
   const usage = await usageResponse.json();
   assert.equal(usage.workspace, info.workspace);
   assert.ok(Array.isArray(usage.requests) && Number.isSafeInteger(usage.total));
-  console.log(`Verified relocated ${manifest.name}@${manifest.version}: CLI, echo, WebUI, usage statistics and offline model capacity.`);
+  console.log(`Verified Node-launched ${manifest.name}@${manifest.version} without Bun on PATH: CLI, echo, WebUI, embedded native upload, usage and model capacity.`);
 } finally {
   if (server) {
-    server.kill();
-    await server.exited;
+    // The foreground Web owner and detached execution worker are separate now.
+    if (backendUrl) {
+      try { const response = await fetch(`${backendUrl}/api/backend/stop`, { method: "POST", signal: AbortSignal.timeout(1000) }); await response.body?.cancel(); }
+      catch { /* An exited test backend requires no further shutdown request. */ }
+    }
+    const timer = setTimeout(() => server.kill(), 10_000);
+    try { await server.exited; } finally { clearTimeout(timer); }
   }
   rmSync(root, { recursive: true, force: true });
 }

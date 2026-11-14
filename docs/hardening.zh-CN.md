@@ -40,18 +40,20 @@ PTY 桥接单独依赖第三方 `node-pty`，其 `node-addon-api` 是构建用�
 重编 PTY。缺少对应产物的平台（包括该版本的 Linux）或显式启用源码构建时仍需要工具链。
 仓库的 pnpm 覆盖只约束本仓库的安装；公开 npm 包的下游安装仍遵循 `node-pty` 上游声明。
 
-正式 npm 包包含五个平台的预编译模块；独立版将对应模块内嵌到可执行文件中，
-本文件模块不要求使用者额外编译器，原有 node-pty/平台沙箱前置条件不变。
+正式 npm 主包通过精确版本的 optionalDependencies 选择对应平台二进制包；文件模块已
+内嵌在二进制中，运行时无需外部 Bun，也不要求使用者额外编译该模块。
+原有 node-pty/平台沙箱前置条件不变。
 源码的全套 `pnpm test` / `pnpm build` 会先检查或构建本机模块。
 构建缓存使用源码、头文件和目标指纹，并检查产物的 CPU 架构和 SHA-256。
 
 ```sh
 pnpm build:npm:local  # 仅本机验证，生成 private、受 os/cpu 限制的包
 pnpm test:npm
+pnpm test:npm:install # 真实 tarball 安装及无外部 Bun 的运行、Web 和 PTY 验证
 ```
 
-正式跨平台 npm 打包仍使用 `pnpm build:npm`，要求五个平台对应本轮源码的 CI 产物齐全；
-缺少任何平台会失败，不会悄悄发布缺少原生模块的包。
+正式跨平台 npm 打包使用 `pack-npm.mjs --artifacts <release-artifacts>`，要求五个平台
+对应本轮源码的独立二进制 CI 产物齐全；缺少任何平台会失败。平台包先发布，主包最后发布。
 `release` 工作流的手动运行默认 `build_only=true`，验证五平台及完整 npm 包并保留产物；
 该模式不申请 npm 发布身份，也不运行 npm 或 GitHub Release 发布任务。
 官方 Linux 原生构建使用 manylinux glibc 2.28 基线；macOS 模块使用 13.0 部署目标，

@@ -1,67 +1,67 @@
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { NPM_PACKAGE_NAME, NPM_CLI_COMMAND } from "../src/cli-identity.ts";
+import { NPM_BINARY_TARGETS } from "./npm-platforms.mjs";
 import "./check-version.mjs";
-import { buildNative, nativeTarget, nativeManifest, NATIVE_TARGETS } from "../../tools/scripts/build-native.mjs";
 
 const packageRoot = resolve(import.meta.dir, "..");
 const repositoryRoot = resolve(packageRoot, "../..");
 const output = resolve(repositoryRoot, "dist/npm-tui");
+const platformsRoot = resolve(repositoryRoot, "dist/npm-platforms");
 const manifest = JSON.parse(readFileSync(resolve(packageRoot, "package.json"), "utf8"));
 const appManifest = JSON.parse(readFileSync(resolve(repositoryRoot, "packages/app/package.json"), "utf8"));
 const webui = resolve(repositoryRoot, "packages/webui/dist");
-const npmName = NPM_PACKAGE_NAME;
-const command = NPM_CLI_COMMAND;
-const entry = `${command}.mjs`;
 const localOnly = process.argv.includes("--local-native");
-buildNative(nativeTarget());
-const natives = (localOnly ? [nativeTarget()] : NATIVE_TARGETS).map(target => {
-  const artifact = nativeManifest(target);
-  if (!artifact) throw new Error(`Missing matching ${target} native artifact. Use the release CI matrix, or --local-native for a local-only smoke package.`);
-  return artifact;
+const artifactIndex = process.argv.indexOf("--artifacts");
+if (artifactIndex >= 0 && !process.argv[artifactIndex + 1]) throw new Error("--artifacts requires a directory.");
+const artifacts = artifactIndex >= 0 ? resolve(process.argv[artifactIndex + 1]) : undefined;
+const targets = localOnly ? NPM_BINARY_TARGETS.filter(target => target.platform === process.platform && target.arch === process.arch) : NPM_BINARY_TARGETS;
+if (!targets.length) throw new Error(`Unsupported local platform ${process.platform}-${process.arch}.`);
+if (!existsSync(resolve(webui, "index.html"))) throw new Error("Build @ringko-ai/webui first.");
+
+// Compile locally from current source; complete release packs consume the exact
+// binaries already verified on each target host, never placeholder executables.
+if (localOnly && !artifacts) {
+  const result = spawnSync(process.execPath, [resolve(import.meta.dir, "compile.mjs"), resolve(repositoryRoot, "dist", targets[0].artifact)], { stdio: "inherit" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error("Local standalone build failed.");
+}
+const selected = targets.map(target => {
+  const binary = artifacts ? resolve(artifacts, target.artifact, target.artifact) : resolve(repositoryRoot, "dist", target.artifact);
+  if (!existsSync(binary)) throw new Error(`Missing ${target.artifact}; build on its target host or provide --artifacts <release-artifacts>.`);
+  return { ...target, path: binary };
 });
-
-if (!existsSync(resolve(webui, "index.html"))) {
-  throw new Error("Build @ringko-ai/webui before preparing the npm package.");
+rmSync(output, { recursive: true, force: true }); rmSync(platformsRoot, { recursive: true, force: true });
+mkdirSync(resolve(output, "bin"), { recursive: true }); mkdirSync(platformsRoot, { recursive: true });
+const repository = { type: "git", url: "git+https://github.com/RingKoAI/ringko-harness.git" };
+const optionalDependencies = {};
+for (const target of selected) {
+  const directory = resolve(platformsRoot, `${target.platform}-${target.arch}`);
+  mkdirSync(resolve(directory, "bin"), { recursive: true });
+  const binary = resolve(directory, "bin", target.binary);
+  // Copy bytes into a new inode: preserve release extraction semantics on Windows.
+  writeFileSync(binary, readFileSync(target.path), { mode: 0o755, flag: "wx" });
+  chmodSync(binary, 0o755);
+  writeFileSync(resolve(directory, "package.json"), JSON.stringify({ name: target.name, version: manifest.version,
+    description: `RingKo standalone executable for ${target.platform}-${target.arch}.`, license: manifest.license,
+    os: [target.platform], cpu: [target.arch], files: ["bin/", "LICENSE", "NOTICE"], repository, publishConfig: { access: "public" },
+  }, null, 2) + "\n");
+  for (const name of ["LICENSE", "NOTICE"]) copyFileSync(resolve(repositoryRoot, name), resolve(directory, name));
+  optionalDependencies[target.name] = manifest.version;
 }
-
-rmSync(output, { recursive: true, force: true });
-mkdirSync(resolve(output, "bin"), { recursive: true });
-for (const native of natives) {
-  const directory = resolve(output, "bin/native", native.target); mkdirSync(directory, { recursive: true });
-  copyFileSync(native.path, resolve(directory, native.file));
-  copyFileSync(resolve(native.directory, "binding.json"), resolve(directory, "binding.json"));
-}
-const result = await Bun.build({
-  entrypoints: [resolve(packageRoot, "src/cli.ts")],
-  target: "bun",
-  outdir: resolve(output, "bin"),
-  naming: entry,
-  banner: "#!/usr/bin/env bun",
-});
-if (!result.success || result.outputs.length !== 1) {
-  for (const log of result.logs) console.error(log);
-  throw new Error("Failed to build the npm CLI bundle.");
-}
-
-writeFileSync(resolve(output, "package.json"), `${JSON.stringify({
-  name: npmName,
-  version: manifest.version,
-  description: "Provider-neutral Agent Harness infrastructure: tool registry, approval gate, sessions, terminal and web interfaces.",
-  type: "module",
-  ...(localOnly ? { private: true, os: [process.platform], cpu: [process.arch] } : {}),
-  license: manifest.license,
-  bin: { [command]: `bin/${entry}` },
-  engines: { node: ">=24", bun: ">=1.2.0" },
+copyFileSync(resolve(import.meta.dir, "npm-launcher.mjs"), resolve(output, "bin/ringko.mjs"));
+chmodSync(resolve(output, "bin/ringko.mjs"), 0o755);
+writeFileSync(resolve(output, "package.json"), JSON.stringify({ name: NPM_PACKAGE_NAME, version: manifest.version,
+  description: "Provider-neutral Agent Harness with standalone terminal and web interfaces. No Bun installation required.",
+  type: "module", ...(localOnly ? { private: true, os: [process.platform], cpu: [process.arch] } : {}), license: manifest.license,
+  bin: { [NPM_CLI_COMMAND]: "bin/ringko.mjs" }, engines: { node: ">=24" },
   files: ["bin/", "webui/", "icon/", "README.md", "LICENSE", "NOTICE"],
-  dependencies: { "node-pty": appManifest.dependencies["node-pty"] },
-  repository: { type: "git", url: "git+https://github.com/RingKoAI/ringko-harness.git" },
-  publishConfig: { access: "public" },
-}, null, 2)}\n`);
-copyFileSync(resolve(repositoryRoot, "LICENSE"), resolve(output, "LICENSE"));
-copyFileSync(resolve(repositoryRoot, "NOTICE"), resolve(output, "NOTICE"));
+  optionalDependencies, dependencies: { "node-pty": appManifest.dependencies["node-pty"] }, repository, publishConfig: { access: "public" },
+}, null, 2) + "\n");
+for (const name of ["LICENSE", "NOTICE"]) copyFileSync(resolve(repositoryRoot, name), resolve(output, name));
 copyFileSync(resolve(repositoryRoot, "packages/app/src/terminal-bridge.mjs"), resolve(output, "bin/terminal-bridge.mjs"));
 cpSync(webui, resolve(output, "webui"), { recursive: true });
 cpSync(resolve(repositoryRoot, "icon"), resolve(output, "icon"), { recursive: true });
 copyFileSync(resolve(packageRoot, "NPM.md"), resolve(output, "README.md"));
-console.log(`Prepared ${npmName}@${manifest.version} in ${output}`);
+console.log(`Prepared ${NPM_PACKAGE_NAME}@${manifest.version} and ${selected.length} native executable package(s).`);
