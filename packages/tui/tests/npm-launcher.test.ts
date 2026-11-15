@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { detectInstallation } from "../src/updates/install.ts";
@@ -38,7 +39,7 @@ it("recognizes only the exact binary belonging to an npm wrapper for updates", a
   const executable = join(platform, "bin", process.platform === "win32" ? "ringko.exe" : "ringko");
   writeFileSync(executable, "fixture"); writeFileSync(join(platform, "package.json"), JSON.stringify({ name, version: "1.2.3" }));
   process.env.RINGKO_NPM_ROOT = root;
-  expect(await detectInstallation("/$bunfs/root/main.js", executable)).toEqual({ kind: "npm", packageRoot: realpathSync(root) });
+  expect(await detectInstallation("/$bunfs/root/main.js", executable)).toEqual({ kind: "npm", packageRoot: await realpath(root) });
   await expect(detectInstallation("/$bunfs/root/main.js", process.execPath)).rejects.toThrow("Cannot verify");
   writeFileSync(join(platform, "package.json"), JSON.stringify({ name, version: "other" }));
   await expect(detectInstallation("/$bunfs/root/main.js", executable)).rejects.toThrow("Cannot verify");

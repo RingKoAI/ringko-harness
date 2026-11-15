@@ -79,7 +79,14 @@ export function spawnProcess(command: string, args: readonly string[], options: 
     return stopping;
   };
   function refuse(message: string): void { failure ??= new Error(message); void kill(); }
-  child.stdin.on("error", error => { if (!stopping) { failure ??= error; void kill(); } });
+  child.stdin.on("error", error => {
+    if (stopping) return;
+    // A provider that never reads stdin can close the pipe before the prompt
+    // write completes. The process result (output/exit) still decides success;
+    // if it needed input, it fails or times out without an answer.
+    if ((error as NodeJS.ErrnoException).code === "EPIPE") return;
+    failure ??= error; void kill();
+  });
   child.stderr.on("data", (chunk: Buffer) => {
     stderrBytes += chunk.byteLength;
     if (stderrBytes > LIMITS.stderrBytes) { refuse("Subagent stderr exceeded its byte limit."); return; }
