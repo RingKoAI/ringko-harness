@@ -21,8 +21,11 @@ if (process.platform === "darwin") {
 }
 const pty = requireInstalled("node-pty");
 const child = pty.spawn(process.execPath, [entry, "--workspace", workspace], {
-  cwd: workspace, env: { ...process.env, TERM: "xterm-256color" }, cols: 100, rows: 32,
+  cwd: workspace, env: { ...process.env, TERM: "xterm-256color", COLUMNS: "100", LINES: "32" }, cols: 100, rows: 32,
 });
+// Some PTY hosts deliver the initial size only through a resize signal; make
+// the layout deterministic before the first render.
+child.resize(100, 32);
 let output = "", submitted = false, exiting = false;
 const timer = setTimeout(() => {
   child.kill(); console.error(`Installed TUI timed out:\n${output.slice(-6000)}`); process.exitCode = 1;

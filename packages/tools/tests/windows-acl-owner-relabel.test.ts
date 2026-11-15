@@ -113,7 +113,8 @@ nativeWindows("removes an owner-only ACE left behind by a previous attempt", () 
   const workspace = workspaceWithGrant("*S-1-5-11:(OI)(CI)(M)");
   const temp = sandboxTemp();
   grantOwnerAce(workspace, sid);
-  expect(explicitAces(workspace).some(ace => ace.startsWith(`${sid}|`))).toBe(true);
+  const residual = explicitAces(workspace);
+  if (!residual.some(ace => ace.startsWith(`${sid}|`))) throw new Error(`Residual owner ACE was not created for ${sid}: ${residual.join("; ")}`);
   const result = prepareWindowsAcl("workspace-write", workspace, temp, []);
   const lowered = workspace.toLowerCase();
   expect([...result.degraded].some(root => root.toLowerCase() === lowered)).toBe(false);

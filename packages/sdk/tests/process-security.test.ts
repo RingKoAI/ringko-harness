@@ -20,8 +20,10 @@ async function run(script: string, options: Partial<ConstructorParameters<typeof
 it("omits arbitrary ambient credentials and preserves explicitly authorized credentials", async () => {
   const script = "console.log(JSON.stringify({secret:process.env.RKH_REVIEW_CREDENTIAL??null,explicit:process.env.EXPLICIT_REVIEW_KEY??null,path:Boolean(process.env.PATH||process.env.Path)}))";
   const omitted = await run(script, { env: { EXPLICIT_REVIEW_KEY: "explicit-fixture" } });
+  if (omitted.status !== "completed" || !omitted.content) throw new Error(`fixture failed: status=${omitted.status} diagnostic=${omitted.diagnostic ?? ""} content=${JSON.stringify(omitted.content)}`);
   expect(JSON.parse(omitted.content)).toEqual({ secret: null, explicit: "explicit-fixture", path: true });
   const inherited = await run(script, { inheritEnv: ["RKH_REVIEW_CREDENTIAL"] });
+  if (inherited.status !== "completed" || !inherited.content) throw new Error(`inherited fixture failed: status=${inherited.status} diagnostic=${inherited.diagnostic ?? ""} content=${JSON.stringify(inherited.content)}`);
   expect(JSON.parse(inherited.content).secret).toBe("dummy-sensitive-value");
 });
 
