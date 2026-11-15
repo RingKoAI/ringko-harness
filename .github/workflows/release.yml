@@ -82,7 +82,16 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           if command -v dnf >/dev/null 2>&1; then
-            dnf install -y gcc-c++ make
+            installed=0
+            for version in 14 13 12; do
+              if dnf install -y "gcc-toolset-${version}-gcc-c++" make; then
+                echo "/opt/rh/gcc-toolset-${version}/root/usr/bin" >> "$GITHUB_PATH"
+                echo "LD_LIBRARY_PATH=/opt/rh/gcc-toolset-${version}/root/usr/lib64:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+                installed=1
+                break
+              fi
+            done
+            if [ "$installed" -ne 1 ]; then dnf install -y gcc-c++ make; fi
           else
             apt-get update && apt-get install -y g++ make
           fi
