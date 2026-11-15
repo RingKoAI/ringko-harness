@@ -1,8 +1,24 @@
 // Execute with Node so node-pty and the npm launcher use the customer's runtime.
 const assert = require("node:assert/strict");
 const { createRequire } = require("node:module");
+const { accessSync, chmodSync, constants, existsSync, lstatSync } = require("node:fs");
+const { dirname, join } = require("node:path");
 const [entry, workspace] = process.argv.slice(2);
 const requireInstalled = createRequire(entry);
+// The shipped bridge repairs the macOS launcher bit before loading node-pty;
+// this direct PTY probe must exercise the same extractor behavior.
+if (process.platform === "darwin") {
+  const packageRoot = dirname(requireInstalled.resolve("node-pty/package.json"));
+  for (const directory of ["build/Release", "build/Debug", `prebuilds/${process.platform}-${process.arch}`]) {
+    if (!existsSync(join(packageRoot, directory, "pty.node"))) continue;
+    const helper = join(packageRoot, directory, "spawn-helper");
+    const metadata = lstatSync(helper);
+    if (!metadata.isFile()) throw new Error("The PTY spawn helper must be a regular dependency file.");
+    if ((metadata.mode & 0o111) === 0) chmodSync(helper, metadata.mode | 0o100);
+    accessSync(helper, constants.X_OK);
+    break;
+  }
+}
 const pty = requireInstalled("node-pty");
 const child = pty.spawn(process.execPath, [entry, "--workspace", workspace], {
   cwd: workspace, env: { ...process.env, TERM: "xterm-256color" }, cols: 100, rows: 32,

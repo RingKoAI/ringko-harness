@@ -59,6 +59,16 @@ function labelMarkers(): { path: string }[] {
   } catch { return []; }
 }
 
+/**
+ * Add the same non-inherited TakeOwnership ACE a crashed preparation leaves
+ * behind. Write the DACL through the directory handle so the test does not
+ * depend on icacls canonicalization or the SeSecurityPrivilege requirement.
+ */
+function grantOwnerAce(path: string, sid: string): void {
+  const escaped = path.replaceAll("'", "''");
+  ps(`$d=[IO.DirectoryInfo]::new('${escaped}'); $acl=$d.GetAccessControl('Access'); $sddl=$acl.Sddl; $sIndex=$sddl.LastIndexOf('S:'); $dacl=if($sIndex -ge 0){$sddl.Substring(0,$sIndex)}else{$sddl}; $sacl=if($sIndex -ge 0){$sddl.Substring($sIndex)}else{''}; $acl.SetSecurityDescriptorSddlForm($dacl + "(A;;0x00080000;;;${sid})" + $sacl, 'Access'); $d.SetAccessControl($acl)`);
+}
+
 function workspaceWithGrant(grant: string): string {
   const path = mkdtempSync(join(tmpdir(), "rkh-acl-owner-"));
   cleanup.push(path);
@@ -102,7 +112,7 @@ nativeWindows("removes an owner-only ACE left behind by a previous attempt", () 
   const sid = callerSid();
   const workspace = workspaceWithGrant("*S-1-5-11:(OI)(CI)(M)");
   const temp = sandboxTemp();
-  expect(run(icacls, [workspace, "/grant", `*${sid}:(WO)`, "/Q"]).status).toBe(0);
+  grantOwnerAce(workspace, sid);
   expect(explicitAces(workspace).some(ace => ace.startsWith(`${sid}|`))).toBe(true);
   const result = prepareWindowsAcl("workspace-write", workspace, temp, []);
   const lowered = workspace.toLowerCase();

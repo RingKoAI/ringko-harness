@@ -78,6 +78,15 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      - name: Install Linux PTY build tools
+        if: runner.os == 'Linux'
+        run: |
+          if command -v dnf >/dev/null 2>&1; then
+            dnf install -y gcc-c++ make
+          else
+            apt-get update && apt-get install -y g++ make
+          fi
+
       - name: Verify native file module on target host
         run: |
           pnpm build:native

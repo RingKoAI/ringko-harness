@@ -87,5 +87,13 @@ try {
     const timer = setTimeout(() => frontend.kill(), 10000);
     try { await frontend.exited; } finally { clearTimeout(timer); }
   }
-  rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  // A detached Windows backend can release its cwd a moment after the frontend
+  // exits; retry cleanup instead of failing an otherwise successful install.
+  for (let attempt = 0; ; attempt += 1) {
+    try { rmSync(root, { recursive: true, force: true }); break; }
+    catch (error) {
+      if (attempt >= 40) { console.warn(`Warning: could not remove isolated npm fixture ${root}: ${error instanceof Error ? error.message : String(error)}`); break; }
+      await Bun.sleep(250);
+    }
+  }
 }
