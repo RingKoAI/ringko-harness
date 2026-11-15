@@ -4,9 +4,12 @@ RingKo connects to MCP servers over stdio, Streamable HTTP or legacy SSE, and
 registers their tools beside the built-in tools. MCP tools pass through the same
 risk assessment and approval gate as everything else.
 
-Configuration is read when the backend starts. Stop active sessions before
-changing it; the Web UI refuses to save while a session is running, and a file
-edited by hand needs a backend restart.
+Configuration is read when the backend starts. After editing files, use
+**Settings → Connectors → Refresh** or `POST /api/reload` to rescan the bound
+workspace and rebuild MCP connections with current host sandbox and endpoint
+authorizations. A configured remote server is not automatically authorized.
+Reload returns `409` while runs, uploads or terminals remain active; finish them
+and retry. Existing frontend leases remain renewable during reconnection.
 
 ## Configuration files
 
@@ -18,10 +21,15 @@ edited by hand needs a backend restart.
 | Shared | `~/.agents/.mcp.json` |
 
 The project root is the nearest ancestor containing `.git`, `.mcp.json`,
-`ringko.json` or `.agents`. Files are merged in the order above, and the first
+`ringko.json`, `.agents` or `.ringko`. Files are merged in the order above, and the first
 definition of a server name wins. A missing or empty file is skipped. Invalid
-JSON, a non-object `mcpServers` field, or a non-object server definition is an
+JSON, unreadable files, a non-object `mcpServers` field, or a non-object server definition is an
 error, not a silent skip.
+
+Parser errors do not echo file contents. Discovery follows each backend's actual
+bound workspace. The registry's `current` field is a shared startup preference;
+another backend changing it does not switch an existing backend. When CLI leases
+or `--shared` pin a workspace, registering another project does not activate it.
 
 Each file has the same shape:
 

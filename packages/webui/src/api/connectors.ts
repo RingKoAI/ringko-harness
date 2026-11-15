@@ -86,7 +86,7 @@ export async function saveMcp(
 }
 
 export function fetchSkills(): Promise<SkillEntry[]> {
-  return getJson<SkillEntry[]>("/api/skills");
+  return getJson<SkillEntry[]>("/api/skills?refresh=1");
 }
 
 export async function createSkill(input: { name: string; description?: string; body?: string }): Promise<SkillEntry[]> {

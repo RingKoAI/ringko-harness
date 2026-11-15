@@ -42,6 +42,7 @@ it("refuses switching sandbox policy during a real accepted run", async () => {
   const run = await client.run({ prompt: "hold the mode" });
   expect((await client.snapshot(run.sessionId)).busy).toBe(true);
   await expect(client.request("/api/access", { preset: "full-access" })).rejects.toMatchObject({ status: 409 });
+  await expect(client.request("/api/reload", {})).rejects.toMatchObject({ status: 409 });
   expect(loadConfig().sandbox?.mode).toBeUndefined();
   const deadline = Date.now() + 5000; while ((await client.snapshot(run.sessionId)).busy && Date.now() < deadline) await Bun.sleep(20);
   const info = await client.request<{ permissionPreset: string }>("/api/access", { preset: "read-only" }); expect(info.permissionPreset).toBe("read-only");

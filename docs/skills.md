@@ -28,6 +28,10 @@ Project skills win over user skills with the same name; `~/.ringko` wins over
 `~/.agents`. Plugin skills are namespaced as `<plugin-id>:<skill-name>` and
 listed after installed skills.
 
+A `.ringko` directory also identifies a project root without a Git or `.agents`
+marker. Discovery skips symlinked skill directories and symlinked `SKILL.md`
+files, and does not recursively scan every independent project below a workspace.
+
 ## Installing from the REPL
 
 ```
@@ -52,4 +56,7 @@ remove global skills. Programmatic installation uses `installSkill` from
 `@ringko-ai/config`, `RuntimeManager.installSkill` / `RuntimeContext.installSkill`
 (which also emit the `skill/installed` event), or `POST /api/skills/install` with
 `{ "source": "...", "scope": "global" | "project" }`. `GET /api/skills`
-returns the current inventory.
+returns the cached inventory; `GET /api/skills?refresh=1` rescans the bound
+workspace first. Opening the Web skills page or clicking Refresh uses the latter,
+so manual additions, edits and removals do not require a backend restart.
+`POST /api/reload` rescans skills and also rebuilds MCP connections.

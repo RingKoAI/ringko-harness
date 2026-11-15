@@ -400,7 +400,8 @@ export async function runCli(argv: readonly string[], io: CliIo, options: { star
       } catch (error) { io.err(error instanceof Error ? error.message : "Service request failed."); return 1; }
     }
     case "config":
-      return configCommand(parsed, io);
+      try { return configCommand(parsed, io); }
+      catch (error) { io.err(error instanceof Error ? error.message : "Cannot update configuration."); return 2; }
     case "run":
       return runCommand(parsed, io);
     case "loop":

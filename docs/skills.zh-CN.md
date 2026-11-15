@@ -25,6 +25,9 @@ Review the change, then report findings by severity.
 同名时项目技能优先于用户技能；`~/.ringko` 优先于 `~/.agents`。插件技能使用
 `<plugin-id>:<skill-name>` 命名空间，并排在已安装技能之后。
 
+包含 `.ringko` 的目录也可独立识别为项目根目录，不要求另有 Git 或 `.agents` 标记。
+发现过程跳过符号链接技能目录和符号链接 `SKILL.md`，不会递归扫描工作区下所有独立项目。
+
 ## 从 REPL 安装
 
 ```
@@ -46,4 +49,6 @@ REPL 会询问安装到全局目录（`~/.ringko/skills`）还是当前项目目
 `RuntimeContext.installSkill`（同时发出 `skill/installed` 事件），或
 `POST /api/skills/install`，请求体为
 `{ "source": "...", "scope": "global" | "project" }`。`GET /api/skills` 返回
-当前技能清单。
+当前缓存的技能清单；`GET /api/skills?refresh=1` 先重新扫描当前绑定工作区。
+Web UI 打开技能页或点击刷新会使用后者，因此手工新增、修改和删除技能后无需重启后端。
+完整的 `POST /api/reload` 会同时重扫技能并重建 MCP 连接。

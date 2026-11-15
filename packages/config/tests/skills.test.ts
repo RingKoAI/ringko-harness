@@ -124,6 +124,11 @@ describe("installSkill", () => {
 });
 
 describe("discoverSkills", () => {
+  it("discovers workspace-owned .ringko skills without requiring Git or .agents markers", () => {
+    const project = join(home, "workspace");
+    writeSkill(join(project, ".ringko"), "workspace-owned", "---\nname: workspace-owned\n---\nBody");
+    expect(discoverSkills({ env, cwd: project }).find(skill => skill.name === "workspace-owned")).toMatchObject({ source: "project", scope: "project" });
+  });
   it("finds skills under both roots", () => {
     writeSkill(join(home, ".ringko"), "alpha", "---\nname: alpha\ndescription: A.\n---\n");
     writeSkill(join(home, ".agents"), "beta", "---\nname: beta\ndescription: B.\n---\n");

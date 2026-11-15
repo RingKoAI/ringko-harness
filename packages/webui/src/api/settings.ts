@@ -119,7 +119,10 @@ export async function setModel(model: string): Promise<Info> {
 export async function reload(): Promise<Info> {
   const response = await fetch(`${BASE}/api/reload`, { method: "POST", headers: authHeaders() });
   if (response.status === 401) throw new UnauthorizedError();
-  if (!response.ok) throw new Error(`Reload failed (${response.status}).`);
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null) as { error?: unknown } | null;
+    throw new Error(typeof detail?.error === "string" ? detail.error : `Reload failed (${response.status}).`);
+  }
   return (await response.json()) as Info;
 }
 

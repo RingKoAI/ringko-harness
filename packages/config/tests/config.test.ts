@@ -128,6 +128,23 @@ it("cleans the temporary config on a failed atomic replacement without changing 
 });
 
 describe("dotted access", () => {
+  it("rejects prototype paths and empty components without mutating global prototypes", () => {
+    const probe = "__rkh_config_probe";
+    try {
+      expect(() => setConfigValue({}, `__proto__.${probe}`, true)).toThrow("configuration key");
+      expect(Object.hasOwn(Object.prototype, probe)).toBe(false);
+      for (const key of ["constructor.prototype.value", "plugins.__proto__.trusted", "", "updates..autoUpdate"]) {
+        expect(() => getConfigValue({}, key)).toThrow("configuration key");
+        expect(() => setConfigValue({}, key, true)).toThrow("configuration key");
+        expect(() => unsetConfigValue({}, key)).toThrow("configuration key");
+      }
+    } finally { Reflect.deleteProperty(Object.prototype, probe); }
+  });
+
+  it("does not read inherited configuration values", () => {
+    const config = Object.create({ workspace: "inherited" });
+    expect(getConfigValue(config, "workspace")).toBeUndefined();
+  });
   it("sets, gets, and unsets nested keys", () => {
     const withValue = setConfigValue({}, "provider.apiKey", "test-key");
     expect(getConfigValue(withValue, "provider.apiKey")).toBe("test-key");

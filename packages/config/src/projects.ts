@@ -1,7 +1,7 @@
 // Project (workspace) registry at `~/.ringko/projects.json`.
 //
-// A project names a workspace directory; exactly one may be active. The active
-// project determines the workspace used for tools and where sessions are grouped.
+// A project names a workspace directory. `current` is a shared startup preference;
+// live backends report the project matching their own bound workspace.
 import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { projectsPath } from "./paths.ts";

@@ -3,6 +3,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { applyProxyEnv, type OAuthCredential } from "@ringko-ai/config";
+import { oauthFailureMessage } from "./errors.ts";
 
 export const ANTHROPIC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 export const ANTHROPIC_AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
@@ -56,7 +57,7 @@ async function postJson(url: string, body: Record<string, string>): Promise<Toke
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    throw new Error(`Anthropic token request failed: ${response.status} ${detail.slice(0, 200)}`);
+    throw new Error(oauthFailureMessage("Anthropic token", response.status, detail));
   }
   return (await response.json()) as TokenResponse;
 }
@@ -72,7 +73,9 @@ export function refreshAnthropic(refresh: string): Promise<OAuthCredential> {
 /** Browser flow: open the authorize URL and wait for the loopback callback. */
 export async function loginAnthropic(onUrl: (url: string) => void): Promise<OAuthCredential> {
   const { verifier, challenge } = generatePkce();
-  const state = verifier;
+  // State is public (authorize URL, browser history); the PKCE verifier must
+  // stay secret, so it is never reused as the CSRF state value.
+  const state = base64Url(randomBytes(32));
   const authorizeUrl = `${ANTHROPIC_AUTHORIZE_URL}?${new URLSearchParams({
     code: "true",
     client_id: ANTHROPIC_CLIENT_ID,

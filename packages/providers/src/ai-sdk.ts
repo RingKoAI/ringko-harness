@@ -246,9 +246,15 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-/** Pull `code`/`param`/`type` out of a provider error body, if present. */
+/** Only known protocol identifiers may cross the provider-error boundary. */
+const PUBLIC_PROVIDER_ERROR_CODES = new Set(["invalid_parameter", "invalid_api_key", "invalid_request_error", "authentication_error", "permission_denied", "rate_limit_exceeded", "insufficient_quota", "model_not_found", "context_length_exceeded", "server_error", "overloaded_error", "unsupported_parameter"]);
+const MAX_PROVIDER_ERROR_CHARACTERS = 64 * 1024;
+class ModelResponseError extends Error {}
+
+/** Pull known codes out of a bounded provider body; never reflect arbitrary fields. */
 function providerErrorFields(body: string): string[] {
   const fields: string[] = [];
+  if (body.length > MAX_PROVIDER_ERROR_CHARACTERS) return fields;
   let parsed: unknown;
   try {
     parsed = JSON.parse(body);
@@ -258,26 +264,26 @@ function providerErrorFields(body: string): string[] {
   const outer = asRecord(parsed);
   const error = asRecord(outer?.error) ?? outer;
   if (!error) return fields;
-  for (const key of ["code", "param", "type"] as const) {
+  for (const key of ["code", "type"] as const) {
     const value = error[key];
-    if (typeof value === "string" && value.length > 0) fields.push(`${key}=${value}`);
+    if (typeof value === "string" && PUBLIC_PROVIDER_ERROR_CODES.has(value)) fields.push(`${key}=${value}`);
   }
   return fields;
 }
 
-/** Turn an AI SDK error into a message that includes the error code and HTTP details. */
+/** Untrusted provider text/URLs may echo credentials. Expose fixed copy and safe codes only. */
 function describeModelError(error: unknown): Error {
+  if (error instanceof ModelResponseError) return error;
   const record = asRecord(error);
-  if (record) {
-    const parts: string[] = [];
-    if (typeof record.message === "string" && record.message.length > 0) parts.push(record.message);
-    if (typeof record.statusCode === "number") parts.push(`status=${record.statusCode}`);
+  if (record?.name === "AbortError") return new DOMException("Model request cancelled.", "AbortError");
+  if (record?.name === "TimeoutError") return new Error("Model request timed out. Retry or check the provider connection.");
+  if (typeof record?.statusCode === "number" && Number.isInteger(record.statusCode) && record.statusCode >= 100 && record.statusCode <= 599) {
+    const parts = ["Model request failed", `status=${record.statusCode}`];
     if (typeof record.responseBody === "string") parts.push(...providerErrorFields(record.responseBody));
-    if (typeof record.url === "string") parts.push(`url=${record.url}`);
-    if (typeof record.responseBody === "string") parts.push(`body=${record.responseBody.slice(0, 500)}`);
-    if (parts.length > 0) return new Error(parts.join(" | "));
+    parts.push(record.statusCode === 401 || record.statusCode === 403 ? "Check the API key and model permissions." : record.statusCode === 429 ? "Check provider quota and rate limits." : "Check the model, endpoint and request limits; retry if the provider is unavailable.");
+    return new Error(parts.join(" | "));
   }
-  return error instanceof Error ? error : new Error(String(error));
+  return new Error("Model transport failed. Check the provider connection and configuration, then retry.");
 }
 
 function isInvalidParameter(error: unknown): boolean {
@@ -375,6 +381,28 @@ interface RawToolCall {
 
 export const TOOL_STREAM_LIMITS = { calls: 128, argumentCharacters: 1_048_576, totalCharacters: 4_194_304, identifierCharacters: 512 } as const;
 
+function toolCallCharacters(call: RawToolCall): number {
+  if (!call || typeof call.toolCallId !== "string" || !call.toolCallId || call.toolCallId.length > TOOL_STREAM_LIMITS.identifierCharacters || typeof call.toolName !== "string" || !call.toolName || call.toolName.length > TOOL_STREAM_LIMITS.identifierCharacters) throw new ModelResponseError("Invalid tool call identity.");
+  if (call.invalid) throw new ModelResponseError("Model returned invalid tool arguments; no tools were executed.");
+  let input: string | undefined;
+  try { input = JSON.stringify(call.input); }
+  catch { throw new ModelResponseError("Model returned invalid tool arguments; no tools were executed."); }
+  if (input === undefined) throw new ModelResponseError("Model returned invalid tool arguments; no tools were executed.");
+  if (input.length > TOOL_STREAM_LIMITS.argumentCharacters) throw new ModelResponseError("Tool arguments exceed the size limit.");
+  return input.length;
+}
+
+function validateCompletedToolCalls(calls: readonly RawToolCall[]): void {
+  if (calls.length > TOOL_STREAM_LIMITS.calls) throw new ModelResponseError("Excessive completed tool calls.");
+  const ids = new Set<string>(); let total = 0;
+  for (const call of calls) {
+    total += toolCallCharacters(call);
+    if (ids.has(call.toolCallId)) throw new ModelResponseError("Duplicate tool call identity.");
+    ids.add(call.toolCallId);
+    if (total > TOOL_STREAM_LIMITS.totalCharacters) throw new ModelResponseError("Tool arguments exceed the aggregate size limit.");
+  }
+}
+
 /** Classify a provider tool failure without echoing its body into the user-facing error. */
 export function toolFailureMessage(error: unknown): string {
   const record = asRecord(error);
@@ -398,7 +426,7 @@ function toTurn(
   reasoning: string,
   reasoningDetails: readonly ReasoningDetail[],
 ): ModelTurn {
-  if (calls.some(call => call.invalid)) throw new Error("Model returned invalid tool arguments; no tools were executed.");
+  validateCompletedToolCalls(calls);
   const toolCalls: ModelToolCall[] = calls.map((call) => ({
     id: call.toolCallId,
     name: call.toolName,
@@ -457,7 +485,8 @@ export function createAiSdkModelClient(model: LanguageModel, options: AiSdkModel
         const controller = new AbortController();
         const signal = request.signal ? AbortSignal.any([request.signal, controller.signal]) : controller.signal;
         const pending = new Map<string, { size: number; ended: boolean }>();
-        let total = 0;
+        const completedIds = new Set<string>();
+        let total = 0, completeCharacters = 0;
         // Errors are propagated below; avoid the SDK logging raw provider bodies.
         const result = streamText({ ...input, abortSignal: signal, onError: () => {} });
         try {
@@ -468,36 +497,40 @@ export function createAiSdkModelClient(model: LanguageModel, options: AiSdkModel
             request.onDelta?.({ kind: part.type === "text-delta" ? "text" : "reasoning", text: part.text });
           } else if (part.type === "tool-input-start") {
             delivered = true;
-            if (!part.id || !part.toolName || part.id.length > TOOL_STREAM_LIMITS.identifierCharacters || part.toolName.length > TOOL_STREAM_LIMITS.identifierCharacters || pending.has(part.id) || pending.size >= TOOL_STREAM_LIMITS.calls) throw new Error("Invalid or excessive streamed tool calls.");
+            if (!part.id || !part.toolName || part.id.length > TOOL_STREAM_LIMITS.identifierCharacters || part.toolName.length > TOOL_STREAM_LIMITS.identifierCharacters || pending.has(part.id) || pending.size >= TOOL_STREAM_LIMITS.calls) throw new ModelResponseError("Invalid or excessive streamed tool calls.");
             pending.set(part.id, { size: 0, ended: false });
             request.onToolInput?.({ kind: "start", id: part.id, name: part.toolName });
           } else if (part.type === "tool-input-delta") {
             delivered = true;
             const call = pending.get(part.id);
-            if (!call || call.ended) throw new Error("Out-of-order streamed tool arguments.");
+            if (!call || call.ended) throw new ModelResponseError("Out-of-order streamed tool arguments.");
             call.size += part.delta.length; total += part.delta.length;
-            if (call.size > TOOL_STREAM_LIMITS.argumentCharacters || total > TOOL_STREAM_LIMITS.totalCharacters) throw new Error("Streamed tool arguments exceed the size limit.");
+            if (call.size > TOOL_STREAM_LIMITS.argumentCharacters || total > TOOL_STREAM_LIMITS.totalCharacters) throw new ModelResponseError("Streamed tool arguments exceed the size limit.");
             request.onToolInput?.({ kind: "delta", id: part.id, text: part.delta });
           } else if (part.type === "tool-input-end") {
             const call = pending.get(part.id);
-            if (!call || call.ended) throw new Error("Out-of-order streamed tool completion.");
+            if (!call || call.ended) throw new ModelResponseError("Out-of-order streamed tool completion.");
             call.ended = true;
             request.onToolInput?.({ kind: "end", id: part.id });
           } else if (part.type === "tool-call") {
             delivered = true;
+            if (completedIds.has(part.toolCallId) || completedIds.size >= TOOL_STREAM_LIMITS.calls) throw new ModelResponseError("Invalid or excessive completed tool calls.");
+            completedIds.add(part.toolCallId);
+            completeCharacters += toolCallCharacters(part);
+            if (completeCharacters > TOOL_STREAM_LIMITS.totalCharacters) throw new ModelResponseError("Tool arguments exceed the aggregate size limit.");
           } else if (part.type === "tool-error") {
             // Never echo the provider's raw tool error: only its class decides
             // whether this was unparsable arguments or an execution failure.
-            throw new Error(toolFailureMessage(part.error));
+            throw new ModelResponseError(toolFailureMessage(part.error));
           } else if (part.type === "tool-output-denied") {
-            throw new Error("The provider denied a tool output before the harness could execute the call.");
+            throw new ModelResponseError("The provider denied a tool output before the harness could execute the call.");
           } else if (part.type === "error") throw part.error;
         }
         request.signal?.throwIfAborted();
         const calls = await result.toolCalls as readonly RawToolCall[];
         // Preview end events are presentation-only: tolerate a missing end when
         // the authoritative call exists, but never accept a truncated call.
-        if ([...pending].some(([id]) => !calls.some(complete => complete.toolCallId === id))) throw new Error("Tool arguments ended before a complete tool call was received.");
+        if ([...pending].some(([id]) => !calls.some(complete => complete.toolCallId === id))) throw new ModelResponseError("Tool arguments ended before a complete tool call was received.");
         for (const [id, call] of pending) if (!call.ended) request.onToolInput?.({ kind: "end", id });
         return toTurn(await result.text, calls, await result.usage, (await result.reasoningText) ?? "", toReasoningDetails(await result.reasoning));
         } finally { controller.abort(); }
@@ -522,7 +555,7 @@ export function createAiSdkModelClient(model: LanguageModel, options: AiSdkModel
     } catch (error) {
       // Some compatible gateways reject an explicit max output token value;
       // retry once without it so the request still succeeds.
-      if (options.maxOutputTokens !== undefined && isInvalidParameter(error)) {
+      if (!request.signal?.aborted && options.maxOutputTokens !== undefined && isInvalidParameter(error)) {
         try {
           result = await generateText({
             model,

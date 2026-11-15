@@ -106,6 +106,40 @@ for (const mode of ["danger-full-access", "workspace-write", "read-only"] as con
   }
 }, process.platform === "win32" ? 30_000 : 15_000);
 
+it("enforces the terminal session cap when creation requests arrive together", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rkh-terminal-capacity-"));
+  const previousHome = process.env.RINGKO_HOME;
+  process.env.RINGKO_HOME = root;
+  mkdirSync(join(root, ".ringko"), { recursive: true });
+  writeFileSync(join(root, ".ringko", "settings.local.json"), JSON.stringify({ sandbox: { mode: "danger-full-access" } }));
+  const app = startServer({ workspace: root, port: 0, authToken: "terminal-capacity-token" });
+  const headers = { authorization: "Bearer terminal-capacity-token", "content-type": "application/json" };
+  try {
+    const oversized = await fetch(`${app.url}/api/terminal`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ padding: "x".repeat(1_100_000) }),
+    });
+    expect(oversized.status).toBe(400);
+    const responses = await Promise.all(Array.from({ length: 6 }, () =>
+      fetch(`${app.url}/api/terminal`, { method: "POST", headers, body: JSON.stringify({ cols: 80, rows: 24 }) })));
+    const accepted = responses.filter((response) => response.status === 200);
+    const rejected = responses.filter((response) => response.status === 429);
+    expect(accepted.length).toBeLessThanOrEqual(4);
+    expect(accepted.length).toBeGreaterThan(0);
+    expect(accepted.length + rejected.length).toBe(6);
+    for (const response of accepted) {
+      const { id } = await response.json() as { id: string };
+      await fetch(`${app.url}/api/terminal/${id}`, { method: "DELETE", headers });
+    }
+  } finally {
+    app.stop();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (previousHome === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previousHome;
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}, 30_000);
+
 it("returns a startup error when the PTY shell cannot be spawned", async () => {
   const root = mkdtempSync(join(tmpdir(), "rkh-terminal-failure-"));
   const previousHome = process.env.RINGKO_HOME;

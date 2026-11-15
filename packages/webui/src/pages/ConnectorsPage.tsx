@@ -1,7 +1,7 @@
 import { FlaskConical, KeyRound, LoaderCircle, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { fetchMcp, fetchMcpConnected, fetchOAuthStatus, saveMcp, startMcpOAuth, testMcp, type McpConnected } from '@/api'
+import { fetchMcp, fetchMcpConnected, fetchOAuthStatus, reload, saveMcp, startMcpOAuth, testMcp, type McpConnected } from '@/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -103,6 +103,14 @@ export function ConnectorsPage() {
   }, [])
 
   useEffect(load, [load])
+
+  function refresh(): void {
+    setLoading(true)
+    void reload().then(load).catch((cause: unknown) => {
+      setLoading(false)
+      toast.error(cause instanceof Error ? cause.message : String(cause))
+    })
+  }
 
   // MCP connections start asynchronously after the backend starts. Retry the
   // status once so a page opened immediately does not keep "none connected".
@@ -310,7 +318,7 @@ export function ConnectorsPage() {
           <p className="text-sm font-medium">{t('settings.connectors')}</p>
           <p className="mt-1 text-xs text-muted-foreground">{t('connectors.hint')}</p>
         </div>
-        <Button size="sm" variant="outline" onClick={load} disabled={loading}>
+        <Button size="sm" variant="outline" onClick={refresh} disabled={loading}>
           <RefreshCw className={loading ? 'animate-spin' : undefined} data-icon="inline-start" />
           {t('workspace.refresh')}
         </Button>

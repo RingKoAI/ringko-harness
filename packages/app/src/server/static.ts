@@ -1,7 +1,7 @@
 // Static WebUI assets and Vite dev-server proxying.
 
 import { readFile } from "node:fs/promises";
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { extname, join, relative, resolve, sep } from "node:path";
 import { isPathInside } from "@ringko-ai/config";
 import { json } from "./http.ts";
@@ -19,25 +19,44 @@ const MIME: Record<string, string> = {
   ".map": "application/json; charset=utf-8",
 };
 
+function notFound(): Response {
+  return json({ error: "not found" }, 404);
+}
+
+function canonical(path: string): string | undefined {
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function serveStatic(webuiDir: string, pathname: string): Promise<Response> {
   const rel = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
   const root = resolve(webuiDir);
   const target = resolve(join(root, rel));
-  if (!isPathInside(root, target)) return json({ error: "not found" }, 404);
+  // Lexical containment rejects traversal before touching the filesystem.
+  if (!isPathInside(root, target)) return notFound();
   let file = target;
   try {
     if (statSync(file).isDirectory()) file = join(file, "index.html");
   } catch {
-    file = join(webuiDir, "index.html");
+    file = join(root, "index.html");
   }
+  // Canonical containment also rejects links (including directory junctions)
+  // that escape the asset root; otherwise a local writer could expose any file
+  // reachable through a link placed in the WebUI directory.
+  const canonicalRoot = canonical(root);
+  const canonicalFile = canonical(file);
+  if (!canonicalRoot || !canonicalFile || !isPathInside(canonicalRoot, canonicalFile)) return notFound();
   try {
-    const bytes = await readFile(file);
+    const bytes = await readFile(canonicalFile);
     // Content-hashed bundles can be cached forever; HTML must revalidate so a
     // rebuilt WebUI is picked up instead of pinning the previous asset names.
-    const hashedAsset = relative(webuiDir, file).split(sep)[0] === "assets";
+    const hashedAsset = relative(canonicalRoot, canonicalFile).split(sep)[0] === "assets";
     return new Response(bytes, {
       headers: {
-        "content-type": MIME[extname(file)] ?? "application/octet-stream",
+        "content-type": MIME[extname(canonicalFile)] ?? "application/octet-stream",
         "cache-control": hashedAsset ? "public, max-age=31536000, immutable" : "no-cache",
       },
     });

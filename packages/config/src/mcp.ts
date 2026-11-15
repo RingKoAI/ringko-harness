@@ -6,6 +6,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { writeDiagnostic } from "./diagnostics.ts";
+import { assertConfigTarget } from "./json-file.ts";
 import { findProjectRoot, mcpPaths, projectMcpPaths } from "./paths.ts";
 import { loadPlugins, type LoadedPlugin } from "./plugins.ts";
 import { isRecord } from "./util.ts";
@@ -62,17 +63,18 @@ export function loadMcpServers(options: LoadMcpServersOptions = {}): McpServer[]
   for (const entry of entries) {
     let text: string;
     try {
+      if (!assertConfigTarget(entry.path)) continue;
       text = readFileSync(entry.path, "utf8");
     } catch {
-      continue; // missing file: skip
+      throw new Error(`Cannot read MCP file "${entry.path}". Check its permissions.`);
     }
     if (text.trim().length === 0) continue; // empty placeholder file: skip
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
-    } catch (error) {
-      throw new Error(`MCP file "${entry.path}" is not valid JSON: ${(error as Error).message}`);
+    } catch {
+      throw new Error(`MCP file "${entry.path}" is not valid JSON. Fix the file and reload.`);
     }
     if (!isRecord(parsed)) {
       throw new Error(`MCP file "${entry.path}" must be a JSON object.`);
@@ -114,16 +116,17 @@ export type McpServerMap = Record<string, McpServerConfig>;
 export function loadMcpServerMap(env: NodeJS.ProcessEnv = process.env): McpServerMap {
   let text: string;
   try {
+    if (!assertConfigTarget(mcpPaths(env)[0])) return {};
     text = readFileSync(mcpPaths(env)[0], "utf8");
   } catch {
-    return {};
+    throw new Error("Cannot read the user MCP configuration. Check its permissions.");
   }
   if (text.trim().length === 0) return {};
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
-  } catch (error) {
-    throw new Error(`MCP file is not valid JSON: ${(error as Error).message}`);
+  } catch {
+    throw new Error("MCP file is not valid JSON. Fix the file and reload.");
   }
   if (!isRecord(parsed) || parsed.mcpServers === undefined) return {};
   if (!isRecord(parsed.mcpServers)) throw new Error('MCP field "mcpServers" must be an object.');

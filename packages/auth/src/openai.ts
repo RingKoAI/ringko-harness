@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { applyProxyEnv, type OAuthCredential } from "@ringko-ai/config";
 import { CODEX_ORIGINATOR, codexUserAgent } from "./codex.ts";
 import { OAUTH_CALLBACK_HEADERS, renderOAuthCallbackPage, type OAuthFailure } from "./callback-page.ts";
+import { oauthFailureMessage } from "./errors.ts";
 
 export const OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 export const OPENAI_ISSUER = "https://auth.openai.com";
@@ -138,7 +139,7 @@ async function postForm(url: string, form: Record<string, string>): Promise<Toke
   });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`OAuth request failed: ${response.status}${regionBlockHint(response.status, body)} ${body.slice(0, 200)}`);
+    throw new Error(`${oauthFailureMessage("OAuth", response.status, body)}${regionBlockHint(response.status, body)}`);
   }
   return (await response.json()) as TokenResponse;
 }

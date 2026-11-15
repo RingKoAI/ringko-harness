@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadMcpServers } from "../src/mcp.ts";
+import { loadMcpServerMap, loadMcpServers } from "../src/mcp.ts";
 
 let home: string;
 let env: NodeJS.ProcessEnv;
@@ -61,5 +61,39 @@ describe("loadMcpServers", () => {
 
     writeMcp(".ringko", JSON.stringify({ mcpServers: [] }));
     expect(() => loadMcpServers({ env, cwd: home })).toThrow('"mcpServers" must be an object');
+  });
+
+  it("does not reflect malformed configuration contents in parser errors", () => {
+    const secret = "fixture-mcp-credential-DO_NOT_EXPOSE";
+    writeMcp(".ringko", `{"token":"${secret}" invalid}`);
+    for (const load of [() => loadMcpServers({ env, cwd: home }), () => loadMcpServerMap(env)]) {
+      expect(load).toThrow("not valid JSON");
+      expect(load).not.toThrow(secret);
+    }
+  });
+
+  it("reports an unreadable MCP target instead of treating it as a missing configuration", () => {
+    mkdirSync(join(home, ".ringko/.mcp.json"), { recursive: true });
+    expect(() => loadMcpServers({ env, cwd: home })).toThrow("Cannot read");
+    expect(() => loadMcpServerMap(env)).toThrow("Cannot read");
+  });
+
+  it("keeps missing and empty MCP maps valid", () => {
+    expect(loadMcpServerMap(env)).toEqual({});
+    writeMcp(".ringko", "  \n");
+    expect(loadMcpServerMap(env)).toEqual({});
+    expect(loadMcpServers({ env, cwd: home })).toEqual([]);
+  });
+
+  it("rejects broken MCP links instead of silently ignoring their configuration", () => {
+    mkdirSync(join(home, ".ringko"));
+    const target = join(home, "missing.json"), link = join(home, ".ringko/.mcp.json");
+    if (process.platform === "win32") {
+      // Junctions exercise the same dangling-target branch without requiring
+      // the Windows file-symlink privilege on development machines.
+      mkdirSync(target); symlinkSync(target, link, "junction"); rmSync(target, { recursive: true });
+    } else symlinkSync(target, link, "file");
+    expect(() => loadMcpServers({ env, cwd: home })).toThrow("Cannot read");
+    expect(() => loadMcpServerMap(env)).toThrow("Cannot read");
   });
 });

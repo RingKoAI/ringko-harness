@@ -25,7 +25,7 @@ it("still forces the Codex streaming transport through the independent OAuth ada
       return Response.json({ error: { message: "isolated-stream-probe" } }, { status: 400 });
     }) as typeof fetch;
     const client = createProviderClient({ provider: "openai-oauth", model: "gpt-fixture", stream: false });
-    await expect(client({ messages: [{ role: "user", content: "probe" }], tools: [] })).rejects.toThrow("isolated-stream-probe");
+    await expect(client({ messages: [{ role: "user", content: "probe" }], tools: [] })).rejects.toThrow("status=400");
     expect(captured).toHaveLength(1); expect(new URL(captured[0]!.url).pathname).toBe("/backend-api/codex/responses"); expect(captured[0]!.body.stream).toBe(true); expect(captured[0]!.body.store).toBe(false);
   } finally {
     globalThis.fetch = originalFetch;

@@ -256,6 +256,12 @@ describe("ringko cli", () => {
 });
 
 describe("ringko config", () => {
+  it("reports unsafe dotted keys as argument failures without modifying settings", async () => {
+    const result = collect();
+    expect(await runCli(["config", "set", "__proto__.__rkh_cli_probe", "true"], result.io)).toBe(2);
+    expect(result.err.join(" ")).toContain("configuration key");
+    expect(Object.hasOwn(Object.prototype, "__rkh_cli_probe")).toBe(false);
+  });
   it("prints the config file paths", async () => {
     const { io, out } = collect();
     expect(await runCli(["config", "path"], io)).toBe(0);

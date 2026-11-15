@@ -8,6 +8,25 @@ import { getToolAuth, isRecord, setToolAuth, type ToolOAuthCredential } from "@r
 const CALLBACK_PATH = "/callback";
 const AUTHORIZE_TIMEOUT_MS = 5 * 60 * 1000;
 const REFRESH_SKEW_MS = 60_000;
+const METADATA_TIMEOUT_MS = 15_000;
+const TOKEN_TIMEOUT_MS = 30_000;
+/** Token endpoints may redirect; following one would forward credentials. */
+const NO_REDIRECT: RequestRedirect = "error";
+const SAFE_ERROR_CODE = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+
+function failureMessage(label: string, status: number, body: string): string {
+  let code: string | undefined;
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (isRecord(parsed)) {
+      const value = parsed.error;
+      if (typeof value === "string" && SAFE_ERROR_CODE.test(value)) code = value;
+    }
+  } catch {
+    // Arbitrary provider bodies are not safe to reflect.
+  }
+  return `${label} (${status})${code ? `: ${code}` : ""}`;
+}
 
 function base64Url(bytes: Buffer): string {
   return bytes.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -15,7 +34,7 @@ function base64Url(bytes: Buffer): string {
 
 async function getJson(url: string): Promise<Record<string, unknown> | undefined> {
   try {
-    const response = await fetch(url, { headers: { accept: "application/json" } });
+    const response = await fetch(url, { headers: { accept: "application/json" }, redirect: NO_REDIRECT, signal: AbortSignal.timeout(METADATA_TIMEOUT_MS) });
     if (!response.ok) return undefined;
     const parsed: unknown = await response.json();
     return isRecord(parsed) ? parsed : undefined;
@@ -83,6 +102,8 @@ async function registerClient(as: McpAuthServer, redirectUri: string): Promise<R
   const response = await fetch(as.registrationEndpoint, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
+    redirect: NO_REDIRECT,
+    signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
     body: JSON.stringify({
       client_name: "RingKo",
       redirect_uris: [redirectUri],
@@ -93,7 +114,7 @@ async function registerClient(as: McpAuthServer, redirectUri: string): Promise<R
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    throw new Error(`Client registration failed (${response.status}): ${detail.slice(0, 200)}`);
+    throw new Error(failureMessage("Client registration failed", response.status, detail));
   }
   const data = (await response.json()) as { client_id?: unknown; client_secret?: unknown };
   if (typeof data.client_id !== "string" || data.client_id.length === 0) {
@@ -118,11 +139,13 @@ async function requestToken(
   const response = await fetch(tokenEndpoint, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+    redirect: NO_REDIRECT,
+    signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
     body: new URLSearchParams(body).toString(),
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    throw new Error(`Token request failed (${response.status}): ${detail.slice(0, 200)}`);
+    throw new Error(failureMessage("Token request failed", response.status, detail));
   }
   const data = (await response.json()) as { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown; scope?: unknown };
   if (typeof data.access_token !== "string" || data.access_token.length === 0) {
@@ -242,17 +265,26 @@ export async function ensureToolAuth(name: string): Promise<string | undefined> 
   if (!info || info.type !== "oauth") return undefined;
   if (info.expires > Date.now() + REFRESH_SKEW_MS) return info.access;
   if (!info.refresh || !info.tokenEndpoint || !info.clientId) return info.access;
-  const response = await fetch(info.tokenEndpoint, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: info.refresh,
-      client_id: info.clientId,
-      ...(info.clientSecret ? { client_secret: info.clientSecret } : {}),
-      ...(info.resource ? { resource: info.resource } : {}),
-    }).toString(),
-  });
+  let response: Response;
+  try {
+    response = await fetch(info.tokenEndpoint, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+      redirect: NO_REDIRECT,
+      signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: info.refresh,
+        client_id: info.clientId,
+        ...(info.clientSecret ? { client_secret: info.clientSecret } : {}),
+        ...(info.resource ? { resource: info.resource } : {}),
+      }).toString(),
+    });
+  } catch {
+    // A refused redirect, timeout or network failure must not discard the
+    // still-valid stored token; the next request can retry the refresh.
+    return info.access;
+  }
   if (!response.ok) return info.access;
   const data = (await response.json()) as { access_token?: unknown; refresh_token?: unknown; expires_in?: unknown };
   if (typeof data.access_token !== "string") return info.access;

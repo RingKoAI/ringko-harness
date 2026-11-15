@@ -313,11 +313,18 @@ export function modelLabel(selection: ModelSelection | undefined): string {
   return selection ? `${selection.provider.name}/${selection.model.name}` : "echo";
 }
 
-/** Read a dotted key, e.g. "model". */
+const UNSAFE_CONFIG_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
+function configKeySegments(dotted: string): string[] {
+  const keys = dotted.split(".");
+  if (keys.some(key => !key || UNSAFE_CONFIG_SEGMENTS.has(key))) throw new TypeError("Invalid configuration key: use non-empty dot-separated names without prototype keys.");
+  return keys;
+}
+
+/** Read a dotted key, e.g. "model", without following inherited properties. */
 export function getConfigValue(config: RingkoConfig, dotted: string): unknown {
   let node: unknown = config;
-  for (const key of dotted.split(".")) {
-    if (!isRecord(node)) return undefined;
+  for (const key of configKeySegments(dotted)) {
+    if (!isRecord(node) || !Object.hasOwn(node, key)) return undefined;
     node = node[key];
   }
   return node;
@@ -325,12 +332,12 @@ export function getConfigValue(config: RingkoConfig, dotted: string): unknown {
 
 /** Return a copy of the config with a dotted key set. */
 export function setConfigValue(config: RingkoConfig, dotted: string, value: unknown): RingkoConfig {
-  const keys = dotted.split(".");
+  const keys = configKeySegments(dotted);
   const clone = structuredClone(config) as Record<string, unknown>;
   let node = clone;
   for (let i = 0; i < keys.length - 1; i += 1) {
     const key = keys[i];
-    if (!isRecord(node[key])) node[key] = {};
+    if (!Object.hasOwn(node, key) || !isRecord(node[key])) node[key] = {};
     node = node[key] as Record<string, unknown>;
   }
   node[keys[keys.length - 1]] = value;
@@ -339,10 +346,11 @@ export function setConfigValue(config: RingkoConfig, dotted: string, value: unkn
 
 /** Return a copy of the config with a dotted key removed. */
 export function unsetConfigValue(config: RingkoConfig, dotted: string): RingkoConfig {
-  const keys = dotted.split(".");
+  const keys = configKeySegments(dotted);
   const clone = structuredClone(config) as Record<string, unknown>;
   let node = clone;
   for (let i = 0; i < keys.length - 1; i += 1) {
+    if (!Object.hasOwn(node, keys[i])) return config;
     const child = node[keys[i]];
     if (!isRecord(child)) return config;
     node = child;

@@ -43,7 +43,7 @@ export const PLUGIN_FILE_NAME = "plugin.json";
 export const PLUGINS_DIR_NAME = "plugins";
 
 /** Markers that identify a project root when walking up from a workspace. */
-const PROJECT_MARKERS = [".git", ".mcp.json", PROJECT_CONFIG_FILE_NAME, AGENTS_DIR_NAME];
+const PROJECT_MARKERS = [".git", ".mcp.json", PROJECT_CONFIG_FILE_NAME, AGENTS_DIR_NAME, RINGKO_DIR_NAME];
 
 function homeOf(env: NodeJS.ProcessEnv, key: string): string {
   const override = env[key];

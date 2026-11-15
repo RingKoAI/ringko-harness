@@ -190,6 +190,7 @@ export function SettingsPanel({
   onNavigate: (page: string) => void
 }) {
   const { t } = useI18n()
+  const workspace = useApp().info?.workspace
   const active = PAGES.some((entry) => entry.slug === page) ? page : 'general'
 
   const content =
@@ -202,9 +203,9 @@ export function SettingsPanel({
     ) : active === 'usage' ? (
       <UsagePage />
     ) : active === 'connectors' ? (
-      <ConnectorsPage />
+      <ConnectorsPage key={workspace} />
     ) : active === 'skills' ? (
-      <SkillsPage />
+      <SkillsPage key={workspace} />
     ) : active === 'permissions' ? (
       <PermissionsPage />
     ) : active === 'about' ? (

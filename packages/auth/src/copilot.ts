@@ -4,6 +4,7 @@
 // `api.github.com/copilot_internal/v2/token`; requests to api.githubcopilot.com
 // use that exchanged token.
 import { applyProxyEnv, type OAuthCredential } from "@ringko-ai/config";
+import { oauthFailureMessage } from "./errors.ts";
 
 /** Official GitHub Copilot OAuth app (`Iv1.b507a08c87ecfe98`). */
 export const COPILOT_CLIENT_ID = "Iv1.b507a08c87ecfe98";
@@ -56,7 +57,7 @@ async function exchangeCopilotToken(githubToken: string): Promise<{ access: stri
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    throw new Error(`Copilot token exchange failed: ${response.status} ${detail.slice(0, 200)}`);
+    throw new Error(oauthFailureMessage("Copilot token exchange", response.status, detail));
   }
   const data = (await response.json()) as { token?: unknown; expires_at?: unknown };
   if (typeof data.token !== "string" || data.token.length === 0) {

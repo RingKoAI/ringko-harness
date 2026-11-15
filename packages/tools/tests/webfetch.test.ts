@@ -75,6 +75,8 @@ describe("webfetch", () => {
     for (const input of [
       { url: "https://user:secret@example.com" },
       { url: "http://2130706433/" },
+      { url: "http://localhost.:1/" },
+      { url: "http://127.0.0.1.:1/" },
       { url: "https://example.com", format: "binary" },
       { url: "https://example.com", timeout: 999 },
     ]) await expect(executeTool(tool, input, async () => true)).rejects.toThrow();

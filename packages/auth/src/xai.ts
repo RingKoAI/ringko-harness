@@ -1,5 +1,6 @@
 // xAI (Grok) OAuth device-code login (RFC 8628).
 import { applyProxyEnv, type OAuthCredential } from "@ringko-ai/config";
+import { oauthFailureMessage, safeOAuthErrorCode } from "./errors.ts";
 import type { QuotaTier } from "./openai.ts";
 
 export const XAI_ISSUER = "https://auth.x.ai";
@@ -74,7 +75,7 @@ async function postForm(url: string, form: Record<string, string>): Promise<Toke
   });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`xAI token request failed: ${response.status} ${body.slice(0, 200)}`);
+    throw new Error(oauthFailureMessage("xAI token", response.status, body));
   }
   return (await response.json()) as TokenResponse;
 }
@@ -123,7 +124,7 @@ export async function loginXaiDevice(onCode: (url: string, code: string) => void
       }).toString(),
     });
     if (response.ok) return toCredential((await response.json()) as TokenResponse);
-    const error = (await response.json().catch(() => ({}))) as { error?: string; error_description?: string };
+    const error = (await response.json().catch(() => ({}))) as { error?: string };
     if (error.error === "authorization_pending") continue;
     if (error.error === "slow_down") {
       interval += 5;
@@ -131,7 +132,8 @@ export async function loginXaiDevice(onCode: (url: string, code: string) => void
     }
     if (error.error === "access_denied") throw new Error("xAI authorization was denied.");
     if (error.error === "expired_token") throw new Error("xAI device code expired.");
-    throw new Error(`xAI authorization failed: ${error.error_description ?? error.error ?? String(response.status)}`);
+    const code = safeOAuthErrorCode(error.error);
+    throw new Error(`xAI authorization failed: ${response.status}${code ? ` (${code})` : ""}`);
   }
 }
 

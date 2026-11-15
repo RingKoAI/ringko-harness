@@ -59,7 +59,34 @@ pnpm test:npm:install # 真实 tarball 安装及无外部 Bun 的运行、Web �
 官方 Linux 原生构建使用 manylinux glibc 2.28 基线；macOS 模块使用 13.0 部署目标，
 避免无意抬高既有 Node/Bun 运行要求。源码自行构建的 ABI 取决于本机工具链。
 
+## 依赖安全基线
+
+生产依赖（`pnpm audit --prod`）当前无已知公告。开发工具链通过
+`pnpm-workspace.yaml` 的 override 固定已修复版本：`source-map-js`、`fast-uri`、
+`ip-address`、`minimatch`、`postcss-selector-parser`、`systeminformation`，以及
+`zod@>=4`。`@tailwindcss/typography` 仍使用兼容的 `postcss-selector-parser` 6.x，
+shadcn 使用已修复的 7.x。升级 shadcn/Vite 后应重新运行 `pnpm audit` 与 WebUI 构建。
+
+剩余一条低危公告来自 shadcn 开发 CLI 的 `deepmerge`（上游暂无修复版本）；它不进入
+运行时产物，只在使用 CLI 合并配置时生效。不要把未受信任的 registry 响应交给该 CLI。
+`systeminformation@5.33.23` 是新发布版本，pnpm 的最小发布年龄策略为其记录了
+`minimumReleaseAgeExclude`；这是对单个已审核版本的例外，不是全局关闭该策略。
+
+
 ## 资源预算
+
+供应商返回的工具调用属于不可信输入。流式参数预览和最终完整调用分别校验；只有完整调用
+通过 schema、权限和审批后才执行，不能通过省略参数 delta 事件绕过最终调用的预算。
+
+| 模型工具调用 | 上限 |
+| --- | --- |
+| 单次响应调用数 | 128，调用 id 不得重复 |
+| 调用 id / 工具名 | 各 512 字符，不能为空 |
+| 单次调用参数 JSON | 1,048,576 字符 |
+| 单次响应累计参数 JSON | 4,194,304 字符 |
+
+这些上限同时用于流式与非流式结果。最终参数按 JSON 序列化长度计算，恰好等于上限的
+有效调用仍被接受；超限或重复 id 会使该响应失败，不执行其中的任何工具。
 
 | 范围 | 默认边界 |
 | --- | --- |
@@ -77,6 +104,40 @@ pnpm test:npm:install # 真实 tarball 安装及无外部 Bun 的运行、Web �
 grep 的源文件读取也通过原生目录句柄边界进行，并在开始正则匹配前释放文件句柄。
 遇到预算错误应缩小 `path`、`glob` 或 pattern；不会把预算耗尽伪装成“没有更多结果”。
 这些是应用级预算，不能替代 OS 对故障设备或内核 I/O 的处理。
+
+## 配置键与供应商错误
+
+点分配置键拒绝空路径段及 `__proto__`、`constructor`、`prototype`，并只读取对象自身的
+属性，避免 CLI 配置操作沿原型链读取或写入。无效键会报告错误并返回非零退出码。
+
+供应商错误的 message、URL 和响应正文可能回显 API key，因此不直接进入公开错误。
+公开信息只保留有效 HTTP 状态码、已知协议错误码和固定排查建议；仅对不超过 65,536 个
+字符的 JSON 错误正文提取白名单 code/type。取消和超时使用固定文案；内部工具预算错误
+保留本地生成的说明。MCP JSON 解析错误同样不回显文件内容，不可读文件不会被视为未配置。
+
+OAuth 登录和刷新失败也只包含状态码与不超过 64 字符的协议 `error` 代码，不回显
+`error_description`、HTML 或调试正文。Anthropic 登录的 CSRF `state` 与 PKCE verifier
+各自独立生成，避免公开的授权 URL 暴露 verifier。MCP token、刷新和注册请求拒绝
+HTTP 重定向（`redirect: "error"`），并有 30 秒截止时间，防止把 refresh token 或
+client secret 转发到重定向目标。
+
+## WebUI 静态资源与内网目标
+
+WebUI 静态文件在读取前对资源根目录和目标执行规范化，并要求两者保持包含关系；
+指向根目录之外的符号链接或 junction 返回 404。词法路径检查仍先执行，规范化检查是
+第二道防线。该检查不替代操作系统对安装目录的写权限控制。
+
+`webfetch` 在分类私有目标前会去掉主机名末尾的 DNS 根点，因此 `localhost.`、
+`127.0.0.1.` 等写法不会再绕过内网限制。网络目标仍需审批；私有地址必须显式开启宿主
+设置。仍存在以下残余风险：校验基于字面主机名，不做 DNS 解析后再校验，因此解析到内网
+地址的公网域名、DNS 重绑定、NAT64/组播等特殊地址不在当前防护范围内；需要强隔离时
+应使用网络层出口控制。
+
+终端会话名额在解析请求后、任何异步操作前同步检查并预留，并发的创建请求不会同时
+通过上限；创建请求体沿用 1 MiB JSON 上限，不会无界读取。WebSocket 终端升级不携带
+API token，依靠不可猜测的会话 id 和同源检查；会话 id 会出现在已认证的创建响应中，
+应避免把后端 URL 或终端 id 写入不受信任的日志。
+
 
 ## 外部 CLI / ACP 环境与输出
 

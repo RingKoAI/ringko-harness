@@ -10,7 +10,10 @@ export const WEB_LIMITS = Object.freeze({
 });
 
 function privateHost(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  // A trailing dot is the DNS root, so `localhost.` resolves like `localhost`.
+  // Strip it (and bracket quotes) before classification; otherwise the literal
+  // private-host check is bypassed while DNS still reaches the private name.
+  const host = hostname.replace(/^\[|\]$/g, "").replace(/\.+$/, "").toLowerCase();
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) return true;
   if (isIP(host) === 4) {
     const [first, second] = host.split(".").map(Number);
