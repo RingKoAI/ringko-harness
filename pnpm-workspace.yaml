@@ -2,6 +2,8 @@ packages:
   - "packages/*"
 allowBuilds:
   node-pty: true
+minimumReleaseAgeExclude:
+  - systeminformation@5.33.23
 overrides:
   node-pty>node-addon-api: "8.9.2"
   shell-quote: ">=1.11.0"
@@ -9,4 +11,10 @@ overrides:
   lodash-es: ">=4.18.1"
   undici: "^8.12.3"
   katex: "^0.18.2"
-  zod@>=4.0.0: 4.6.6
+  source-map-js: "^1.2.2"
+  systeminformation: "^5.33.23"
+  ip-address: ">=10.7.4"
+  fast-uri: "3.1.9"
+  "@tailwindcss/typography>postcss-selector-parser": "6.1.6"
+  minimatch: ">=11.0.1"
+  zod@>=4.0.0: 4.6.7
