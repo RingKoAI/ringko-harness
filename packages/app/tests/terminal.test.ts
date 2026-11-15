@@ -134,9 +134,10 @@ it("enforces the terminal session cap when creation requests arrive together", a
     }
   } finally {
     app.stop();
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 500));
     if (previousHome === undefined) delete process.env.RINGKO_HOME; else process.env.RINGKO_HOME = previousHome;
-    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+    catch (error) { console.warn(`Could not remove the isolated terminal fixture ${root}: ${error instanceof Error ? error.message : String(error)}`); }
   }
 }, 30_000);
 
