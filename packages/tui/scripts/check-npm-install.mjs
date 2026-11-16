@@ -14,7 +14,16 @@ const tools = join(root, "tools"); mkdirSync(tools);
 if (process.platform === "win32") writeFileSync(join(tools, "node.exe"), readFileSync(node), { flag: "wx" });
 else symlinkSync(node, join(tools, "node"));
 const env = { ...process.env, RINGKO_HOME: join(root, "home"), AGENTS_HOME: join(root, "home") };
-env.PATH = process.platform === "win32" ? `${tools};${process.env.SystemRoot}\\System32;${process.env.SystemRoot}` : `${tools}:/usr/bin:/bin:/usr/sbin:/sbin`;
+// Keep system/toolchain directories so native dependencies can build, but
+// remove every directory that exposes a Bun executable from the child PATH.
+const separator = process.platform === "win32" ? ";" : ":";
+const bunExecutables = process.platform === "win32" ? ["bun.exe", "bun.cmd", "bun.ps1"] : ["bun"];
+const inherited = (process.env.PATH ?? "").split(separator).filter((directory) =>
+  directory.length > 0 && !bunExecutables.some((name) => existsSync(join(directory, name))));
+const base = process.platform === "win32"
+  ? [tools, `${process.env.SystemRoot}\\System32`, process.env.SystemRoot ?? ""]
+  : [tools, "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+env.PATH = [...new Set([...base, ...inherited].filter(Boolean))].join(separator);
 delete env.RINGKO_NPM_ROOT; delete env.RINGKO_SERVER; delete env.NODE_PATH; delete env.RINGKO_WEB_TOKEN; delete env.RINGKO_HOST; delete env.RINGKO_WEBUI_DIR;
 if (process.platform === "linux") {
   const python = Bun.which("python3") ?? Bun.which("python");
