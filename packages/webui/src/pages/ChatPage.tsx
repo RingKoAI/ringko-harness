@@ -34,14 +34,16 @@ import { Card, CardContent } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { useChatScroll } from '@/hooks/use-chat-scroll'
 import { useI18n, type MessageKey } from '@/i18n'
 import { useApp } from '@/store'
 import { cn } from '@/lib/utils'
 import { toolTurns } from '@/lib/tool-activity'
 import { isPendingSessionId } from '@/lib/conversations'
+import { quickJumpAnchorId, quickJumpPreview, type QuickJumpItem } from '@/lib/quick-jump'
 import { extractDroppedFiles, extractPastedFiles, hasFileTransfer, validateIntakeFiles } from '@/lib/attachment-intake'
-import { isNearBottom, scrollMetrics } from '@/lib/chat-scroll'
 import { CopyButton } from '@/components/chat/copy-button'
+import { QuickJump } from '@/components/chat/quick-jump'
 import { ToolCallList, TurnToolActivity, ToolResult, toolSummary } from '@/components/chat/tool-activity'
 import { BrandMark } from '@/components/brand-mark'
 
@@ -57,6 +59,7 @@ const TASK_VIEW_MAIN = '__main__'
 function MessageRow({
   message,
   index,
+  anchorId,
   forkIndex,
   showThinking,
   showTools,
@@ -71,6 +74,8 @@ function MessageRow({
 }: {
   message: ServerMessage
   index: number
+  /** DOM id the quick-jump rail scrolls to, when this message is on it. */
+  anchorId?: string
   forkIndex: number
   showThinking: boolean
   showTools: boolean
@@ -101,7 +106,7 @@ function MessageRow({
     }
   }
   return (
-    <div className="group min-w-0 space-y-2" data-chat-message>
+    <div className="group min-w-0 space-y-2" data-chat-message {...anchorId === undefined ? {} : { id: anchorId }}>
       <div className="flex items-center gap-2">
         <div
           className={cn(
@@ -236,52 +241,17 @@ export function ChatPage() {
   const [taskView, setTaskView] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<Record<number, 'up' | 'down'>>({})
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const scrollRootRef = useRef<HTMLDivElement>(null)
-  const scrollViewportRef = useRef<HTMLElement | null>(null)
-  const followingRef = useRef(true)
-  const lastSessionRef = useRef(app.sessionId)
-  const [jumpVisible, setJumpVisible] = useState(false)
-  const [unreadTail, setUnreadTail] = useState(false)
-
-  // Bind the transcript viewport and track whether the reader left the tail.
-  useEffect(() => {
-    if (view !== 'chat' || taskView) return
-    const viewport = scrollRootRef.current?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')
-    if (!viewport) return
-    scrollViewportRef.current = viewport
-    const update = (): void => {
-      const following = isNearBottom(scrollMetrics(viewport))
-      followingRef.current = following
-      setJumpVisible(!following)
-      if (following) setUnreadTail(false)
-    }
-    viewport.addEventListener('scroll', update, { passive: true })
-    update()
-    return () => {
-      viewport.removeEventListener('scroll', update)
-      scrollViewportRef.current = null
-    }
-  }, [view, taskView])
-
-  // A session change starts at the latest message with following re-enabled.
-  useEffect(() => {
-    if (lastSessionRef.current === app.sessionId) return
-    lastSessionRef.current = app.sessionId
-    followingRef.current = true
-    setJumpVisible(false)
-    setUnreadTail(false)
-    const viewport = scrollViewportRef.current
-    if (viewport) viewport.scrollTop = viewport.scrollHeight
-  }, [app.sessionId])
-
-  // Keep the tail in view only while the reader is following it; otherwise mark
-  // the new content as unread and let their position stand.
-  useEffect(() => {
-    const viewport = scrollViewportRef.current
-    if (!viewport) return
-    if (followingRef.current) viewport.scrollTop = viewport.scrollHeight
-    else setUnreadTail(true)
-  }, [app.sessionId, app.messages.length, app.steering.length, app.partial?.content, app.partial?.reasoning, app.busy, app.approval, app.question, app.todos, app.tasks, app.jobs])
+  const empty = app.messages.length === 0 && app.steering.length === 0
+  // The scroll area only exists once the transcript is mounted, so the hook is
+  // told when that happens instead of probing a ref that is still null.
+  const transcriptMounted = !empty && view === 'chat' && !taskView
+  const {
+    rootRef: scrollRootRef,
+    jumpVisible,
+    unread: unreadTail,
+    scrollToLatest,
+    pinToLatest,
+  } = useChatScroll({ active: transcriptMounted, resetKey: app.sessionId ?? null })
 
   // Load the session named by the URL (deep link / refresh).
   useEffect(() => {
@@ -380,24 +350,6 @@ export function ChatPage() {
     await intakeFiles(Array.from(files))
   }
 
-  function pinToLatest(): void {
-    followingRef.current = true
-    setJumpVisible(false)
-    setUnreadTail(false)
-    requestAnimationFrame(() => {
-      const viewport = scrollViewportRef.current
-      if (viewport) viewport.scrollTop = viewport.scrollHeight
-    })
-  }
-
-  function jumpToLatest(): void {
-    followingRef.current = true
-    setJumpVisible(false)
-    setUnreadTail(false)
-    const viewport = scrollViewportRef.current
-    if (viewport) viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'smooth' })
-  }
-
   const busyEnter: BusyEnterMode = app.info?.busyEnter === 'steer' ? 'steer' : 'queue'
 
   const submit = (modeOverride?: BusyEnterMode): void => {
@@ -473,6 +425,15 @@ export function ChatPage() {
     return app.messages.map(message => message.role === 'system' ? -1 : count++)
   }, [app.messages])
 
+  // One rail tick per conversational message; system notices and tool traffic
+  // stay out so the rail mirrors what the reader wrote and what answered.
+  const quickJumpItems = useMemo<QuickJumpItem[]>(() => app.messages.flatMap((message, index) => {
+    if (message.role !== 'user' && message.role !== 'assistant') return []
+    const preview = quickJumpPreview(message.content.length > 0 ? message.content : message.reasoning ?? '')
+    return [{ id: String(index), role: message.role, ...(preview.length === 0 ? {} : { preview }) }]
+  }), [app.messages])
+  const quickJumpIndexes = useMemo(() => new Set(quickJumpItems.map(item => item.id)), [quickJumpItems])
+
   async function branch(index: number): Promise<void> {
     const current = app.sessionId
     if (!current || isPendingSessionId(current)) return
@@ -520,9 +481,9 @@ export function ChatPage() {
     if (message.role === 'system' || toolActivity.attached.has(index) || (message.role === 'tool' && !showCalls)) return null
     if (message.role === 'assistant' && !message.content && (!message.reasoning || !showThinking) && !showCalls) return null
     return <MessageRow key={index} message={message} index={index} forkIndex={forkIndexes[index]} showThinking={showThinking} showTools={showTools}
+      {...quickJumpIndexes.has(String(index)) ? { anchorId: quickJumpAnchorId(String(index)) } : {}}
       onBranch={branch} onEdit={edit} onFeedback={rate} feedback={feedback[index]} toolResults={toolActivity.results.get(index)} busy={app.busy || isPendingSessionId(app.sessionId)} showCalls={showCalls} toolBusy={toolBusy} />
   }
-  const empty = app.messages.length === 0 && app.steering.length === 0
   const hasSubmittableContent = draft.trim().length > 0 || attachments.length > 0
   const plainDraft = hasSubmittableContent && !draft.trimStart().startsWith('/')
   const canSteerQueue = app.busy && !hasSubmittableContent && app.queue.some(item => !item.loop) && !isPendingSessionId(app.sessionId)
@@ -645,19 +606,7 @@ export function ChatPage() {
           </div>
         </div>
           </ScrollArea>
-          {jumpVisible ? (
-            <Button
-              size="icon"
-              variant="outline"
-              className="absolute right-3 bottom-3 z-10 rounded-full shadow-md"
-              title={t('chat.jumpToLatest')}
-              aria-label={unreadTail ? t('chat.unreadTail') : t('chat.jumpToLatest')}
-              onClick={jumpToLatest}
-            >
-              <ArrowDown className="size-4" />
-              {unreadTail ? <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary" aria-hidden="true" /> : null}
-            </Button>
-          ) : null}
+          <QuickJump rootRef={scrollRootRef} items={quickJumpItems} />
         </div>
       ) : null}
 
@@ -687,7 +636,22 @@ export function ChatPage() {
         <TodoPanel />
         <QuestionPanel />
         <QueuePanel key={app.sessionId ?? 'new'} />
-        <div data-chat-composer className="w-full rounded-2xl border bg-card shadow-sm transition-all focus-within:ring-2 focus-within:ring-ring/40">
+        <div data-chat-composer className="relative w-full rounded-2xl border bg-card shadow-sm transition-all focus-within:ring-2 focus-within:ring-ring/40">
+          {/* The jump control floats just above the input box and shares its
+              right edge, so it never sits against the viewport border. */}
+          {jumpVisible ? (
+            <Button
+              size="icon"
+              variant="outline"
+              className="absolute -top-11 right-2 z-10 rounded-full shadow-md"
+              title={t('chat.jumpToLatest')}
+              aria-label={unreadTail ? t('chat.unreadTail') : t('chat.jumpToLatest')}
+              onClick={scrollToLatest}
+            >
+              <ArrowDown className="size-4" />
+              {unreadTail ? <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-primary" aria-hidden="true" /> : null}
+            </Button>
+          ) : null}
           {commandHints.length > 0 ? (
             <div className="flex flex-col gap-0.5 px-2 pt-2">
               {commandHints.map((command) => (
