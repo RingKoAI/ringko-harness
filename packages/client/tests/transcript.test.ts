@@ -40,3 +40,28 @@ it("supports legacy input boundaries and shell results without inventing success
   expect(restoreTranscript([message(2, "user")], shell.slice(0, -1))[0].runStatus).toBe("interrupted");
   expect(transcriptTurns([{ role: "user" }, { role: "assistant" }, { role: "user" }, { role: "tool" }]).map(turn => turn.userIndex)).toEqual([0, 2]);
 });
+
+it("binds mid-run steered user messages to the enclosing explicit run", () => {
+  const events = [
+    event(1, "run/started", { runId: "steered-run" }),
+    event(2, "user/message", { content: "initial" }),
+    event(3, "assistant/message"),
+    event(4, "tool/result", { toolCallId: "t1", failed: false }),
+    event(5, "user/message", { content: "steered", id: "s1" }),
+    event(6, "assistant/message"),
+    event(7, "run/completed", { runId: "steered-run" }),
+  ];
+  const messages = [
+    message(2, "user", { content: "initial" }),
+    message(3, "assistant"),
+    message(4, "tool", { toolCallId: "t1" }),
+    message(5, "user", { content: "steered" }),
+    message(6, "assistant"),
+  ];
+  const restored = restoreTranscript(messages, events);
+  expect(restored.every(item => item.runStart === 1 && item.runStatus === "completed")).toBe(true);
+  expect(transcriptTurns(restored)).toEqual([
+    { start: 0, end: 3, userIndex: 0, runStart: 1, status: "completed" },
+    { start: 3, end: 5, userIndex: 3, runStart: 1, status: "completed" },
+  ]);
+});

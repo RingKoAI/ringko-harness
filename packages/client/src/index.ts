@@ -1,4 +1,4 @@
-import { SYNC_LIMITS, type BackendIdentity, type PluginInventory, type RunInput, type SessionMeta, type SessionSnapshot, type SkillEntry, type SkillInstallInput, type SyncNotice } from "@ringko-ai/protocol";
+import { SYNC_LIMITS, type BackendIdentity, type PluginInventory, type RunInput, type SessionMeta, type SessionSnapshot, type SkillEntry, type SkillInstallInput, type SteerInput, type SyncNotice } from "@ringko-ai/protocol";
 export * from "@ringko-ai/protocol";
 export * from "./transcript.ts";
 export * from "./lease.ts";
@@ -32,6 +32,7 @@ export class BackendClient {
   snapshot(id: string, signal?: AbortSignal): Promise<SessionSnapshot> { return this.request(`/api/sessions/${encodeURIComponent(id)}/snapshot`, undefined, "GET", signal); }
   /** Omit `sessionId` to let the backend create the session from the prompt. */
   run(input: RunInput): Promise<{ sessionId: string }> { return this.request("/api/runs", input); }
+  steer(id: string, input: SteerInput, signal?: AbortSignal): Promise<{ ok: boolean; id: string }> { return this.request(`/api/sessions/${encodeURIComponent(id)}/steer`, input, "POST", signal); }
   stop(id: string): Promise<unknown> { return this.request(`/api/sessions/${encodeURIComponent(id)}/stop`, {}); }
   skills(signal?: AbortSignal): Promise<SkillEntry[]> { return this.request("/api/skills", undefined, "GET", signal); }
   createSkill(input: { name: string; description?: string; body?: string }, signal?: AbortSignal): Promise<SkillEntry[]> { return this.request("/api/skills", input, "POST", signal); }

@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BackendClient } from "@ringko-ai/client";
-import { findProviderPreset, getApiKey, loadConfig, saveConfigFile, type ProviderConnectionInput } from "@ringko-ai/config";
+import { findProviderPreset, getApiKey, loadConfig, PROVIDER_CONNECT_LIMITS, saveConfigFile, type ProviderConnectionInput } from "@ringko-ai/config";
 import { ProviderConnectDialog } from "../src/components/ProviderConnectDialog.tsx";
 import { Selector } from "../src/components/Selector.tsx";
 import { Repl } from "../src/app.tsx";
@@ -33,7 +33,7 @@ it("rejects oversized keys instead of silently saving a truncated credential", a
   const io = terminal(); let saved = false;
   const app = render(<ProviderConnectDialog preset={findProviderPreset("opencode-go")!} onClose={() => {}} onSave={async () => { saved = true; }} />, io.options);
   try {
-    await wait(() => io.read().includes("Quick setup")); io.input.write("x".repeat(4097));
+    await wait(() => io.read().includes("Quick setup")); io.input.write("x".repeat(PROVIDER_CONNECT_LIMITS.key + 1));
     await wait(() => io.read().includes("exceeds its length limit")); expect(saved).toBe(false); expect(io.read()).not.toContain("x".repeat(20));
   } finally { app.unmount(); io.input.destroy(); io.output.destroy(); }
 });

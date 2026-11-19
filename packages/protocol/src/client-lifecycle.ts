@@ -9,6 +9,6 @@ export const CLIENT_LEASE_LIMITS = {
   startupGraceMs: 30_000,
   clients: 128,
 } as const;
-export type FrontendKind = "cli" | "web";
+export type FrontendKind = "cli" | "web" | "ide";
 export interface ClientLeaseGrant { id: string; instance: string; ttlMs: number; heartbeatMs: number }
-export interface ClientLifecycleStatus { version: number; managed: boolean; clients: number; cli: number; web: number; webui: boolean }
+export interface ClientLifecycleStatus { version: number; managed: boolean; clients: number; cli: number; web: number; ide?: number; webui: boolean }

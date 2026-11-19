@@ -52,12 +52,16 @@ export interface TaskSummary {
   content?: string; reason?: string; activity?: string;
 }
 export interface JobSummary { jobId: string; kind: "sub" | "shell"; description: string; status: "running" | "completed" | "failed" | "cancelled" | "unknown"; background: boolean; lastSeq: number; result?: unknown; output?: string }
+export type BusyEnterMode = "queue" | "steer";
+export interface PendingSteer { id: string; content: string }
+export interface SteerInput { id?: string; prompt: string; attachments?: string[] }
 export interface LoopStatus { iteration: number; maxIterations: number; promise: string | null }
 export interface SessionSnapshot {
   id: string; instance: string; revision: number; title: string | null; summary: string | null; archived: boolean;
   model?: string | null;
   messages: ServerMessage[]; events: SessionEvent[];
   busy: boolean; approvals: Approval[]; questions: QuestionRequest[]; tasks: TaskSummary[]; todos: TodoItem[]; jobs: JobSummary[];
+  steering?: PendingSteer[];
   partial: PartialResponse | null; loop: LoopStatus | null; error: string | null;
   usage?: SessionUsage | null;
 }

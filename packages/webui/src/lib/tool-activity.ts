@@ -47,10 +47,15 @@ export interface ToolTurn extends TranscriptTurn {
 export function toolTurns(messages: readonly ServerMessage[], busy: boolean, error: string | null = null) {
   const activity = matchToolResults(messages)
   const ranges = transcriptTurns(messages)
+  const usedKeys = new Set<string>()
   const turns: ToolTurn[] = ranges.map((turn, ordinal) => {
     const counts = new Map<ToolActivityKind, number>()
     let count = 0, failed = 0, unknown = 0, orphans = 0, lastTool = -1, answer = -1, additions = 0, deletions = 0
-    const running = turn.status === 'running' || (turn.status === undefined && busy && ordinal === ranges.length - 1)
+    const hasLaterTurnInSameRun = ordinal < ranges.length - 1 && (
+      (turn.runStart !== undefined && ranges[ordinal + 1]?.runStart === turn.runStart) ||
+      (turn.runStart === undefined && turn.status === 'running' && ranges[ordinal + 1]?.status === 'running')
+    )
+    const running = !hasLaterTurnInSameRun && (turn.status === 'running' || (turn.status === undefined && busy && ordinal === ranges.length - 1))
     for (let index = turn.start; index < turn.end; index++) {
       const message = messages[index]!
       if (message.role === 'assistant') {
@@ -68,10 +73,13 @@ export function toolTurns(messages: readonly ServerMessage[], busy: boolean, err
         if (!activity.attached.has(index)) { count++; unknown++; orphans++; if (message.failed) failed++ }
       }
     }
-    const completed = turn.status === 'completed' || (turn.status === undefined && answer > lastTool)
+    const completed = turn.status === 'completed' || hasLaterTurnInSameRun || (turn.status === undefined && answer > lastTool)
     const user = turn.userIndex === undefined ? undefined : messages[turn.userIndex]
     const latestError = ordinal === ranges.length - 1 && error !== null && turn.status !== 'completed'
-    return { ...turn, key: user?.viewId ?? (turn.runStart !== undefined ? `run:${turn.runStart}` : `turn:${turn.start}`), count, failed, unknown, orphans, running, additions, deletions,
+    const candidateKey = user?.viewId ?? (turn.runStart !== undefined ? `run:${turn.runStart}` : `turn:${turn.start}`)
+    const key = usedKeys.has(candidateKey) ? `turn:${turn.start}` : candidateKey
+    usedKeys.add(key)
+    return { ...turn, key, count, failed, unknown, orphans, running, additions, deletions,
       foldable: count > 0 && !running && completed && !failed && !unknown && !latestError && (turn.userIndex !== undefined || turn.runStart !== undefined), counts }
   })
   return { ...activity, turns }

@@ -352,12 +352,16 @@ describe("toModelMessages", () => {
     await call({ provider: "google", model: "gemini-2.5-pro", thinking: "high" });
     await call({ provider: "openai-compatible", name: "futureppo-codex", thinking: "max" });
     await call({ provider: "openai", thinking: "off" });
+    await call({ provider: "openai-compatible", name: "futureppo-codex", thinking: "low", reasoningEfforts: { low: "minimal" } });
+    await call({ provider: "anthropic", model: "claude-opus-5-5", thinking: "max", reasoningEfforts: { max: "xhigh" } });
     expect(seen).toEqual([
       { anthropic: { cacheControl: { type: "ephemeral" }, thinking: { type: "adaptive", display: "summarized" }, effort: "high" } },
       { anthropic: { cacheControl: { type: "ephemeral" }, thinking: { type: "enabled", budgetTokens: 4_000 } } },
       { google: { thinkingConfig: { thinkingBudget: 16_000, includeThoughts: true } } },
       { "futureppo-codex": { reasoningEffort: "max" } },
       { openai: { reasoningEffort: "none" } },
+      { "futureppo-codex": { reasoningEffort: "minimal" } },
+      { anthropic: { cacheControl: { type: "ephemeral" }, thinking: { type: "adaptive", display: "summarized" }, effort: "xhigh" } },
     ]);
   });
 

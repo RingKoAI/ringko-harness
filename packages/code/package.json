@@ -1,7 +1,7 @@
 {
   "name": "@ringko-ai/code",
-  "displayName": "RingKo Code",
-  "description": "RingKo agent harness inside VS Code.",
+  "displayName": "%ext.displayName%",
+  "description": "%ext.description%",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,22 +10,190 @@
   "engines": {
     "vscode": "^1.100.0"
   },
-  "main": "./dist/extension.js",
-  "activationEvents": [],
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Other"
+  ],
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ringko-sidebar",
+          "title": "%viewContainer.title%",
+          "icon": "media/ringko.svg"
+        }
+      ]
+    },
+    "views": {
+      "ringko-sidebar": [
+        {
+          "type": "webview",
+          "id": "ringko.chatView",
+          "name": "%view.chat.name%",
+          "retainContextWhenHidden": true
+        }
+      ]
+    },
     "commands": [
       {
+        "command": "ringko.openChat",
+        "title": "%cmd.openChat%",
+        "category": "RingKo"
+      },
+      {
+        "command": "ringko.newSession",
+        "title": "%cmd.newSession%",
+        "category": "RingKo",
+        "icon": "$(add)"
+      },
+      {
+        "command": "ringko.sendSelection",
+        "title": "%cmd.sendSelection%",
+        "category": "RingKo",
+        "icon": "$(mention)"
+      },
+      {
+        "command": "ringko.explainSelection",
+        "title": "%cmd.explainSelection%",
+        "category": "RingKo"
+      },
+      {
+        "command": "ringko.fixDiagnostics",
+        "title": "%cmd.fixDiagnostics%",
+        "category": "RingKo"
+      },
+      {
+        "command": "ringko.switchModel",
+        "title": "%cmd.switchModel%",
+        "category": "RingKo"
+      },
+      {
+        "command": "ringko.openTerminal",
+        "title": "%cmd.openTerminal%",
+        "category": "RingKo",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "ringko.openWebUi",
+        "title": "%cmd.openWebUi%",
+        "category": "RingKo",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "ringko.reconnect",
+        "title": "%cmd.reconnect%",
+        "category": "RingKo",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "ringko.status",
-        "title": "RingKo: Show Status"
+        "title": "%cmd.status%",
+        "category": "RingKo"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "ringko.newSession",
+          "when": "view == ringko.chatView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ringko.openTerminal",
+          "when": "view == ringko.chatView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ringko.openWebUi",
+          "when": "view == ringko.chatView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ringko.reconnect",
+          "when": "view == ringko.chatView",
+          "group": "1_connection"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "ringko.sendSelection",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "ringko.sendSelection",
+          "group": "ringko@1"
+        },
+        {
+          "command": "ringko.explainSelection",
+          "when": "editorHasSelection",
+          "group": "ringko@2"
+        },
+        {
+          "command": "ringko.fixDiagnostics",
+          "group": "ringko@3"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "ringko.openChat",
+        "key": "ctrl+escape",
+        "mac": "cmd+escape"
+      },
+      {
+        "command": "ringko.sendSelection",
+        "key": "ctrl+alt+k",
+        "mac": "cmd+alt+k",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "ringko.openTerminal",
+        "key": "ctrl+shift+escape",
+        "mac": "cmd+shift+escape"
+      }
+    ],
+    "configuration": {
+      "title": "RingKo",
+      "properties": {
+        "ringko.serverUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%cfg.serverUrl%"
+        },
+        "ringko.authToken": {
+          "type": "string",
+          "default": "",
+          "description": "%cfg.authToken%"
+        },
+        "ringko.cliPath": {
+          "type": "string",
+          "default": "ringko",
+          "description": "%cfg.cliPath%"
+        },
+        "ringko.autoStartBackend": {
+          "type": "boolean",
+          "default": true,
+          "description": "%cfg.autoStartBackend%"
+        }
+      }
+    }
   },
   "scripts": {
-    "build": "bun build src/extension.ts --target node --external vscode --outfile dist/extension.js",
-    "watch": "bun build src/extension.ts --target node --external vscode --outfile dist/extension.js --watch"
+    "build": "bun build src/extension.ts --target node --format cjs --external vscode --outfile dist/extension.cjs",
+    "watch": "bun build src/extension.ts --target node --format cjs --external vscode --outfile dist/extension.cjs --watch",
+    "test": "bun test tests"
   },
   "dependencies": {
-    "@ringko-ai/sdk": "workspace:*"
+    "@ringko-ai/client": "workspace:*",
+    "@ringko-ai/config": "workspace:*",
+    "@ringko-ai/protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/vscode": "^1.100.0"

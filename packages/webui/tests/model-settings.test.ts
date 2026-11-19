@@ -23,3 +23,12 @@ it('round-trips model limits through JSON without allowing malformed visual valu
   expect(parseProviderFile(JSON.stringify(file))).toEqual(file)
   for (const model of [{ id: 'model', contextWindow: true }, { id: '' }, { id: 'model', catalogId: 'invalid' }, { id: 'model', name: {} }]) expect(() => parseProviderFile(JSON.stringify({ providers: [{ name: 'Fixture', models: [model] }] }))).toThrow()
 })
+
+it('normalizes reasoning level overrides and rejects unusable rows', () => {
+  expect(normalizeModel({ id: 'model', name: 'Model', reasoningEfforts: { low: ' minimal ', max: 'xhigh' } }))
+    .toMatchObject({ reasoningEfforts: { low: 'minimal', max: 'xhigh' } })
+  expect(normalizeModel({ id: 'model', reasoningEfforts: {} })).not.toHaveProperty('reasoningEfforts')
+  for (const reasoningEfforts of [null, [], { low: '' }, { ' ': 'low' }, { low: '   ' }, { low: 'a' as never, ' low ': 'b' }]) {
+    expect(() => normalizeModel({ id: 'model', reasoningEfforts: reasoningEfforts as never })).toThrow()
+  }
+})

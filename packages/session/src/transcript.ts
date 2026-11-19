@@ -27,8 +27,11 @@ interface HandleLike {
   appendEvent(type: string, data?: unknown): SessionEvent;
 }
 
-export function recordUserMessage(handle: HandleLike, content: string): SessionEvent {
-  return handle.appendEvent(TRANSCRIPT_EVENT.user, { content });
+export function recordUserMessage(handle: HandleLike, content: string, id?: string): SessionEvent {
+  return handle.appendEvent(TRANSCRIPT_EVENT.user, {
+    content,
+    ...(id ? { id } : {}),
+  });
 }
 
 export function recordInstructions(handle: HandleLike, content: string): SessionEvent {
@@ -211,6 +214,9 @@ export function sessionThinking(events: readonly SessionEvent[]): string | undef
 
 /** Record one harness agent event into the session log. */
 export function recordAgentEvent(handle: HandleLike, event: AgentEvent): SessionEvent {
+  if (event.type === "user") {
+    return recordUserMessage(handle, event.message.content, event.inputId);
+  }
   if (event.type === "model") {
     return recordAssistantMessage(handle, event.turn, event.message.content, event.message.toolCalls ?? [], event.message.reasoningDetails);
   }

@@ -1,30 +1,151 @@
-import { readFileSync } from "node:fs";
-import { getApiKey, loadAuth, removeApiKey, setApiKey } from "./auth.ts";
+import {
+  getApiKey,
+  getKeyCredential,
+  removeApiKey,
+  setApiKey,
+  verifyAuthStoreIntegrity,
+} from "./auth.ts";
 import { saveConfigFile, saveProviders, type ProviderDefinition, type RingkoConfig } from "./config.ts";
-import { authPath } from "./paths.ts";
+import { parseApiKeysInput, selectNextApiKey, splitStoredApiKeys } from "./key-roulette.ts";
+import { OAUTH_DOMAIN_BY_TYPE, PROVIDER_PRESETS, type ProviderPreset } from "./presets.ts";
 import { isRecord } from "./util.ts";
-import { PROVIDER_PRESETS } from "./presets.ts";
 
-export const PROVIDER_CONNECT_LIMITS = { name: 128, url: 4096, key: 4096, model: 1024, models: 500 } as const;
+export const PROVIDER_CONNECT_LIMITS = { name: 128, url: 4096, key: 16384, model: 1024, models: 500 } as const;
 export interface ProviderConnectionInput { name: string; type: string; baseURL?: string; apiKey?: string; modelIds?: string[] }
 export class ProviderConnectionError extends Error {}
 const API_TYPES = new Set(PROVIDER_PRESETS.filter(preset => preset.auth === "apikey").map(preset => preset.type));
+const LOCAL_NO_KEY_IDS = new Set(["ollama", "lmstudio", "vllm", "llama-cpp", "jan"]);
 
-/** Explicit and stored credentials win; preset environment variables stay out of files. */
-export function resolveProviderApiKey(provider: ProviderDefinition, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  if (typeof provider.apiKey === "string" && provider.apiKey.length) return provider.apiKey;
-  const saved = getApiKey(provider.name, env);
-  if (typeof saved === "string" && saved.length) return saved;
+export interface ProviderCredentialStatus {
+  configured: boolean;
+  source: "auth" | "inline" | "env" | "local" | "oauth" | "none";
+  keyCount: number;
+  envVar?: string;
+  envDetected: boolean;
+}
+
+export function matchPresetForProvider(provider: Pick<ProviderDefinition, "name" | "presetId" | "type" | "vendor" | "baseURL">): ProviderPreset | undefined {
+  if (provider.presetId) {
+    const byPresetId = PROVIDER_PRESETS.find(entry => entry.id === provider.presetId);
+    if (byPresetId) return byPresetId;
+  }
   const type = provider.type ?? provider.vendor;
-  const preset = PROVIDER_PRESETS.find(entry => entry.auth === "apikey" && entry.type === type && (entry.id === provider.name || type !== "openai-compatible" || provider.baseURL !== undefined && entry.baseURL?.replace(/\/+$/, "") === provider.baseURL.replace(/\/+$/, "")));
-  return preset?.apiKeyEnv ? env[preset.apiKeyEnv] : undefined;
+  return PROVIDER_PRESETS.find(
+    entry =>
+      entry.auth === "apikey" &&
+      entry.type === type &&
+      (entry.id === provider.name ||
+        type !== "openai-compatible" ||
+        (provider.baseURL !== undefined &&
+          entry.baseURL?.replace(/\/+$/, "") === provider.baseURL.replace(/\/+$/, ""))),
+  );
+}
+
+/** Resolve the full API key pool for a provider (explicit > auth.json > preset env var). */
+export function resolveProviderApiKeys(
+  provider: ProviderDefinition,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  if (typeof provider.apiKey === "string" && provider.apiKey.length > 0) {
+    const inlineKeys = splitStoredApiKeys(provider.apiKey);
+    return inlineKeys.length > 0 ? inlineKeys : [provider.apiKey];
+  }
+  const storedEntry = getKeyCredential(provider.name, env);
+  if (storedEntry) {
+    return storedEntry.keys && storedEntry.keys.length > 0 ? [...storedEntry.keys] : [storedEntry.key];
+  }
+  const preset = matchPresetForProvider(provider);
+  const rawEnv = preset?.apiKeyEnv ? env[preset.apiKeyEnv] : undefined;
+  if (typeof rawEnv === "string" && rawEnv.length > 0) {
+    const envKeys = splitStoredApiKeys(rawEnv);
+    return envKeys.length > 0 ? envKeys : [rawEnv];
+  }
+  return [];
+}
+
+/**
+ * Explicit and stored credentials win; preset environment variables stay out of files.
+ * Multi-key pools rotate automatically via LRU (`KeyRoulette`).
+ */
+export function resolveProviderApiKey(
+  provider: ProviderDefinition,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const pool = resolveProviderApiKeys(provider, env);
+  return selectNextApiKey(provider.name, pool);
+}
+
+/** Inspect non-sensitive credential readiness for UI display without exposing key material. */
+export function inspectProviderCredential(
+  provider: Pick<ProviderDefinition, "name" | "presetId" | "type" | "vendor" | "baseURL" | "apiKey">,
+  env: NodeJS.ProcessEnv = process.env,
+): ProviderCredentialStatus {
+  const rawType = provider.type ?? provider.vendor ?? "";
+  if (rawType in OAUTH_DOMAIN_BY_TYPE || rawType === "anthropic-oauth") {
+    return { configured: true, source: "oauth", keyCount: 0, envDetected: false };
+  }
+  const preset = matchPresetForProvider(provider);
+  const envVar = preset?.apiKeyEnv;
+  const rawEnv = envVar ? env[envVar] : undefined;
+  const envKeys = typeof rawEnv === "string" && rawEnv.trim().length > 0 ? splitStoredApiKeys(rawEnv) : [];
+  const envDetected = Boolean(rawEnv && rawEnv.trim().length > 0);
+
+  if (typeof provider.apiKey === "string" && provider.apiKey.trim().length > 0) {
+    const inlineKeys = splitStoredApiKeys(provider.apiKey);
+    return {
+      configured: true,
+      source: "inline",
+      keyCount: Math.max(1, inlineKeys.length),
+      ...(envVar ? { envVar } : {}),
+      envDetected,
+    };
+  }
+
+  const stored = getKeyCredential(provider.name, env);
+  if (stored) {
+    const count = stored.keys && stored.keys.length > 0 ? stored.keys.length : 1;
+    return {
+      configured: true,
+      source: "auth",
+      keyCount: count,
+      ...(envVar ? { envVar } : {}),
+      envDetected,
+    };
+  }
+
+  if (envDetected) {
+    return {
+      configured: true,
+      source: "env",
+      keyCount: Math.max(1, envKeys.length),
+      ...(envVar ? { envVar } : {}),
+      envDetected: true,
+    };
+  }
+
+  if (LOCAL_NO_KEY_IDS.has(preset?.id ?? provider.name)) {
+    return { configured: true, source: "local", keyCount: 0, envDetected: false };
+  }
+
+  return {
+    configured: false,
+    source: "none",
+    keyCount: 0,
+    ...(envVar ? { envVar } : {}),
+    envDetected: false,
+  };
 }
 
 export function validateProviderConnectionCredentials(provider: ProviderDefinition, env: NodeJS.ProcessEnv = process.env): void {
   const preset = PROVIDER_PRESETS.find(entry => entry.type === provider.type && entry.apiKeyPolicy && (entry.type !== "openai-compatible" || entry.id === provider.name || entry.baseURL === provider.baseURL));
   if (!preset?.apiKeyPolicy) return;
-  const key = resolveProviderApiKey(provider, env);
-  if (preset.apiKeyPolicy.required && !key || key !== undefined && preset.apiKeyPolicy.asciiOnly && /[^\x21-\x7e]/.test(key)) throw new ProviderConnectionError(`Enter a valid ${preset.label} API key, save one in auth storage${preset.apiKeyEnv ? `, or set ${preset.apiKeyEnv}` : ""}.`);
+  const keys = resolveProviderApiKeys(provider, env);
+  if (
+    (preset.apiKeyPolicy.required && keys.length === 0) ||
+    (keys.length > 0 && preset.apiKeyPolicy.asciiOnly && keys.some(key => /[^\x21-\x7e]/.test(key)))
+  ) {
+    throw new ProviderConnectionError(`Enter a valid ${preset.label} API key, save one in auth storage${preset.apiKeyEnv ? `, or set ${preset.apiKeyEnv}` : ""}.`);
+  }
 }
 
 /** Validate operator input before discovery, credential writes or configuration changes. */
@@ -41,8 +162,17 @@ export function parseProviderConnection(value: unknown): ProviderConnectionInput
   }
   if (result.type === "openai-compatible" && !result.baseURL) throw new ProviderConnectionError("This provider requires a base URL.");
   if (value.apiKey !== undefined && value.apiKey !== "") {
-    if (typeof value.apiKey !== "string" || value.apiKey.length > PROVIDER_CONNECT_LIMITS.key || /[^\x21-\x7e]/.test(value.apiKey)) throw new ProviderConnectionError("API key must contain visible ASCII characters without spaces.");
-    result.apiKey = value.apiKey;
+    if (typeof value.apiKey !== "string" || value.apiKey.length > PROVIDER_CONNECT_LIMITS.key) {
+      throw new ProviderConnectionError("API key must contain visible ASCII characters without spaces.");
+    }
+    let parsedKeys: string[];
+    try {
+      parsedKeys = parseApiKeysInput(value.apiKey);
+    } catch (error) {
+      throw new ProviderConnectionError(error instanceof Error ? error.message : "API key must contain visible ASCII characters without spaces.");
+    }
+    if (parsedKeys.length === 0) throw new ProviderConnectionError("API key must contain visible ASCII characters without spaces.");
+    result.apiKey = parsedKeys.join(",");
   }
   if (value.modelIds !== undefined) {
     if (!Array.isArray(value.modelIds) || value.modelIds.length > PROVIDER_CONNECT_LIMITS.models || value.modelIds.some(id => typeof id !== "string" || !id.trim() || id.length > PROVIDER_CONNECT_LIMITS.model || /[\u0000-\u001f]/.test(id))) throw new ProviderConnectionError("Enter valid model IDs (up to 500 models).");
@@ -69,30 +199,39 @@ export function saveProviderConnection(config: RingkoConfig, input: ProviderConn
   if (validated.apiKey) delete provider.apiKey;
   const next = { ...config, providers: [...(config.providers ?? []).filter(entry => entry.name !== provider.name), provider] };
   if (!next.model) next.model = `${provider.name}/${provider.models[0]!.id}`;
-  let previousKey: string | undefined;
+
+  const previousEntry = getKeyCredential(provider.name, env);
   if (validated.apiKey) {
-    // Do not let loadAuth's legacy best-effort reader replace a corrupt credential file.
     try {
-      const stored: unknown = JSON.parse(readFileSync(authPath(env), "utf8"));
-      if (!isRecord(stored) || stored.apikeys !== undefined && !isRecord(stored.apikeys) || stored.oauth !== undefined && !isRecord(stored.oauth)) throw new Error("Invalid credential store.");
-      const loaded = loadAuth(env);
-      const loadedCount = Object.keys(loaded.apikeys).length + Object.values(loaded.oauth).reduce((count, domain) => count + domain.accounts.length, 0);
-      const expectedCount = stored.oauth !== undefined || stored.apikeys !== undefined
-        ? Object.keys(stored.apikeys ?? {}).length + Object.values(stored.oauth ?? {}).reduce<number>((count, domain) => { if (!isRecord(domain) || !Array.isArray(domain.accounts)) throw new Error("Invalid OAuth domain."); return count + domain.accounts.length; }, 0)
-        : Object.keys(stored).length;
-      if (loadedCount !== expectedCount) throw new Error("Credential entries could not be preserved.");
+      verifyAuthStoreIntegrity(env);
+    } catch {
+      throw new ProviderConnectionError("Cannot read the credential store. Repair auth.json before connecting.");
     }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new ProviderConnectionError("Cannot read the credential store. Repair auth.json before connecting."); }
-    previousKey = loadAuth(env).apikeys[provider.name];
-    try { setApiKey(provider.name, validated.apiKey, env); }
-    catch { throw new ProviderConnectionError("Cannot save the API key. Check credential storage and retry."); }
+    try {
+      setApiKey(provider.name, validated.apiKey, env, {
+        providerName: provider.name,
+        providerType: provider.type ?? "openai-compatible",
+      });
+    } catch {
+      throw new ProviderConnectionError("Cannot save the API key. Check credential storage and retry.");
+    }
   }
   try {
     if (options.path) saveConfigFile(next, options.path); else saveProviders(next, env);
   } catch {
-    if (validated.apiKey && getApiKey(provider.name, env) === validated.apiKey) {
-      try { if (previousKey === undefined) removeApiKey(provider.name, env); else setApiKey(provider.name, previousKey, env); }
-      catch { throw new ProviderConnectionError("Saving failed and the API key could not be restored. Check auth.json before retrying."); }
+    const newPrimary = validated.apiKey?.split(",")[0];
+    if (validated.apiKey && getApiKey(provider.name, env) === newPrimary) {
+      try {
+        if (!previousEntry) removeApiKey(provider.name, env);
+        else {
+          setApiKey(provider.name, previousEntry.keys ?? [previousEntry.key], env, {
+            providerName: previousEntry.providerName,
+            providerType: previousEntry.providerType,
+          });
+        }
+      } catch {
+        throw new ProviderConnectionError("Saving failed and the API key could not be restored. Check auth.json before retrying.");
+      }
     }
     throw new ProviderConnectionError("Cannot save provider configuration. Check the configuration path and retry.");
   }

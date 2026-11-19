@@ -1,7 +1,7 @@
 // Typed client for the RingKo local server (see @ringko-ai/app).
 import { type TodoItem, type TranscriptMetadata } from '@ringko-ai/client';
 export { UnauthorizedError, backendClient, clearToken, getToken, setToken } from './api/http';
-export type { SessionSnapshot, TodoItem, SessionUsage } from '@ringko-ai/client';
+export type { BusyEnterMode, PendingSteer, SessionSnapshot, TodoItem, SessionUsage } from '@ringko-ai/client';
 export type { UsageStatistics, UsageStatisticsQuery, UsageStatisticsBucket, UsageRequest, UsageCallKind } from '@ringko-ai/client';
 export * from './api/connectors';
 export * from './api/sessions';
@@ -58,6 +58,8 @@ export interface Info {
   thinking: string | null;
   expandThinking: boolean;
   expandTools: boolean;
+  busyEnter?: 'queue' | 'steer';
+  favoriteModels?: string[];
   updates: { checkOnStartup: boolean; autoUpdate: boolean };
   model: string | null;
   modelId: string | null;
@@ -75,16 +77,30 @@ export interface ModelDefinition {
   catalogId?: string;
   maxInputTokens?: number;
   maxOutputTokens?: number;
+  /** Per-level override of the reasoning value sent upstream for this model. */
+  reasoningEfforts?: Record<string, string>;
   url?: string;
+}
+
+export interface ProviderCredentialStatus {
+  configured: boolean;
+  source: 'auth' | 'inline' | 'env' | 'local' | 'oauth' | 'none';
+  keyCount: number;
+  envVar?: string;
+  envDetected: boolean;
 }
 
 export interface ProviderDefinition {
   name: string;
+  presetId?: string;
+  enabled?: boolean;
   type?: string;
   vendor?: string;
   baseURL?: string;
   url?: string;
   apiKey?: string;
+  clearApiKey?: boolean;
+  previousName?: string;
   module?: string;
   models?: ModelDefinition[];
 }
@@ -93,6 +109,9 @@ export interface ProviderFile {
   model?: string;
   small_model?: string;
   providers?: ProviderDefinition[];
+  removedProviders?: string[];
+  credentials?: Record<string, ProviderCredentialStatus>;
+  builtinPresets?: import('./api/providers').ProviderPreset[];
 }
 
 export interface SessionMeta {
@@ -169,6 +188,8 @@ export interface PermissionRule {
 export interface UploadedFile {
   name: string;
   path: string;
+  /** Client-owned object URL for image thumbnail previews; revoked when discarded. */
+  previewUrl?: string;
 }
 
 export interface AuthAccount {

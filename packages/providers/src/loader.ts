@@ -10,6 +10,8 @@ import { createEchoProvider } from "./echo.ts";
 import type { ModelClient } from "@ringko-ai/harness";
 import {
   resolveProviderApiKey,
+  resolveProviderApiKeys,
+  selectNextApiKey,
   modelLabel,
   selectModel,
   type ModelSelection,
@@ -34,6 +36,8 @@ export interface ProviderFactoryOptions {
   temperature?: number;
   maxOutputTokens?: number;
   thinking?: string;
+  /** Per-level override of the value sent for a thinking level. */
+  reasoningEfforts?: Record<string, string>;
   cacheKey?: string;
 }
 
@@ -71,6 +75,7 @@ export function resolveProviderConfig(selection: ModelSelection | undefined): Pr
     // Credentials live in auth.json; provider.json may still carry a key.
     apiKey: resolveProviderApiKey(provider),
     maxOutputTokens: model.maxOutputTokens,
+    ...(model.reasoningEfforts ? { reasoningEfforts: model.reasoningEfforts } : {}),
   };
 }
 
@@ -108,6 +113,19 @@ export async function loadProviderModel(
   }
 
   try {
+    const keyPool = selection ? resolveProviderApiKeys(selection.provider) : [];
+    if (selection && keyPool.length > 1) {
+      const providerName = selection.provider.name;
+      return async (request) => {
+        const rotatedKey = selectNextApiKey(providerName, keyPool) ?? options.apiKey;
+        const client = (factory as ProviderFactory)({
+          ...options,
+          apiKey: rotatedKey,
+          cacheKey: undefined,
+        });
+        return await client(request);
+      };
+    }
     return (factory as ProviderFactory)(options);
   } catch (error) {
     return error instanceof Error ? error.message : "Provider factory failed.";

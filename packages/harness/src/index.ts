@@ -27,7 +27,7 @@ export type {
   ToolExecutionContext,
   ToolRiskAssessment,
 } from "./tools.ts";
-export { Agent, AgentTurnLimitError } from "./agent.ts";
+export { Agent, AgentTurnLimitError, MAX_STEERING_QUEUE } from "./agent.ts";
 export type {
   AgentEvent,
   AgentOptions,
@@ -42,6 +42,7 @@ export type {
   ModelTurn,
   ModelUsage,
   ReasoningDetail,
+  SteeredInput,
   ToolExecutionEvent,
   ToolExecutionResult,
   ToolMessageContent,

@@ -1,10 +1,11 @@
 import { useTheme } from 'next-themes'
 import { useEffect, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { fetchPermissionRules, removePermissionRule, type PermissionRule } from '@/api'
+import { fetchPermissionRules, removePermissionRule, setUi, type BusyEnterMode, type PermissionRule } from '@/api'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { UpdateSettings } from '@/components/update-settings'
 import { LOCALES, useI18n, type Locale, type MessageKey } from '@/i18n'
 import { ConnectorsPage } from '@/pages/ConnectorsPage'
@@ -63,28 +64,50 @@ function GeneralPage() {
           </Badge>
         </Row>
         <Row label={t('theme.toggle')}>
-          <select
-            aria-label={t('theme.toggle')}
-            className="h-9 w-full min-w-32 rounded-md border bg-background px-2 text-sm sm:w-44"
-            value={theme ?? 'system'}
-            onChange={(event) => setTheme(event.target.value)}
-          >
-            {themes.map((entry) => (
-              <option key={entry.value} value={entry.value}>{t(entry.label)}</option>
-            ))}
-          </select>
+          <Select value={theme ?? 'system'} onValueChange={setTheme}>
+            <SelectTrigger aria-label={t('theme.toggle')} className="h-9 w-full min-w-32 sm:w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {themes.map((entry) => (
+                <SelectItem key={entry.value} value={entry.value}>{t(entry.label)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Row>
         <Row label={t('language.toggle')}>
-          <select
-            aria-label={t('language.toggle')}
-            className="h-9 w-full min-w-32 rounded-md border bg-background px-2 text-sm sm:w-44"
-            value={locale}
-            onChange={(event) => setLocale(event.target.value as Locale)}
-          >
-            {LOCALES.map((entry) => (
-              <option key={entry.value} value={entry.value}>{entry.label}</option>
-            ))}
-          </select>
+          <Select value={locale} onValueChange={(value) => setLocale(value as Locale)}>
+            <SelectTrigger aria-label={t('language.toggle')} className="h-9 w-full min-w-32 sm:w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {LOCALES.map((entry) => (
+                <SelectItem key={entry.value} value={entry.value}>{entry.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Row>
+        <Row label={t('settings.busyEnter')}>
+          <div className="flex flex-col items-end gap-1">
+            <Select
+              value={app.info?.busyEnter ?? 'queue'}
+              onValueChange={(value) => {
+                const busyEnter = value as BusyEnterMode
+                setUi({ busyEnter })
+                  .then(() => app.refreshInfo())
+                  .catch((cause: unknown) => toast.error(cause instanceof Error ? cause.message : String(cause)))
+              }}
+            >
+              <SelectTrigger aria-label={t('settings.busyEnter')} className="h-9 w-full min-w-32 sm:w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="queue">{t('settings.busyEnterQueue')}</SelectItem>
+                <SelectItem value="steer">{t('settings.busyEnterSteer')}</SelectItem>
+              </SelectContent>
+            </Select>
+            <span className="text-[11px] text-muted-foreground">{t('settings.busyEnterHint')}</span>
+          </div>
         </Row>
         <UpdateSettings />
       </CardContent>

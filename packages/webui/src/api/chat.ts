@@ -19,6 +19,8 @@ export interface ChatHandlers {
   onTask?(event: TaskUpdate): void;
   onApprovalClosed?(id: string): void;
   onSession?(sessionId: string): void;
+  onSteering?(steer: { id: string; content: string }): void;
+  onUser?(message: { id?: string; content: string; turn: number }): void;
   onAssistant(message: { content: string; reasoning: string | null; toolCalls: ToolCall[]; turn: number }): void;
   onTool(message: { name: string; content: string; toolCallId?: string | null; error: boolean; turn: number }): void;
   onApproval(approval: Approval): void;
@@ -67,6 +69,14 @@ export async function stopSession(id: string, signal?: AbortSignal): Promise<voi
   const response = await fetch(`${BASE}/api/sessions/${encodeURIComponent(id)}/stop`, { method: 'POST', headers: authHeaders(), signal });
   if (response.status === 401) throw new UnauthorizedError();
   if (!response.ok && response.status !== 404) throw new Error(`Stop failed (${response.status}).`);
+}
+
+export async function steerSession(
+  id: string,
+  input: { id?: string; prompt: string; attachments?: string[] },
+  signal?: AbortSignal,
+): Promise<{ ok: boolean; id: string }> {
+  return await backendClient.steer(id, input, signal);
 }
 
 export const SESSION_STOP_LIMITS = { timeoutMs: 10_000, pollMs: 250 } as const;
@@ -165,6 +175,24 @@ export function streamChat(
       case "session": {
         const id = (payload as { sessionId?: unknown }).sessionId;
         if (typeof id === "string") handlers.onSession?.(id);
+        break;
+      }
+      case "steering": {
+        const steer = payload as { id?: unknown; content?: unknown };
+        if (typeof steer?.id === "string" && typeof steer.content === "string") {
+          handlers.onSteering?.({ id: steer.id, content: steer.content });
+        }
+        break;
+      }
+      case "user": {
+        const user = payload as { id?: unknown; content?: unknown; turn?: unknown };
+        if (typeof user?.content === "string") {
+          handlers.onUser?.({
+            content: user.content,
+            turn: typeof user.turn === "number" ? user.turn : 0,
+            ...(typeof user.id === "string" ? { id: user.id } : {}),
+          });
+        }
         break;
       }
       case "assistant":

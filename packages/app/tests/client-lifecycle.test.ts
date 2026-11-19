@@ -119,3 +119,15 @@ it("keeps explicitly pinned service backends alive without opening a Web fronten
   await client.request("/api/backend/persist", {}); await cli.close(); await Bun.sleep(600);
   expect((await client.identity()).lifecycle).toMatchObject({ managed: false, clients: 0, webui: false });
 });
+
+it("supports IDE frontend leases, pins the workspace while IDE is attached, and shuts down after IDE detaches", async () => {
+  const client = setup();
+  const ide = await attachFrontend(client, "ide");
+  expect((await client.identity()).lifecycle).toMatchObject({ cli: 0, web: 0, ide: 1, clients: 1, webui: false });
+  const target = join(root!, "other-ide"); mkdirSync(target);
+  const projects = await client.request<{ projects: { id: string }[] }>("/api/projects", { path: target });
+  await expect(client.request(`/api/projects/${projects.projects[0]!.id}/current`, {})).rejects.toMatchObject({ status: 409 });
+  await ide.close();
+  await app!.closed;
+  await expect(client.identity()).rejects.toThrow();
+});

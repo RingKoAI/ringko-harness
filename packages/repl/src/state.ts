@@ -52,6 +52,7 @@ export function messagesToItems(messages: readonly (ChatMessage & TranscriptMeta
 
 /** Map one harness agent event to zero or more display items. */
 export function agentEventToItems(event: AgentEvent): ReplItem[] {
+  if (event.type === "user") return [userItem(event.message.content)];
   if (event.type === "tool_call") return (event.message.toolCalls ?? []).map(call => ({ id: nextId(), kind: "tool", text: "", toolName: call.name, toolCallId: call.id, arguments: call.arguments, running: true }));
   if (event.type === "model") {
     const items: ReplItem[] = [];

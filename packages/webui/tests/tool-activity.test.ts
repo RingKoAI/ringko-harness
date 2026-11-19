@@ -61,3 +61,18 @@ it('never pairs results across a later user input', () => {
   expect(activity.attached.size).toBe(0);
   expect(activity.turns.every(turn => !turn.foldable)).toBe(true);
 });
+
+it('folds pre-steer tool segments while keeping only the latest steered segment running', () => {
+  const messages: ServerMessage[] = [
+    { role: 'user', content: 'initial', runStart: 1, runStatus: 'running' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'read' }], runStart: 1, runStatus: 'running' },
+    { role: 'tool', toolCallId: 'c1', content: 'ok', runStart: 1, runStatus: 'running' },
+    { role: 'user', content: 'steered mid-run', runStart: 1, runStatus: 'running' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c2', name: 'shell' }], runStart: 1, runStatus: 'running' },
+  ];
+  const activity = toolTurns(messages, true);
+  expect(activity.turns).toHaveLength(2);
+  expect(activity.turns[0]).toMatchObject({ running: false, foldable: true, count: 1 });
+  expect(activity.turns[1]).toMatchObject({ running: true, foldable: false, count: 1 });
+  expect(activity.turns[0]?.key).not.toBe(activity.turns[1]?.key);
+});

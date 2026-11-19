@@ -1,5 +1,5 @@
 import type { Approval, ChatHandlers, JobSummary, LoopStatus, QuestionRequest, ServerMessage, TaskSummary, TodoItem } from '../api'
-import { applyToolInputDelta, restoreTranscript, type PartialResponse, type SessionSnapshot, type SessionUsage } from '@ringko-ai/client'
+import { applyToolInputDelta, restoreTranscript, type PartialResponse, type PendingSteer, type SessionSnapshot, type SessionUsage } from '@ringko-ai/client'
 import { normalizeSessionUsage } from './session-usage'
 
 export const CONVERSATION_LIMITS = { queued: 16, prompt: 65536, partial: 262144, cached: 64 } as const
@@ -9,20 +9,41 @@ export interface QueuedMessage { id: string; prompt: string; attachments: string
 export interface Conversation {
   messages: ServerMessage[]; busy: boolean; approval: Approval | null; question: QuestionRequest | null
   tasks: TaskSummary[]; jobs: JobSummary[]; todos: TodoItem[]; queue: QueuedMessage[]; sendingQueued: string | null
-  partial: PartialResponse | null; draft: string; error: string | null; loop: LoopStatus | null
+  steering: PendingSteer[]; partial: PartialResponse | null; draft: string; error: string | null; loop: LoopStatus | null
   usage: SessionUsage | null; model: string | null
   toolExpansions: Record<string, { details: boolean; open: boolean }>
 }
-export const emptyConversation = (): Conversation => ({ messages: [], busy: false, approval: null, question: null, tasks: [], jobs: [], todos: [], queue: [], sendingQueued: null, partial: null, draft: '', error: null, loop: null, usage: null, model: null, toolExpansions: {} })
+export const emptyConversation = (): Conversation => ({ messages: [], busy: false, approval: null, question: null, tasks: [], jobs: [], todos: [], queue: [], sendingQueued: null, steering: [], partial: null, draft: '', error: null, loop: null, usage: null, model: null, toolExpansions: {} })
 type Transport = (input: { sessionId?: string; prompt: string; attachments: string[]; loop?: { args: string } }, handlers: ChatHandlers) => { abort(): void }
-function stoppedState(state: Conversation, userId?: string): Partial<Conversation> {
-  const owner = userId ? state.messages.find(message => message.role === 'user' && message.viewId === userId) : state.messages.findLast(message => message.role === 'user' && message.runStatus === 'running')
+export type SteerTransport = (id: string, input: { id: string; prompt: string; attachments: string[] }) => Promise<{ ok: boolean; id: string }>
+
+interface ActiveRun {
+  token: symbol
+  userIds: Set<string>
+  admittedSteerIds: Set<string>
+  pendingSteers: Array<{ id: string; prompt: string; attachments: string[] }>
+  abort(): void
+}
+
+function isSteerUnavailableError(error: unknown): boolean {
+  const status = (error as { status?: unknown } | null)?.status
+  if (status === 409 || status === 404) return true
+  return error instanceof Error && /no active run|no longer accepts steering/i.test(error.message)
+}
+
+function stoppedState(state: Conversation, run?: Pick<ActiveRun, 'userIds' | 'admittedSteerIds'>): Partial<Conversation> {
+  const fallbackOwner = run?.userIds.size ? undefined : state.messages.findLast(message => message.role === 'user' && message.runStatus === 'running')
+  const isOwned = (message: ServerMessage) =>
+    message.role === 'user' && (run?.userIds.size ? Boolean(message.viewId && run.userIds.has(message.viewId)) : message === fallbackOwner)
   // Keep the prefix the user already saw; tool previews are never outcomes.
   const streamed = state.partial?.content.trim()
     ? [{ role: 'assistant' as const, content: state.partial.content, ...(state.partial.reasoning ? { reasoning: state.partial.reasoning } : {}), runStatus: 'cancelled' as const }]
     : []
-  return { busy: false, sendingQueued: null, partial: null, approval: null, question: null, loop: null,
-    messages: [...state.messages.map(message => message === owner ? { ...message, runStatus: 'cancelled' as const } : message), ...streamed],
+  const retainedSteers = state.steering
+    .filter(item => !run?.admittedSteerIds.has(item.id))
+    .map(item => ({ role: 'user' as const, content: item.content, viewId: item.id, runStatus: 'cancelled' as const }))
+  return { busy: false, sendingQueued: null, steering: [], partial: null, approval: null, question: null, loop: null,
+    messages: [...state.messages.map(message => isOwned(message) ? { ...message, runStatus: 'cancelled' as const } : message), ...streamed, ...retainedSteers],
     tasks: state.tasks.map(task => task.status === 'running' ? { ...task, status: 'unknown' } : task),
     jobs: state.jobs.map(job => job.status === 'running' ? { ...job, status: 'unknown' } : job) }
 }
@@ -30,22 +51,31 @@ function stoppedState(state: Conversation, userId?: string): Partial<Conversatio
 /** Owns each stream independently of the currently visible route. Late callbacks are discarded. */
 export class Conversations {
   private states = new Map<string, Conversation>()
-  private runs = new Map<string, { token: symbol; userId: string; abort(): void }>()
+  private runs = new Map<string, ActiveRun>()
   private listeners = new Set<() => void>()
   private paused = new Set<string>()
   private revisions = new Map<string, { instance: string; revision: number }>()
   private creations = new Map<string, { onCreated?: (id: string) => void }>()
   private disposed = false
   private transport: Transport
+  private steerTransport: SteerTransport
   private report: (error?: string, sessionId?: string) => void
-  constructor(transport: Transport, report: (error?: string, sessionId?: string) => void) { this.transport = transport; this.report = report }
+  constructor(
+    transport: Transport,
+    report: (error?: string, sessionId?: string) => void,
+    steerTransport: SteerTransport = async (_id, input) => ({ ok: true, id: input.id }),
+  ) {
+    this.transport = transport
+    this.report = report
+    this.steerTransport = steerTransport
+  }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   peek(id: string): Conversation | undefined { return this.states.get(id) }
   get(id: string): Conversation {
     let state = this.states.get(id)
     if (!state) {
       if (this.states.size >= CONVERSATION_LIMITS.cached) {
-        const disposable = [...this.states].find(([, item]) => !item.busy && !item.queue.length && !item.draft)
+        const disposable = [...this.states].find(([, item]) => !item.busy && !item.queue.length && !item.steering.length && !item.draft)
         if (!disposable) throw new Error('Conversation cache is full. Finish or clear a queued conversation.')
         this.states.delete(disposable[0])
         this.creations.delete(disposable[0])
@@ -75,6 +105,11 @@ export class Conversations {
     const current = this.get(snapshot.id)
     const viewIds = new Map<number, string>()
     for (const message of current.messages) if (message.role === 'user' && message.sourceSeq !== undefined && message.viewId) viewIds.set(message.sourceSeq, message.viewId)
+    for (const event of snapshot.events) {
+      if (event.type === 'user/message' && !viewIds.has(event.seq) && event.data && typeof event.data === 'object' && typeof (event.data as { id?: unknown }).id === 'string') {
+        viewIds.set(event.seq, (event.data as { id: string }).id)
+      }
+    }
     const messages = restoreTranscript(snapshot.messages, snapshot.events, snapshot.busy, snapshot.error !== null).map((message, index) => {
       if (message.role !== 'user') return message
       const previous = current.messages[index]
@@ -89,7 +124,7 @@ export class Conversations {
     this.patch(snapshot.id, {
       messages,
       toolExpansions: Object.fromEntries(Object.entries(expansions).filter(([key]) => retained.has(key))),
-      busy: snapshot.busy, partial: snapshot.partial, approval: snapshot.approvals[0] ?? null,
+      busy: snapshot.busy, steering: snapshot.steering ?? [], partial: snapshot.partial, approval: snapshot.approvals[0] ?? null,
       question: snapshot.questions[0] ?? null, tasks: snapshot.tasks, todos: snapshot.todos, jobs: snapshot.jobs,
       loop: snapshot.loop, error: snapshot.error,
       usage: normalizeSessionUsage(snapshot.usage),
@@ -108,6 +143,91 @@ export class Conversations {
       this.patch(id, { queue: [...state.queue, { id: crypto.randomUUID(), prompt, attachments: [...attachments], ...(loop ? { loop: { ...loop } } : {}) }] })
       if (!state.busy) this.resume(id)
     } else this.start(id, prompt, attachments, loop)
+  }
+  /**
+   * Inject a user message into the active run at the next step boundary without
+   * cancelling in-flight tools or model output. Falls back to normal send when
+   * the session is already idle or finishing.
+   */
+  async steer(id: string, prompt: string, attachments: string[] = []): Promise<boolean> {
+    if (this.disposed) throw new Error('Conversation manager is closed.')
+    prompt = prompt.trim()
+    if (!prompt || prompt.length > CONVERSATION_LIMITS.prompt || attachments.length > 16) throw new Error('Invalid message size.')
+    const state = this.get(id)
+    if (!state.busy) { this.send(id, prompt, attachments); return true }
+    if (state.steering.length >= CONVERSATION_LIMITS.queued) throw new Error('Steering queue is full.')
+    const steerId = crypto.randomUUID()
+    const payload = { id: steerId, prompt, attachments: [...attachments] }
+    this.patch(id, { steering: [...state.steering, { id: steerId, content: prompt }] })
+    const active = this.runs.get(id)
+    if (isPendingSessionId(id) && active) {
+      active.pendingSteers.push(payload)
+      return true
+    }
+    return await this.dispatchSteer(id, payload, active?.token)
+  }
+  /** Move one queued item into the active run's next-step steering inbox. */
+  async steerQueued(id: string, messageId: string): Promise<boolean> {
+    if (this.disposed) throw new Error('Conversation manager is closed.')
+    if (isPendingSessionId(id)) throw new Error('Wait for the session to be created before steering a queued message.')
+    const state = this.get(id), item = state.queue.find(message => message.id === messageId)
+    if (!item || item.loop || state.sendingQueued) return false
+    if (!state.busy) return await this.sendQueuedNow(id, messageId, async () => {})
+    if (state.steering.length >= CONVERSATION_LIMITS.queued) throw new Error('Steering queue is full.')
+    const index = state.queue.findIndex(message => message.id === messageId)
+    this.patch(id, {
+      queue: state.queue.filter(message => message.id !== messageId),
+      steering: [...state.steering, { id: item.id, content: item.prompt }],
+    })
+    return await this.dispatchSteer(id, { id: item.id, prompt: item.prompt, attachments: [...item.attachments] }, this.runs.get(id)?.token, { item, index })
+  }
+  /** Move all steer-eligible queued items into the active run's steering inbox in FIFO order. */
+  async steerAllQueued(id: string): Promise<number> {
+    if (this.disposed || isPendingSessionId(id)) return 0
+    const state = this.get(id)
+    if (!state.busy || state.sendingQueued) return 0
+    const eligible = state.queue.filter(item => !item.loop)
+    let count = 0
+    for (const item of eligible) {
+      if (!this.get(id).busy) break
+      if (await this.steerQueued(id, item.id)) count += 1
+      else break
+    }
+    return count
+  }
+  private async dispatchSteer(
+    id: string,
+    payload: { id: string; prompt: string; attachments: string[] },
+    token?: symbol,
+    fromQueue?: { item: QueuedMessage; index: number },
+  ): Promise<boolean> {
+    try {
+      await this.steerTransport(id, payload)
+      return true
+    } catch (error) {
+      if (this.disposed) return false
+      const current = this.states.get(id)
+      if (!current) return false
+      const run = this.runs.get(id)
+      if (run?.admittedSteerIds.has(payload.id)) return true
+      if (isSteerUnavailableError(error)) {
+        // The run settled while the steer request was in flight; fall back to ordinary send/queue.
+        this.patch(id, { steering: current.steering.filter(entry => entry.id !== payload.id) })
+        this.send(id, payload.prompt, payload.attachments)
+        return true
+      }
+      if (token && run && run.token !== token) return false
+      const restoredQueue = fromQueue && !current.queue.some(entry => entry.id === fromQueue.item.id)
+        ? [...current.queue.slice(0, fromQueue.index), fromQueue.item, ...current.queue.slice(fromQueue.index)]
+        : current.queue
+      this.patch(id, {
+        steering: current.steering.filter(entry => entry.id !== payload.id),
+        queue: restoredQueue,
+        ...(!fromQueue && !current.draft ? { draft: payload.prompt } : {}),
+      })
+      this.report(error instanceof Error ? error.message : 'Steering failed.', id)
+      return false
+    }
   }
   /**
    * Seed a brand-new conversation without creating a session first. The
@@ -143,8 +263,8 @@ export class Conversations {
     if (!state.busy) { this.start(id, item.prompt, item.attachments, item.loop, item.id); return true }
     const previous = this.runs.get(id), controller = new AbortController(), token = Symbol(id)
     this.paused.add(id)
-    this.runs.set(id, { token, userId: '', abort: () => controller.abort() })
-    this.patch(id, { ...stoppedState(state, previous?.userId), busy: true, sendingQueued: messageId })
+    this.runs.set(id, { token, userIds: new Set(), admittedSteerIds: new Set(), pendingSteers: [], abort: () => controller.abort() })
+    this.patch(id, { ...stoppedState(state, previous), busy: true, sendingQueued: messageId })
     try {
       previous?.abort()
       controller.signal.throwIfAborted()
@@ -176,7 +296,7 @@ export class Conversations {
     const state = this.get(id)
     this.paused.add(id)
     const run = this.runs.get(id); this.runs.delete(id); run?.abort()
-    this.patch(id, stoppedState(state, run?.userId))
+    this.patch(id, stoppedState(state, run))
   }
   dispose() { this.disposed = true; for (const id of [...this.runs.keys()]) this.stop(id); this.creations.clear(); this.listeners.clear() }
   private start(
@@ -188,7 +308,9 @@ export class Conversations {
   ): string {
     const creation = this.creations.get(id)
     this.paused.delete(id)
-    const token = Symbol(id), userId = crypto.randomUUID(); this.runs.set(id, { token, userId, abort() {} })
+    const token = Symbol(id), userId = crypto.randomUUID()
+    const runEntry: ActiveRun = { token, userIds: new Set([userId]), admittedSteerIds: new Set(), pendingSteers: [], abort() {} }
+    this.runs.set(id, runEntry)
     let key = id
     this.patch(key, { busy: true, sendingQueued: queuedId ?? null, error: null, loop: null, messages: [...(creation ? [] : this.get(key).messages), { role: 'user', content: prompt, viewId: userId, runStatus: 'running' }] })
     const accepted = () => {
@@ -198,7 +320,8 @@ export class Conversations {
       if (this.runs.get(key)?.token === token) this.patch(key, change(this.get(key)))
     }
     const finish = (error?: string, cancelled = false) => {
-      if (this.runs.get(key)?.token !== token) return
+      const currentRun = this.runs.get(key)
+      if (currentRun?.token !== token) return
       if (!error && !cancelled) accepted(); else this.paused.add(key)
       this.runs.delete(key)
       const state = this.get(key)
@@ -206,10 +329,20 @@ export class Conversations {
       const streamed = cancelled && state.partial?.content.trim()
         ? [{ role: 'assistant' as const, content: state.partial.content, ...(state.partial.reasoning ? { reasoning: state.partial.reasoning } : {}), runStatus: 'cancelled' as const }]
         : []
+      const unclaimedSteers = state.steering.filter(item => !currentRun.admittedSteerIds.has(item.id))
+      const retainedSteers = cancelled
+        ? unclaimedSteers.map(item => ({ role: 'user' as const, content: item.content, viewId: item.id, runStatus: 'cancelled' as const }))
+        : []
+      const requeuedSteers = error
+        ? unclaimedSteers
+            .filter(item => !state.queue.some(queued => queued.id === item.id))
+            .map(item => ({ id: item.id, prompt: item.content, attachments: [] }))
+        : []
       const status = error ? 'failed' as const : cancelled ? 'cancelled' as const : 'completed' as const
-      this.patch(key, { busy: false, sendingQueued: null, partial: null, approval: null, question: null, error: error ?? null, loop: null,
+      this.patch(key, { busy: false, sendingQueued: null, steering: [], partial: null, approval: null, question: null, error: error ?? null, loop: null,
+        ...(requeuedSteers.length > 0 ? { queue: [...requeuedSteers, ...state.queue] } : {}),
         ...(error && !state.draft && !state.queue.some(item => item.id === queuedId) ? { draft: prompt } : {}),
-        messages: [...state.messages.map(message => message.role === 'user' && message.viewId === userId ? { ...message, runStatus: status } : message), ...streamed],
+        messages: [...state.messages.map(message => message.role === 'user' && message.viewId && currentRun.userIds.has(message.viewId) ? { ...message, runStatus: status } : message), ...streamed, ...retainedSteers],
         ...(error || cancelled ? { tasks: state.tasks.map(task => task.status === 'running' ? { ...task, status: 'unknown' as const } : task), jobs: state.jobs.map(job => job.status === 'running' ? { ...job, status: 'unknown' as const } : job) } : {}) })
       this.report(error, key)
       if (!error && !cancelled) queueMicrotask(() => { if (!this.paused.has(key)) this.resume(key) })
@@ -224,6 +357,21 @@ export class Conversations {
           const partial = state.partial ?? { content: '', reasoning: '' }
           const key = delta.kind === 'reasoning' ? 'reasoning' : 'content'
           return { partial: { ...partial, [key]: (partial[key] + delta.text).slice(0, CONVERSATION_LIMITS.partial) } }
+        }),
+        onSteering: item => update(state => {
+          const run = this.runs.get(key)
+          if (run?.admittedSteerIds.has(item.id) || state.steering.some(entry => entry.id === item.id)) return {}
+          return { steering: [...state.steering, item] }
+        }),
+        onUser: message => update(state => {
+          const run = this.runs.get(key)
+          const viewId = message.id ?? crypto.randomUUID()
+          run?.admittedSteerIds.add(viewId)
+          run?.userIds.add(viewId)
+          return {
+            steering: message.id ? state.steering.filter(item => item.id !== message.id) : state.steering,
+            messages: [...state.messages, { role: 'user', content: message.content, viewId, runStatus: 'running' }],
+          }
         }),
         onAssistant: message => update(state => ({ partial: null, messages: [...state.messages, { role: 'assistant', content: message.content, reasoning: message.reasoning ?? undefined, toolCalls: message.toolCalls }] })),
         onTool: message => update(state => ({ messages: [...state.messages, { role: 'tool', name: message.name, content: message.content, ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}), failed: message.error }] })),
@@ -262,10 +410,15 @@ export class Conversations {
           key = sessionId
           accepted()
           creation.onCreated?.(sessionId)
+          if (run?.pendingSteers.length) {
+            for (const queuedSteer of run.pendingSteers.splice(0)) {
+              void this.dispatchSteer(sessionId, queuedSteer, token)
+            }
+          }
         },
         onSessionMeta: () => this.report(undefined, key), onDone: () => finish(), onCancelled: () => finish(undefined, true), onError: finish, onUnauthorized: () => finish('Unauthorized'),
       })
-      if (this.runs.get(key)?.token === token) this.runs.set(key, { token, userId, ...handle })
+      if (this.runs.get(key)?.token === token) runEntry.abort = () => handle.abort()
     } catch (error) { finish(error instanceof Error ? error.message : 'Request failed.') }
     return key
   }

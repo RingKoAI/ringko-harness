@@ -58,7 +58,11 @@ import {
   resolveContextLimits,
   ModelCatalogCache,
   OAUTH_DOMAINS,
-  PROVIDER_PRESETS,
+  BUILTIN_PROVIDER_PRESETS,
+  getKeyCredential,
+  inspectProviderCredential,
+  parseApiKeysInput,
+  removeApiKey,
   removeOAuthAccount,
   removeSkill,
   saveMcpServers,
@@ -69,11 +73,13 @@ import {
   saveProjects,
   saveSettings,
   saveConfigFile,
+  setApiKey,
   setDefaultOAuthAccount,
   setOAuthAccount,
   setToolAuth,
   updateOAuthCredential,
   updatePolicy,
+  verifyAuthStoreIntegrity,
   configurationStatus,
   parseModelDefinition,
   parseProviderConnection,
@@ -245,6 +251,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   const approvals = new Map<string, (approved: boolean, scope?: "session" | "saved") => void>();
   const questions = new Map<string, AskManager>();
   const activeAgents = new Map<string, RingKo>();
+  const activeStreamSenders = new Map<string, (event: string, data: unknown) => void>();
   const activeRuns = new Map<string, AbortController>();
   let admissionClosed = false;
   let configurationChanging = false;
@@ -252,7 +259,10 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   const runDrains = new Map<string, PromiseWithResolvers<void>>();
   const sync = new SyncManager();
   const clients = new ClientLifecycle(sync.instance, { managed: options.managed, webui: options.webuiEnabled, limits: options.clientLeaseLimits });
-  const workspacePinned = () => options.shared || clients.status().cli > 0;
+  const workspacePinned = () => {
+    const status = clients.status();
+    return options.shared || status.cli > 0 || (status.ide ?? 0) > 0;
+  };
   const modelCatalog = new ModelCatalogCache({ onRefresh: () => sync.publish("config") });
   const loadModel = (config: RingkoConfig) => resolveLoadedModel(config, modelCatalog);
   const runStates = new RunStateManager();
@@ -432,15 +442,19 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       thinking: config.thinking ?? null,
       expandThinking: config.expandThinking ?? false,
       expandTools: config.expandTools ?? false,
+      busyEnter: config.busyEnter === "steer" ? "steer" : "queue",
+      favoriteModels: config.favoriteModels ?? [],
       updates: updatePolicy(config, message => writeDiagnostic("updates.config", message)),
       model: typeof model === "string" ? null : modelLabel(model.selection),
       modelId:
         typeof model === "string" ? null : `${model.selection.provider.name}/${model.selection.model.id}`,
-      providers: (config.providers ?? []).map((provider) => ({
-        name: provider.name,
-        type: provider.type ?? provider.vendor ?? null,
-        models: (provider.models ?? []).map((entry) => entry.id),
-      })),
+      providers: (config.providers ?? [])
+        .filter((provider) => provider.enabled !== false)
+        .map((provider) => ({
+          name: provider.name,
+          type: provider.type ?? provider.vendor ?? null,
+          models: (provider.models ?? []).map((entry) => entry.id),
+        })),
       tools: [...toolNames],
     });
   }
@@ -832,11 +846,34 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
 
   function handleProviders(): Response {
     try {
-      if (options.configPath) {
-        const config = loadConfig({ path: options.configPath });
-        return json({ providers: config.providers ?? [], model: config.model, small_model: config.small_model });
+      const source = options.configPath
+        ? (() => {
+          const config = loadConfig({ path: options.configPath });
+          return { providers: config.providers ?? [], model: config.model, small_model: config.small_model };
+        })()
+        : loadProviders();
+      const rawProviders = source.providers ?? [];
+      const credentials: Record<string, ReturnType<typeof inspectProviderCredential>> = {};
+      for (const preset of BUILTIN_PROVIDER_PRESETS) {
+        credentials[preset.id] = inspectProviderCredential({
+          name: preset.id,
+          presetId: preset.id,
+          type: preset.type,
+          baseURL: preset.baseURL,
+        });
       }
-      return json(loadProviders());
+      const publicProviders = rawProviders.map((provider) => {
+        credentials[provider.name] = inspectProviderCredential(provider);
+        const { apiKey: _redacted, ...rest } = provider;
+        void _redacted;
+        return rest;
+      });
+      return json({
+        ...source,
+        providers: publicProviders,
+        credentials,
+        builtinPresets: BUILTIN_PROVIDER_PRESETS,
+      });
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Invalid provider file." }, 500);
     }
@@ -859,7 +896,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
 
   /** Ask the configured provider endpoint for its model list (operator-initiated). */
   async function handleDiscoverModels(request: Request): Promise<Response> {
-    const body = await readJson<{ name?: unknown; type?: unknown; baseURL?: unknown; apiKey?: unknown }>(request);
+    const body = await readJson<{ name?: unknown; presetId?: unknown; type?: unknown; baseURL?: unknown; apiKey?: unknown }>(request);
     const type = typeof body?.type === "string" ? body.type.trim() : "";
     if (!type || type.length > 64 || !/^[A-Za-z0-9._-]+$/.test(type)) return json({ error: "Invalid provider type." }, 400);
     const baseURL = typeof body?.baseURL === "string" ? body.baseURL.trim() : "";
@@ -871,13 +908,14 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         return json({ error: "Invalid base URL." }, 400);
       }
     }
-    const apiKey = typeof body?.apiKey === "string" && body.apiKey.length > 0 ? body.apiKey.slice(0, 4096) : undefined;
+    const apiKey = typeof body?.apiKey === "string" && body.apiKey.length > 0 ? body.apiKey.slice(0, 16384) : undefined;
     const name = typeof body?.name === "string" ? body.name.slice(0, 128) : undefined;
+    const presetId = typeof body?.presetId === "string" && body.presetId.length > 0 ? body.presetId.slice(0, 128) : undefined;
     try {
       const models = await discoverModels({
         type,
         ...(baseURL ? { baseURL } : {}),
-        apiKey: resolveProviderApiKey({ name: name ?? type, type, baseURL, apiKey }),
+        apiKey: resolveProviderApiKey({ name: name ?? presetId ?? type, presetId, type, baseURL, apiKey }),
         ...(name ? { providerId: name } : {}),
       }, { strict: true });
       return json({ models: models.slice(0, 500), truncated: models.length > 500 });
@@ -888,9 +926,21 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
 
 
   async function handleSaveProviders(request: Request): Promise<Response> {
-    const body = await readJson<{ model?: unknown; small_model?: unknown; providers?: unknown }>(request);
+    const body = await readJson<{ model?: unknown; small_model?: unknown; providers?: unknown; removedProviders?: unknown }>(request);
     if (!body || !Array.isArray(body.providers)) return json({ error: "providers must be an array." }, 400);
     const providers: ProviderDefinition[] = [];
+    const keyUpdates: Array<{ name: string; providerType: string; keys: string[] }> = [];
+    const keyRemovals = new Set<string>();
+    const keyRenames: Array<{ from: string; to: string; providerType: string }> = [];
+
+    if (Array.isArray(body.removedProviders)) {
+      for (const item of body.removedProviders) {
+        if (typeof item === "string" && item.trim().length > 0 && item.length <= 128) {
+          keyRemovals.add(item.trim());
+        }
+      }
+    }
+
     for (const entry of body.providers) {
       if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
         return json({ error: "each provider must be an object." }, 400);
@@ -899,22 +949,70 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (typeof record.name !== "string" || record.name.trim().length === 0) {
         return json({ error: "provider.name is required." }, 400);
       }
-      if (record.models !== undefined && !Array.isArray(record.models)) {
-        return json({ error: `provider "${record.name}": models must be an array.` }, 400);
+      const trimmedName = record.name.trim();
+      if (trimmedName.length > 128 || /[\\/\u0000-\u001f]/.test(trimmedName) || ["__proto__", "prototype", "constructor"].includes(trimmedName)) {
+        return json({ error: `invalid provider name "${trimmedName}".` }, 400);
       }
-      const provider: ProviderDefinition = { name: record.name };
+      if (record.models !== undefined && !Array.isArray(record.models)) {
+        return json({ error: `provider "${trimmedName}": models must be an array.` }, 400);
+      }
+      const provider: ProviderDefinition = { name: trimmedName };
+      if (typeof record.presetId === "string" && record.presetId.trim().length > 0 && record.presetId.length <= 128) {
+        provider.presetId = record.presetId.trim();
+      }
+      if (typeof record.enabled === "boolean") {
+        provider.enabled = record.enabled;
+      }
       if (typeof record.type === "string") provider.type = record.type;
       if (typeof record.vendor === "string") provider.vendor = record.vendor;
       if (typeof record.baseURL === "string") provider.baseURL = record.baseURL;
       if (typeof record.url === "string") provider.url = record.url;
-      if (typeof record.apiKey === "string") provider.apiKey = record.apiKey;
       if (typeof record.module === "string") provider.module = record.module;
+
+      const effectiveType = provider.type ?? provider.vendor ?? "openai-compatible";
+
+      if (record.clearApiKey === true) {
+        keyRemovals.add(trimmedName);
+      } else if (typeof record.apiKey === "string" && record.apiKey.trim().length > 0) {
+        let parsedKeys: string[];
+        try {
+          parsedKeys = parseApiKeysInput(record.apiKey);
+        } catch (error) {
+          return json({ error: error instanceof Error ? error.message : "Invalid API key." }, 400);
+        }
+        if (parsedKeys.length > 0) {
+          keyUpdates.push({ name: trimmedName, providerType: effectiveType, keys: parsedKeys });
+        }
+      }
+
+      if (
+        typeof record.previousName === "string" &&
+        record.previousName.trim().length > 0 &&
+        record.previousName.trim() !== trimmedName
+      ) {
+        keyRenames.push({
+          from: record.previousName.trim(),
+          to: trimmedName,
+          providerType: effectiveType,
+        });
+      }
+
       if (Array.isArray(record.models)) {
         try { provider.models = record.models.map(parseModelDefinition); }
         catch (error) { return json({ error: error instanceof Error ? error.message : "Invalid model parameters." }, 400); }
       }
       providers.push(provider);
     }
+
+    const hasAuthMutations = keyUpdates.length > 0 || keyRemovals.size > 0 || keyRenames.length > 0;
+    if (hasAuthMutations) {
+      try {
+        verifyAuthStoreIntegrity();
+      } catch {
+        return json({ error: "Cannot read auth.json. Repair credential storage before saving keys." }, 500);
+      }
+    }
+
     try {
       const next = {
         providers,
@@ -923,6 +1021,28 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       };
       if (options.configPath) persistSettings({ ...loadConfig({ path: options.configPath }), ...next });
       else saveProviders(next);
+
+      for (const rename of keyRenames) {
+        const existingCred = getKeyCredential(rename.from);
+        if (existingCred) {
+          if (!keyUpdates.some(item => item.name === rename.to)) {
+            setApiKey(rename.to, existingCred.keys ?? [existingCred.key], process.env, {
+              providerName: rename.to,
+              providerType: rename.providerType,
+            });
+          }
+          removeApiKey(rename.from);
+        }
+      }
+      for (const removed of keyRemovals) {
+        removeApiKey(removed);
+      }
+      for (const update of keyUpdates) {
+        setApiKey(update.name, update.keys, process.env, {
+          providerName: update.name,
+          providerType: update.providerType,
+        });
+      }
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "Cannot save providers." }, 500);
     }
@@ -1189,12 +1309,28 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
   }
 
   async function handleSetUi(request: Request): Promise<Response> {
-    const body = await readJson<{ expandThinking?: unknown; expandTools?: unknown }>(request);
+    const body = await readJson<{ expandThinking?: unknown; expandTools?: unknown; busyEnter?: unknown; favoriteModels?: unknown }>(request);
+    if (body?.busyEnter !== undefined && body.busyEnter !== "queue" && body.busyEnter !== "steer") {
+      return json({ error: 'busyEnter must be "queue" or "steer".' }, 400);
+    }
+    if (body?.favoriteModels !== undefined) {
+      if (
+        !Array.isArray(body.favoriteModels) ||
+        body.favoriteModels.length > 64 ||
+        body.favoriteModels.some(item => typeof item !== "string" || !item.trim() || item.length > 256 || item.includes("\0"))
+      ) {
+        return json({ error: "favoriteModels must be an array of up to 64 model IDs." }, 400);
+      }
+    }
     const config = readConfig();
     if (typeof config === "string") return json({ error: config }, 500);
     const next: RingkoConfig = { ...config };
     if (typeof body?.expandThinking === "boolean") next.expandThinking = body.expandThinking;
     if (typeof body?.expandTools === "boolean") next.expandTools = body.expandTools;
+    if (body?.busyEnter === "queue" || body?.busyEnter === "steer") next.busyEnter = body.busyEnter;
+    if (Array.isArray(body?.favoriteModels)) {
+      next.favoriteModels = [...new Set((body.favoriteModels as string[]).map(item => item.trim()))];
+    }
     persistSettings(next);
     return await handleInfo();
   }
@@ -1311,6 +1447,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
     const modelId = target.slice(slash + 1);
     const provider = (config.providers ?? []).find((entry) => entry.name === providerName);
     if (!provider) return json({ error: `unknown provider "${providerName}".` }, 400);
+    if (provider.enabled === false) return json({ error: `provider "${providerName}" is disabled.` }, 400);
     if (!(provider.models ?? []).some((entry) => entry.id === modelId)) {
       return json({ error: `unknown model "${modelId}" for provider "${providerName}".` }, 400);
     }
@@ -1395,6 +1532,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         usage: sessionUsage(events),
         tasks: taskSummaries(events, busy), todos: sessionTodos(events), jobs: sessionJobs(events, busy),
         approvals: [...(state?.approvals.values() ?? [])], questions: [...(state?.questions.values() ?? [])],
+        steering: [...(state?.steering ?? [])],
         partial: state?.partial ?? null, loop: state?.loop ?? null,
         error: state?.error ?? runStates.error(id) ?? (busy || lastRunEvent?.type === "run/completed" || lastRunEvent?.type === "run/cancelled" ? null : terminalError),
       });
@@ -1697,7 +1835,13 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
             },
             onEvent: (event) => {
               sync.publish("activity", session.id);
-              if (event.type === "model") {
+              if (event.type === "user") {
+                send("user", {
+                  turn: event.turn,
+                  content: event.message.content,
+                  ...(event.inputId ? { id: event.inputId } : {}),
+                });
+              } else if (event.type === "model") {
                 send("usage", { usage: sessionUsage(session.all()) });
                 send("assistant", {
                   turn: event.turn,
@@ -1718,6 +1862,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
           }, { ask: asker.request, onTodo: items => send("todo", { items }), report: message => send("notice", { message }) });
           const ringko = managed.agent;
           activeAgents.set(session.id, ringko);
+          activeStreamSenders.set(session.id, send);
           // Title and summary are best-effort: a slow or failed generation must
           // never delay or reject the completed run.
           let metaStarted = false;
@@ -1781,6 +1926,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
           try { await managed?.close(); } catch (error) { writeDiagnostic("runtime.agent.close", String(error)); }
           activeRuns.delete(session.id);
           activeAgents.delete(session.id);
+          activeStreamSenders.delete(session.id);
           for (const id of pendingApprovals) approvals.get(id)?.(false);
           try { session.close(); }
           catch (error) { send("error", { message: "Session persistence failed. Inspect diagnostics before continuing." }); writeDiagnostic("session.close", String(error)); }
@@ -2002,7 +2148,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         const body = await readJson<{ kind?: unknown }>(request);
         if (admissionClosed) return json({ error: "Backend is closing." }, 503);
         if (expectedWorkspace && backendKey(decodeURIComponent(expectedWorkspace)) !== backendKey(workspace)) return json({ error: "Workspace changed while attaching the client." }, 409);
-        if (body?.kind !== "cli" && body?.kind !== "web") return json({ error: "Invalid frontend kind." }, 400);
+        if (body?.kind !== "cli" && body?.kind !== "web" && body?.kind !== "ide") return json({ error: "Invalid frontend kind." }, 400);
         try {
           const lease = clients.acquire(body.kind);
           writeDiagnostic("backend.client.attach", JSON.stringify({ instance: sync.instance, kind: body.kind, clients: clients.status().clients }));
@@ -2068,7 +2214,7 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
       if (url.pathname.startsWith("/api/auth/oauth/") && request.method === "GET") {
         return handleOAuthStatus(decodeURIComponent(url.pathname.slice("/api/auth/oauth/".length)));
       }
-      if (url.pathname === "/api/presets" && request.method === "GET") return json({ presets: PROVIDER_PRESETS });
+      if (url.pathname === "/api/presets" && request.method === "GET") return json({ presets: BUILTIN_PROVIDER_PRESETS });
       if (url.pathname === "/api/providers" && request.method === "GET") return handleProviders();
       if (url.pathname === "/api/providers" && request.method === "PUT") return await handleSaveProviders(request);
       if (url.pathname === "/api/providers/models" && request.method === "POST") return await handleDiscoverModels(request);
@@ -2168,6 +2314,37 @@ export function startServer(options: ServerOptions = {}): RingkoServer {
         if (request.method === "POST" && action === "fork") return await handleForkSession(id, request);
         if (request.method === "GET" && action === "feedback") return handleGetFeedback(id);
         if (request.method === "POST" && action === "feedback") return await handleSetFeedback(id, request);
+        if (request.method === "POST" && action === "steer") {
+          const body = await readJson<{ id?: unknown; prompt?: unknown; attachments?: unknown }>(request);
+          if (typeof body?.prompt !== "string" || body.prompt.length > 65536) return json({ error: "Invalid steer message." }, 400);
+          if (body.id !== undefined && (typeof body.id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(body.id))) {
+            return json({ error: "Invalid steer id." }, 400);
+          }
+          const raw = body.prompt.trim();
+          const attachments = Array.isArray(body?.attachments)
+            ? body.attachments.filter((value): value is string => typeof value === "string" && value.length > 0)
+            : [];
+          if (attachments.length > 16 || attachments.some(path => path.length > 4096 || path.includes("\0"))) {
+            return json({ error: "Invalid attachments." }, 400);
+          }
+          if (raw.length === 0) return json({ error: "prompt required" }, 400);
+          const content = attachments.length
+            ? `${raw}\n\nAttached files (read them if relevant): ${attachments.join(", ")}`
+            : raw;
+          if (content.length > 65536) return json({ error: "Invalid steer message." }, 400);
+          const agent = activeAgents.get(id);
+          if (!agent || !activeRuns.has(id)) return json({ error: "No active run for this session." }, 409);
+          const steerId = typeof body.id === "string" ? body.id : randomUUID();
+          let accepted = false;
+          try {
+            accepted = agent.steer(content, { id: steerId });
+          } catch (error) {
+            return json({ error: error instanceof Error ? error.message : "Steering queue is full." }, 400);
+          }
+          if (!accepted) return json({ error: "Current run is finishing and no longer accepts steering." }, 409);
+          activeStreamSenders.get(id)?.("steering", { id: steerId, content });
+          return json({ ok: true, id: steerId });
+        }
         if (request.method === "POST" && action === "stop") {
           const run = activeRuns.get(id);
           if (!run) return json({ error: "No active run for this session." }, 404);

@@ -1,4 +1,4 @@
-import { Activity, ArrowDown, ArrowUp, Brain, Folder, GitBranch, ListTree, MessageSquare, Paperclip, Pencil, Square, Terminal, ThumbsDown, ThumbsUp, User, Wrench, X } from 'lucide-react'
+import { Activity, ArrowDown, ArrowUp, Brain, CornerDownRight, Folder, GitBranch, ImagePlus, ListOrdered, ListTree, LoaderCircle, MessageSquare, Paperclip, Pencil, Square, Terminal, ThumbsDown, ThumbsUp, User, Wrench, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type SetStateAction } from 'react'
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -10,7 +10,8 @@ import {
   reload,
   sendFeedback,
   setUi,
-  uploadFile,
+  uploadFiles,
+  type BusyEnterMode,
   type ServerMessage,
   type UploadedFile,
 } from '@/api'
@@ -31,12 +32,14 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useI18n, type MessageKey } from '@/i18n'
 import { useApp } from '@/store'
 import { cn } from '@/lib/utils'
 import { toolTurns } from '@/lib/tool-activity'
 import { isPendingSessionId } from '@/lib/conversations'
+import { extractDroppedFiles, extractPastedFiles, hasFileTransfer, validateIntakeFiles } from '@/lib/attachment-intake'
 import { isNearBottom, scrollMetrics } from '@/lib/chat-scroll'
 import { CopyButton } from '@/components/chat/copy-button'
 import { ToolCallList, TurnToolActivity, ToolResult, toolSummary } from '@/components/chat/tool-activity'
@@ -47,6 +50,9 @@ const COMMANDS: { name: string; label: MessageKey }[] = [
   { name: 'compact', label: 'command.compact' },
   { name: 'loop', label: 'command.loop' },
 ]
+
+/** Radix Select rejects empty item values, so "main session" travels as this sentinel. */
+const TASK_VIEW_MAIN = '__main__'
 
 function MessageRow({
   message,
@@ -209,9 +215,22 @@ export function ChatPage() {
   const draft = app.draft
   const setDraft = app.setDraft
   const [attachmentDrafts, setAttachmentDrafts] = useState<Record<string, UploadedFile[]>>({})
+  const [uploadingCounts, setUploadingCounts] = useState<Record<string, number>>({})
+  const [draggingFiles, setDraggingFiles] = useState(false)
+  const dragDepthRef = useRef(0)
+  const previewUrlsRef = useRef(new Set<string>())
   const attachmentKey = app.sessionId ?? 'new'
   const attachments = attachmentDrafts[attachmentKey] ?? []
+  const uploadingCount = uploadingCounts[attachmentKey] ?? 0
   const setAttachments = (value: SetStateAction<UploadedFile[]>) => setAttachmentDrafts(previous => ({ ...previous, [attachmentKey]: typeof value === 'function' ? value(previous[attachmentKey] ?? []) : value }))
+
+  useEffect(() => {
+    const urls = previewUrlsRef.current
+    return () => {
+      for (const url of urls) URL.revokeObjectURL(url)
+      urls.clear()
+    }
+  }, [])
   const [context, setContext] = useState<{ used: number; limit: number } | null>(null)
   const [view, setView] = useState<'chat' | 'trajectory'>('chat')
   const [taskView, setTaskView] = useState<string | null>(null)
@@ -262,7 +281,7 @@ export function ChatPage() {
     if (!viewport) return
     if (followingRef.current) viewport.scrollTop = viewport.scrollHeight
     else setUnreadTail(true)
-  }, [app.sessionId, app.messages.length, app.partial?.content, app.partial?.reasoning, app.busy, app.approval, app.question, app.todos, app.tasks, app.jobs])
+  }, [app.sessionId, app.messages.length, app.steering.length, app.partial?.content, app.partial?.reasoning, app.busy, app.approval, app.question, app.todos, app.tasks, app.jobs])
 
   // Load the session named by the URL (deep link / refresh).
   useEffect(() => {
@@ -314,15 +333,51 @@ export function ChatPage() {
     }
   }, [app.sessionId, app.messages.length, app.info?.modelId, app.info?.context.limit])
 
+  function releaseAttachmentPreview(url: string | undefined): void {
+    if (!url) return
+    URL.revokeObjectURL(url)
+    previewUrlsRef.current.delete(url)
+  }
+
+  function clearCurrentAttachments(): void {
+    for (const entry of attachments) releaseAttachmentPreview(entry.previewUrl)
+    setAttachments([])
+  }
+
+  async function intakeFiles(rawFiles: readonly File[]): Promise<void> {
+    if (rawFiles.length === 0) return
+    const targetKey = attachmentKey
+    const validation = validateIntakeFiles(rawFiles, attachments.length + uploadingCount)
+    if (!validation.ok) {
+      toast.error(validation.reason === 'limit' ? t('upload.limit') : t('upload.tooLarge', { name: validation.fileName ?? '' }))
+      return
+    }
+    const batchCount = validation.files.length
+    setUploadingCounts(previous => ({ ...previous, [targetKey]: (previous[targetKey] ?? 0) + batchCount }))
+    const localPreviews = validation.files.map(file => {
+      if (!file.type.startsWith('image/') || typeof URL.createObjectURL !== 'function') return undefined
+      const url = URL.createObjectURL(file)
+      previewUrlsRef.current.add(url)
+      return url
+    })
+    try {
+      const uploaded = await uploadFiles(validation.files)
+      const enriched = uploaded.map((item, idx) => (localPreviews[idx] ? { ...item, previewUrl: localPreviews[idx] } : item))
+      setAttachmentDrafts(previous => ({ ...previous, [targetKey]: [...(previous[targetKey] ?? []), ...enriched] }))
+    } catch (cause) {
+      for (const url of localPreviews) releaseAttachmentPreview(url)
+      toast.error(cause instanceof Error ? cause.message : t('upload.failed'))
+    } finally {
+      setUploadingCounts(previous => {
+        const next = Math.max(0, (previous[targetKey] ?? 0) - batchCount)
+        return { ...previous, [targetKey]: next }
+      })
+    }
+  }
+
   async function onFiles(files: FileList | null): Promise<void> {
     if (!files || files.length === 0) return
-    if (files.length + attachments.length > 16) { toast.error(t('upload.limit')); return }
-    try {
-      const uploaded = await Promise.all(Array.from(files, (file) => uploadFile(file)))
-      setAttachments((current) => [...current, ...uploaded])
-    } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : t('upload.failed'))
-    }
+    await intakeFiles(Array.from(files))
   }
 
   function pinToLatest(): void {
@@ -343,16 +398,23 @@ export function ChatPage() {
     if (viewport) viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'smooth' })
   }
 
-  const submit = (): void => {
-    const prompt = draft.trim()
+  const busyEnter: BusyEnterMode = app.info?.busyEnter === 'steer' ? 'steer' : 'queue'
+
+  const submit = (modeOverride?: BusyEnterMode): void => {
+    if (uploadingCount > 0) {
+      toast.error(t('upload.wait'))
+      return
+    }
+    const rawPrompt = draft.trim()
+    const prompt = rawPrompt || (attachments.length > 0 ? t('upload.defaultPrompt') : '')
     if (prompt.length === 0) return
-    const queued = app.busy
-    if (queued && (prompt === '/reload' || prompt === '/compact')) { toast.error(t('queue.commandBusy')); return }
+    const busy = app.busy
+    if (busy && (prompt === '/reload' || prompt === '/compact')) { toast.error(t('queue.commandBusy')); return }
     if (prompt === '/loop' || prompt.startsWith('/loop ')) {
       const args = prompt.slice('/loop'.length).trim()
       if (args.length === 0) { toast.error(t('loop.usage')); return }
       const paths = attachments.map((file) => file.path)
-      if (app.send(prompt, paths, { args })) { setAttachments([]); pinToLatest() }
+      if (app.send(prompt, paths, { args })) { clearCurrentAttachments(); pinToLatest() }
       return
     }
     if (prompt === '/reload') {
@@ -380,11 +442,19 @@ export function ChatPage() {
       return
     }
     const paths = attachments.map((file) => file.path)
+    const deliveryMode: BusyEnterMode = modeOverride ?? busyEnter
+    if (busy && deliveryMode === 'steer') {
+      if (!app.steer(prompt, paths)) return
+      clearCurrentAttachments()
+      pinToLatest()
+      toast.success(t('steer.added'))
+      return
+    }
     if (!app.send(prompt, paths)) return
-    setAttachments([])
+    clearCurrentAttachments()
     pinToLatest()
     // Busy submissions wait in the same ordered queue as the composer's list.
-    if (queued) toast.success(t('queue.added'))
+    if (busy) toast.success(t('queue.added'))
   }
 
   function toggleUi(patch: { expandThinking?: boolean; expandTools?: boolean }): void {
@@ -452,7 +522,10 @@ export function ChatPage() {
     return <MessageRow key={index} message={message} index={index} forkIndex={forkIndexes[index]} showThinking={showThinking} showTools={showTools}
       onBranch={branch} onEdit={edit} onFeedback={rate} feedback={feedback[index]} toolResults={toolActivity.results.get(index)} busy={app.busy || isPendingSessionId(app.sessionId)} showCalls={showCalls} toolBusy={toolBusy} />
   }
-  const empty = app.messages.length === 0
+  const empty = app.messages.length === 0 && app.steering.length === 0
+  const hasSubmittableContent = draft.trim().length > 0 || attachments.length > 0
+  const plainDraft = hasSubmittableContent && !draft.trimStart().startsWith('/')
+  const canSteerQueue = app.busy && !hasSubmittableContent && app.queue.some(item => !item.loop) && !isPendingSessionId(app.sessionId)
   const landing = empty && view === 'chat'
   const shellJobs = app.jobs.filter(job => job.kind === 'shell')
   const runningJobs = shellJobs.filter(job => job.status === 'running').length
@@ -462,25 +535,66 @@ export function ChatPage() {
     draft.startsWith('/') && !draft.includes(' ') ? COMMANDS.filter((command) => command.name.startsWith(draft.slice(1))) : []
 
   return (
-    <div className="chat-layout">
+    <div
+      className="chat-layout relative"
+      onDragEnter={(event) => {
+        if (taskView || !hasFileTransfer(event.dataTransfer)) return
+        event.preventDefault()
+        dragDepthRef.current += 1
+        setDraggingFiles(true)
+      }}
+      onDragOver={(event) => {
+        if (taskView || !hasFileTransfer(event.dataTransfer)) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'copy'
+      }}
+      onDragLeave={(event) => {
+        if (!hasFileTransfer(event.dataTransfer)) return
+        event.preventDefault()
+        dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+        if (dragDepthRef.current === 0) setDraggingFiles(false)
+      }}
+      onDrop={(event) => {
+        if (taskView || !hasFileTransfer(event.dataTransfer)) return
+        event.preventDefault()
+        dragDepthRef.current = 0
+        setDraggingFiles(false)
+        const { files, rejectedDirectories } = extractDroppedFiles(event.dataTransfer)
+        if (rejectedDirectories > 0) toast.error(t('upload.directoryUnsupported'))
+        if (files.length > 0) void intakeFiles(files)
+      }}
+    >
+      {draggingFiles ? (
+        <div
+          data-drop-overlay
+          className="pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-primary bg-background/90 backdrop-blur-xs"
+        >
+          <ImagePlus className="size-8 text-primary" aria-hidden="true" />
+          <p className="text-sm font-medium">{t('upload.dropTitle')}</p>
+          <p className="text-xs text-muted-foreground">{t('upload.dropHint')}</p>
+        </div>
+      ) : null}
       <div className="flex shrink-0 gap-1 overflow-x-auto border-b px-3 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <Button size="sm" variant={view === 'chat' ? 'secondary' : 'ghost'} aria-pressed={view === 'chat'} className="shrink-0" onClick={() => setView('chat')}><MessageSquare />{t('trajectory.chat')}</Button>
         <Button size="sm" variant={view === 'trajectory' ? 'secondary' : 'ghost'} aria-pressed={view === 'trajectory'} className="shrink-0" onClick={() => setView('trajectory')}><Activity />{t('trajectory.title')}</Button>
         <Button size="sm" variant="ghost" className="shrink-0" onClick={() => openRightSidebar('files')}><ListTree />{t('workspace.title')}</Button>
         {app.tasks.length > 0 ? (
-          <select
-            aria-label={t('task.view')}
-            className="ml-auto h-8 shrink-0 rounded-md border bg-background px-2 text-xs"
-            value={taskView ?? ''}
-            onChange={(event) => setTaskView(event.target.value || null)}
+          <Select
+            value={taskView ?? TASK_VIEW_MAIN}
+            onValueChange={value => setTaskView(value === TASK_VIEW_MAIN ? null : value)}
           >
-            <option value="">{t('task.main')}</option>
-            {app.tasks.map(task => (
-              <option key={task.taskId} value={task.taskId}>
-                {`${task.description} · ${t(`task.${task.status}`)}`.slice(0, 80)}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger aria-label={t('task.view')} className="ml-auto h-8 shrink-0 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={TASK_VIEW_MAIN}>{t('task.main')}</SelectItem>
+              {app.tasks.map(task => (
+                <SelectItem key={task.taskId} value={task.taskId}>
+                  {`${task.description} · ${t(`task.${task.status}`)}`.slice(0, 80)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         ) : null}
       </div>
       {taskView && app.sessionId && !isPendingSessionId(app.sessionId) ? (
@@ -507,6 +621,21 @@ export function ChatPage() {
                 {call.truncated ? <p className="mt-1 text-xs text-muted-foreground">{t('stream.toolTruncated')}</p> : null}
               </details>)}
             </div> : null}
+            {app.steering.map(item => (
+              <div key={item.id} data-pending-steering className="min-w-0 space-y-2 opacity-90">
+                <div className="flex items-center gap-2">
+                  <div className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground ring-1 ring-border">
+                    <User className="size-3.5" />
+                  </div>
+                  <div className="text-xs font-medium text-muted-foreground">{t('message.you')}</div>
+                  <Badge variant="outline" className="gap-1 text-[10px] font-normal">
+                    <span className="size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true" />
+                    {t('steer.pending')}
+                  </Badge>
+                </div>
+                <div className="text-sm leading-relaxed whitespace-pre-wrap">{item.content}</div>
+              </div>
+            ))}
             {app.busy ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <span className="size-2 animate-pulse rounded-full bg-primary" />
@@ -574,29 +703,65 @@ export function ChatPage() {
               ))}
             </div>
           ) : null}
-          {attachments.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+          {attachments.length > 0 || uploadingCount > 0 ? (
+            <div className="flex flex-wrap items-center gap-1.5 px-3 pt-3">
               {attachments.map((file) => (
-                <Badge key={file.path} variant="secondary" className="gap-1 rounded-full font-normal">
-                  <Paperclip className="size-3" />
-                  {file.name}
+                <Badge key={file.path} variant="secondary" className="gap-1.5 rounded-xl py-1 pr-1.5 pl-1.5 font-normal">
+                  {file.previewUrl ? (
+                    <img
+                      src={file.previewUrl}
+                      alt={file.name}
+                      className="size-6 shrink-0 rounded object-cover ring-1 ring-border"
+                    />
+                  ) : (
+                    <Paperclip className="size-3 shrink-0" />
+                  )}
+                  <span className="max-w-44 truncate">{file.name}</span>
                   <button
                     type="button"
                     className="ml-0.5 rounded-full hover:text-foreground"
-                    onClick={() => setAttachments((current) => current.filter((entry) => entry.path !== file.path))}
+                    onClick={() => {
+                      releaseAttachmentPreview(file.previewUrl)
+                      setAttachments((current) => current.filter((entry) => entry.path !== file.path))
+                    }}
                   >
                     <X className="size-3" />
                   </button>
                 </Badge>
               ))}
+              {uploadingCount > 0 ? (
+                <Badge variant="outline" className="gap-1 rounded-full font-normal text-muted-foreground">
+                  <LoaderCircle className="size-3 animate-spin" aria-hidden="true" />
+                  {t('upload.uploading', { count: uploadingCount })}
+                </Badge>
+              ) : null}
             </div>
           ) : null}
           <div className="flex min-w-0 items-end gap-2 px-2 py-2">
             <Textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
+              onPaste={(event) => {
+                const pasted = extractPastedFiles(event.clipboardData)
+                if (pasted.length > 0) {
+                  event.preventDefault()
+                  void intakeFiles(pasted)
+                }
+              }}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
+                if (event.nativeEvent.isComposing) return
+                if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {
+                  if (event.ctrlKey || event.metaKey) {
+                    event.preventDefault()
+                    if (canSteerQueue) {
+                      void app.steerAllQueued().then(count => { if (count > 0) pinToLatest() })
+                    } else if (app.busy) {
+                      submit(busyEnter === 'steer' ? 'queue' : 'steer')
+                    } else {
+                      submit()
+                    }
+                    return
+                  }
                   event.preventDefault()
                   submit()
                 }
@@ -604,7 +769,7 @@ export function ChatPage() {
               rows={landing ? 2 : 1}
               aria-label={t('composer.placeholder')}
               aria-description={t('composer.hint')}
-              placeholder={t('composer.placeholder')}
+              placeholder={canSteerQueue ? t('queue.steerAllHint') : t('composer.placeholder')}
               className="max-h-40 min-h-11 min-w-0 flex-1 resize-none border-0 bg-transparent px-2 pt-2.5 shadow-none focus-visible:ring-0"
             />
             <div className="flex shrink-0 items-center gap-1.5 pb-0.5">
@@ -613,13 +778,26 @@ export function ChatPage() {
                   <Square />
                 </Button>
               ) : null}
+              {app.busy && plainDraft ? (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="rounded-full"
+                  disabled={uploadingCount > 0}
+                  onClick={() => submit(busyEnter === 'steer' ? 'queue' : 'steer')}
+                  title={busyEnter === 'steer' ? t('queue.add') : t('steer.sendHint')}
+                  aria-label={busyEnter === 'steer' ? t('queue.add') : t('steer.send')}
+                >
+                  {busyEnter === 'steer' ? <ListOrdered /> : <CornerDownRight />}
+                </Button>
+              ) : null}
               <Button
                 size="icon"
                 className="relative rounded-full"
-                onClick={submit}
-                disabled={draft.trim().length === 0}
-                title={app.busy ? t('queue.add') : t('composer.send')}
-                aria-label={app.busy ? t('queue.add') : t('composer.send')}
+                onClick={() => submit()}
+                disabled={!hasSubmittableContent || uploadingCount > 0}
+                title={app.busy ? (busyEnter === 'steer' && plainDraft ? t('steer.send') : t('queue.add')) : t('composer.send')}
+                aria-label={app.busy ? (busyEnter === 'steer' && plainDraft ? t('steer.send') : t('queue.add')) : t('composer.send')}
               >
                 <ArrowUp />
                 {app.busy && app.queue.length > 0 ? (

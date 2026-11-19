@@ -253,9 +253,15 @@ importers:
 
   packages/code:
     dependencies:
-      '@ringko-ai/sdk':
+      '@ringko-ai/client':
         specifier: workspace:*
-        version: link:../sdk
+        version: link:../client
+      '@ringko-ai/config':
+        specifier: workspace:*
+        version: link:../config
+      '@ringko-ai/protocol':
+        specifier: workspace:*
+        version: link:../protocol
     devDependencies:
       '@types/vscode':
         specifier: ^1.100.0

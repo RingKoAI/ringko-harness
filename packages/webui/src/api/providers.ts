@@ -11,10 +11,14 @@ export interface ProviderPreset {
   id: string;
   label: string;
   type: string;
+  builtin?: boolean;
   baseURL?: string;
+  defaultBaseURL?: string;
   apiKeyEnv?: string;
+  apiKeyUrl?: string;
   auth?: string;
   docs?: string;
+  defaultModels?: ReadonlyArray<{ id: string; name: string }>;
 }
 
 export function fetchPresets(): Promise<{ presets: ProviderPreset[] }> {
@@ -51,7 +55,7 @@ export async function previewModelContext(input: { provider: Pick<ProviderDefini
 }
 
 /** Query a provider endpoint for its model list using the host-side provider module. */
-export async function discoverProviderModels(input: { name: string; type: string; baseURL?: string; apiKey?: string }): Promise<{ models: DiscoveredProviderModel[]; truncated?: boolean }> {
+export async function discoverProviderModels(input: { name: string; presetId?: string; type: string; baseURL?: string; apiKey?: string }): Promise<{ models: DiscoveredProviderModel[]; truncated?: boolean }> {
   const response = await fetch(`${BASE}/api/providers/models`, {
     method: "POST",
     headers: authHeaders({ "content-type": "application/json" }),

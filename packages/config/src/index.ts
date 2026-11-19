@@ -14,6 +14,7 @@ export * from "./model-cache.ts";
 export * from "./model-context.ts";
 export * from "./model-settings.ts";
 export * from "./tool-names.ts";
+export * from "./key-roulette.ts";
 export * from "./auth.ts";
 export * from "./tool-auth.ts";
 export * from "./catalog.ts";

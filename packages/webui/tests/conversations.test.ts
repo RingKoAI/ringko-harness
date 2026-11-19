@@ -340,3 +340,99 @@ it('resumes newly queued work after a successful manual retry of a failed run', 
   calls[1].handlers.onDone({ sessionId: 'a', content: 'success', turns: 1 }); await Promise.resolve()
   expect(calls[2].input.prompt).toBe('after retry')
 })
+
+it('steers a busy conversation, transitions pending steering to a user message on admission, and marks all owned user inputs on completion', async () => {
+  const steered: Array<{ id: string; input: { id: string; prompt: string; attachments: string[] } }> = []
+  const calls: { input: { sessionId?: string; prompt: string; attachments: string[] }; handlers: ChatHandlers }[] = []
+  const manager = new Conversations(
+    (input, handlers) => { calls.push({ input, handlers }); return { abort() {} } },
+    () => {},
+    async (id, input) => { steered.push({ id, input }); return { ok: true, id: input.id } },
+  )
+  manager.send('a', 'initial')
+  expect(await manager.steer('a', 'interjection', ['file.ts'])).toBe(true)
+  expect(steered).toHaveLength(1)
+  const steerId = steered[0].input.id
+  expect(manager.get('a').steering).toEqual([{ id: steerId, content: 'interjection' }])
+  // Duplicate SSE steering frame does not duplicate pending entry.
+  calls[0].handlers.onSteering?.({ id: steerId, content: 'interjection' })
+  expect(manager.get('a').steering).toHaveLength(1)
+
+  // Step boundary admits the steered message.
+  calls[0].handlers.onUser?.({ id: steerId, content: 'interjection', turn: 1 })
+  expect(manager.get('a').steering).toEqual([])
+  expect(manager.get('a').messages.map(m => [m.role, m.content, m.viewId, m.runStatus])).toEqual([
+    ['user', 'initial', manager.get('a').messages[0].viewId, 'running'],
+    ['user', 'interjection', steerId, 'running'],
+  ])
+  // Late SSE steering frame after admission is ignored.
+  calls[0].handlers.onSteering?.({ id: steerId, content: 'interjection' })
+  expect(manager.get('a').steering).toEqual([])
+
+  calls[0].handlers.onAssistant({ content: 'obeyed interjection', reasoning: null, toolCalls: [], turn: 2 })
+  calls[0].handlers.onDone({ sessionId: 'a', content: 'obeyed interjection', turns: 2 })
+  expect(manager.get('a').messages.filter(m => m.role === 'user').map(m => m.runStatus)).toEqual(['completed', 'completed'])
+})
+
+it('steers queued items individually or in bulk, falls back to send on 409, and restores queue items on transport error', async () => {
+  let mode: 'ok' | '409' | 'fail' = 'ok'
+  const steeredIds: string[] = []
+  const errors: (string | undefined)[] = []
+  const calls: { input: { sessionId?: string; prompt: string }; handlers: ChatHandlers }[] = []
+  const manager = new Conversations(
+    (input, handlers) => { calls.push({ input, handlers }); return { abort() {} } },
+    error => errors.push(error),
+    async (_id, input) => {
+      if (mode === '409') throw Object.assign(new Error('Current run is finishing and no longer accepts steering.'), { status: 409 })
+      if (mode === 'fail') throw new Error('Network down')
+      steeredIds.push(input.id)
+      return { ok: true, id: input.id }
+    },
+  )
+  manager.send('a', 'active')
+  manager.send('a', 'q1')
+  manager.send('a', '/loop skip', [], { args: 'skip' })
+  manager.send('a', 'q2')
+  expect(await manager.steerAllQueued('a')).toBe(2)
+  expect(manager.get('a').queue.map(q => q.prompt)).toEqual(['/loop skip'])
+  expect(manager.get('a').steering.map(s => s.content)).toEqual(['q1', 'q2'])
+  expect(steeredIds).toHaveLength(2)
+
+  // Transport failure restores queued item at its original position without losing data.
+  manager.send('a', 'q3')
+  const q3 = manager.get('a').queue[1]
+  mode = 'fail'
+  expect(await manager.steerQueued('a', q3.id)).toBe(false)
+  expect(manager.get('a').queue.map(q => q.prompt)).toEqual(['/loop skip', 'q3'])
+  expect(errors.at(-1)).toBe('Network down')
+
+  // 409 falls back to normal queue/send seamlessly.
+  mode = '409'
+  expect(await manager.steer('a', 'late steer')).toBe(true)
+  expect(manager.get('a').steering.some(s => s.content === 'late steer')).toBe(false)
+  expect(manager.get('a').queue.map(q => q.prompt)).toEqual(['/loop skip', 'q3', 'late steer'])
+})
+
+it('flushes steers submitted during pending session creation and retains unclaimed steers on stop', async () => {
+  const steered: Array<{ id: string; prompt: string }> = []
+  const calls: { handlers: ChatHandlers }[] = []
+  const manager = new Conversations(
+    (_input, handlers) => { calls.push({ handlers }); return { abort() {} } },
+    () => {},
+    async (sessionId, input) => { steered.push({ id: sessionId, prompt: input.prompt }); return { ok: true, id: input.id } },
+  )
+  const pending = manager.sendNew('seed')
+  await manager.steer(pending, 'early steer')
+  expect(steered).toEqual([])
+  calls[0].handlers.onSession?.('created-session')
+  await Promise.resolve()
+  expect(steered).toEqual([{ id: 'created-session', prompt: 'early steer' }])
+  calls[0].handlers.onDelta?.({ kind: 'text', text: 'Partial' })
+  manager.stop('created-session')
+  expect(manager.get('created-session').steering).toEqual([])
+  expect(manager.get('created-session').messages.map(m => [m.role, m.content, m.runStatus])).toEqual([
+    ['user', 'seed', 'cancelled'],
+    ['assistant', 'Partial', 'cancelled'],
+    ['user', 'early steer', 'cancelled'],
+  ])
+})

@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   getApiKey,
+  getApiKeys,
+  getKeyCredential,
   getOAuthAccount,
   loadAuth,
   removeOAuthAccount,
@@ -12,7 +14,12 @@ import {
   setOAuthAccount,
   type OAuthCredential,
 } from "../src/auth.ts";
+import { selectModel } from "../src/config.ts";
+import { parseApiKeysInput, resetKeyRoulette, selectNextApiKey } from "../src/key-roulette.ts";
 import { authPath } from "../src/paths.ts";
+import { BUILTIN_PROVIDER_IDS, BUILTIN_PROVIDER_PRESETS } from "../src/presets.ts";
+import { resolveProviderApiKey } from "../src/provider-connect.ts";
+import { configuredModelIds } from "../src/task-models.ts";
 
 let home: string;
 let env: NodeJS.ProcessEnv;
@@ -90,5 +97,59 @@ describe("auth store", () => {
   it("returns empty for a missing file", () => {
     expect(loadAuth(env)).toEqual({ oauth: {}, apikeys: {} });
     expect(getApiKey("nope", env)).toBeUndefined();
+  });
+
+  it("persists structured type='oauth' and type='key' with providerName, providerType, and multi-key rotation", () => {
+    resetKeyRoulette();
+    setOAuthAccount("openai-oauth", { id: "acc-1", credential: oauth("acc-1"), authenticatedAt: 10 }, env);
+    setApiKey("deepseek", "sk-one, sk-two\nsk-three", env, {
+      providerName: "deepseek",
+      providerType: "openai-compatible",
+    });
+
+    const rawDisk = JSON.parse(readFileSync(authPath(env), "utf8")) as {
+      oauth: Record<string, { type: string }>;
+      apikeys: Record<string, { type: string; providerName: string; providerType: string; key: string; keys: string[] }>;
+    };
+    expect(rawDisk.oauth["openai-oauth"]?.type).toBe("oauth");
+    expect(rawDisk.apikeys.deepseek).toEqual({
+      type: "key",
+      providerName: "deepseek",
+      providerType: "openai-compatible",
+      key: "sk-one",
+      keys: ["sk-one", "sk-two", "sk-three"],
+    });
+
+    expect(getKeyCredential("deepseek", env)?.providerType).toBe("openai-compatible");
+    expect(getApiKeys("deepseek", env)).toEqual(["sk-one", "sk-two", "sk-three"]);
+
+    const providerDef = { name: "deepseek", presetId: "deepseek", type: "openai-compatible" };
+    expect(resolveProviderApiKey(providerDef, env)).toBe("sk-one");
+    expect(resolveProviderApiKey(providerDef, env)).toBe("sk-two");
+    expect(resolveProviderApiKey(providerDef, env)).toBe("sk-three");
+    expect(resolveProviderApiKey(providerDef, env)).toBe("sk-one");
+  });
+
+  it("validates multi-key inputs, exposes exact 15 built-in presets, and skips disabled providers", () => {
+    expect(BUILTIN_PROVIDER_IDS.length).toBe(15);
+    expect(BUILTIN_PROVIDER_PRESETS.length).toBe(15);
+    for (const preset of BUILTIN_PROVIDER_PRESETS) {
+      expect(preset.builtin).toBe(true);
+      expect((preset.defaultModels?.length ?? 0) > 0).toBe(true);
+    }
+
+    expect(parseApiKeysInput(" k1, k2\nk1 ")).toEqual(["k1", "k2"]);
+    expect(() => parseApiKeysInput("bad key with spaces")).toThrow("ASCII");
+    expect(selectNextApiKey("single", ["only"])).toBe("only");
+
+    const cfg = {
+      model: "disabled-p/m1",
+      providers: [
+        { name: "disabled-p", enabled: false, models: [{ id: "m1", name: "M1" }] },
+        { name: "active-p", enabled: true, models: [{ id: "m2", name: "M2" }] },
+      ],
+    };
+    expect(selectModel(cfg)?.provider.name).toBe("active-p");
+    expect(configuredModelIds(cfg)).toEqual(["active-p/m2"]);
   });
 });

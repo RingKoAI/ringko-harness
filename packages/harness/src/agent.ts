@@ -92,12 +92,20 @@ export type ModelToolInputDelta =
 
 export type ModelClient = (request: ModelRequest) => Promise<ModelTurn>;
 
+export interface SteeredInput {
+  /** Optional caller correlation identifier preserved on the emitted user event. */
+  id?: string;
+  content: string;
+}
+
 export interface AgentEvent {
-  type: "model" | "tool_call" | "tool" | "tool_error";
+  type: "user" | "model" | "tool_call" | "tool" | "tool_error";
   turn: number;
   message: ChatMessage;
   toolName?: string;
   error?: string;
+  /** Correlation identifier for a steered mid-run user message, when supplied. */
+  inputId?: string;
 }
 
 export interface AgentRunResult {
@@ -144,9 +152,13 @@ export interface AgentOptions {
   beforeTool?: (event: ToolExecutionEvent) => void | Promise<void>;
   /** Runs after a tool call settles; hook failures are reported as tool failures. */
   afterTool?: (event: ToolExecutionResult) => void | Promise<void>;
+  /** Drains steered user inputs queued for the next step boundary in this run. */
+  drainSteering?: () => readonly (string | SteeredInput)[];
 }
 
 const DEFAULT_MAX_PARALLEL_TOOLS = 10;
+export const MAX_STEERING_QUEUE = 16;
+const MAX_STEERING_PROMPT_LENGTH = 65_536;
 
 export class AgentTurnLimitError extends Error {
   constructor(maxTurns: number) {
@@ -183,6 +195,8 @@ export class Agent {
   private readonly maxParallelTools: number;
   private readonly beforeTool?: AgentOptions["beforeTool"];
   private readonly afterTool?: AgentOptions["afterTool"];
+  private readonly drainSteering?: AgentOptions["drainSteering"];
+  private readonly steeringQueue: SteeredInput[] = [];
   /** Serializes approval prompts so a host sees at most one at a time. */
   private approvalChain: Promise<unknown> = Promise.resolve();
 
@@ -218,6 +232,38 @@ export class Agent {
     this.maxParallelTools = options.maxParallelTools ?? DEFAULT_MAX_PARALLEL_TOOLS;
     this.beforeTool = options.beforeTool;
     this.afterTool = options.afterTool;
+    this.drainSteering = options.drainSteering;
+  }
+
+  /** Queue a user message to be injected at the next step boundary of the active run. */
+  steer(input: string | SteeredInput): void {
+    const raw = typeof input === "string" ? input : input?.content;
+    const id = typeof input === "object" && input !== null && typeof input.id === "string" && input.id.length > 0 ? input.id : undefined;
+    if (typeof raw !== "string" || raw.trim().length === 0 || raw.length > MAX_STEERING_PROMPT_LENGTH) {
+      throw new TypeError("Steered prompt must be a non-empty string within the size limit.");
+    }
+    if (this.steeringQueue.length >= MAX_STEERING_QUEUE) {
+      throw new Error("Steering queue is full.");
+    }
+    this.steeringQueue.push({ content: raw.trim(), ...(id ? { id } : {}) });
+  }
+
+  private commitSteering(turn: number, messages: ChatMessage[]): number {
+    this.signal?.throwIfAborted();
+    const external = this.drainSteering ? this.drainSteering() : [];
+    const queued = [...this.steeringQueue.splice(0), ...external];
+    let committed = 0;
+    for (const entry of queued) {
+      const raw = typeof entry === "string" ? entry : entry.content;
+      const content = raw.trim();
+      if (!content || content.length > MAX_STEERING_PROMPT_LENGTH) continue;
+      const id = typeof entry === "object" && entry !== null && typeof entry.id === "string" && entry.id.length > 0 ? entry.id : undefined;
+      const userMessage: ChatMessage = { role: "user", content };
+      messages.push(userMessage);
+      this.onEvent?.({ type: "user", turn, message: userMessage, ...(id ? { inputId: id } : {}) });
+      committed += 1;
+    }
+    return committed;
   }
 
   async run(prompt?: string): Promise<AgentRunResult> {
@@ -272,6 +318,9 @@ export class Agent {
       lastUsage = response.usage;
 
       if (response.toolCalls.length === 0) {
+        // If user steering arrived while the model was generating its final turn,
+        // keep the run open and continue with the steered input(s).
+        if (this.commitSteering(turn, messages) > 0) continue;
         return { messages, content: response.content, turns: turn, ...(lastUsage ? { usage: lastUsage } : {}) };
       }
 
@@ -317,6 +366,7 @@ export class Agent {
         });
       });
       this.signal?.throwIfAborted();
+      this.commitSteering(turn, messages);
     }
 
     throw new AgentTurnLimitError(this.maxTurns);

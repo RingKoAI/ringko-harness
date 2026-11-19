@@ -28,6 +28,14 @@ export interface ModelDefinition {
   catalogId?: string;
   maxInputTokens?: number;
   maxOutputTokens?: number;
+  /**
+   * Per-level override of the reasoning value sent upstream. Each key is a
+   * thinking level (`config.thinking`, e.g. `low` or `max`), and its value
+   * replaces the wire value the provider would otherwise send for that level.
+   * A level missing from the map keeps the provider's default mapping, so this
+   * stays an override rather than a level whitelist.
+   */
+  reasoningEfforts?: Record<string, string>;
   /** Optional per-model chat-completions URL (base URL is derived from it). */
   url?: string;
 }
@@ -36,6 +44,10 @@ export interface ModelDefinition {
 export interface ProviderDefinition {
   /** Provider name (shown as `name/model.name`). */
   name: string;
+  /** Optional link back to a built-in preset ID (`"deepseek"`, `"openai"`, ...). */
+  presetId?: string;
+  /** Default true. When false, excluded from active model selection while retaining credentials & models. */
+  enabled?: boolean;
   /** Protocol type: "openai-compatible", "openai", "anthropic", ... */
   type?: string;
   /** Alias of `type`. */
@@ -90,6 +102,10 @@ export interface RingkoConfig {
   expandThinking?: boolean;
   /** Whether tool outputs/arguments are expanded in the UI (false = collapsed). */
   expandTools?: boolean;
+  /** Delivery mode for plain Enter while the agent is busy ("queue" | "steer"). */
+  busyEnter?: "queue" | "steer";
+  /** Pinned favorite `<provider>/<model>` IDs surfaced at the top of model pickers. */
+  favoriteModels?: string[];
   /** Per-run agent turn budget; defaults to the harness limit (50). */
   maxTurns?: number;
   /** Automatic compaction settings. */
@@ -251,8 +267,12 @@ export interface SelectionOverride {
 
 /** Resolve the active provider+model from the selection (or the first available). */
 export function selectModel(config: RingkoConfig, override: SelectionOverride = {}): ModelSelection | undefined {
-  const providers = config.providers ?? [];
-  if (providers.length === 0) return undefined;
+  const allProviders = config.providers ?? [];
+  const providers = override.provider
+    ? allProviders
+    : allProviders.filter(entry => entry.enabled !== false && (entry.models?.length ?? 0) > 0);
+  const candidates = providers.length > 0 ? providers : allProviders.filter(entry => entry.enabled !== false);
+  if (candidates.length === 0) return undefined;
 
   let providerName = override.provider;
   let modelId = override.model;
@@ -265,7 +285,7 @@ export function selectModel(config: RingkoConfig, override: SelectionOverride = 
     }
   }
 
-  const provider = (providerName ? providers.find((entry) => entry.name === providerName) : undefined) ?? providers[0];
+  const provider = (providerName ? candidates.find((entry) => entry.name === providerName) : undefined) ?? candidates[0];
   const models = provider.models ?? [];
   if (models.length === 0) return undefined;
   const model = (modelId ? models.find((entry) => entry.id === modelId) : undefined) ?? models[0];

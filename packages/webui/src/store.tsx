@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
-import { UnauthorizedError, backendClient, fetchInfo, fetchSnapshot, fetchSessions, respondApproval, streamChat, stopSession, stopSessionAndWait, answerQuestion, jobAction, type QuestionOutput, type Info, type SessionMeta } from '@/api'
+import { UnauthorizedError, backendClient, fetchInfo, fetchSnapshot, fetchSessions, respondApproval, steerSession, streamChat, stopSession, stopSessionAndWait, answerQuestion, jobAction, type QuestionOutput, type Info, type SessionMeta } from '@/api'
 import { BackendError } from '@ringko-ai/client'
 import { Conversations, emptyConversation, isPendingSessionId, type Conversation } from '@/lib/conversations'
 
@@ -8,9 +8,9 @@ export interface AppState extends Conversation {
   info: Info | null; unauthorized: boolean; sessions: SessionMeta[]; sessionId: string | undefined
   refreshInfo(): void; refreshSessions(): void; clearSession(): void
   answer(output?: QuestionOutput): void; controlJob(id: string, action: 'status' | 'cancel' | 'background'): void
-  send(prompt: string, attachments?: string[], loop?: { args: string }): boolean; sendTo(id: string, prompt: string): void; stop(): void; decide(approved: boolean, scope?: 'session' | 'saved'): void
+  send(prompt: string, attachments?: string[], loop?: { args: string }): boolean; steer(prompt: string, attachments?: string[]): boolean; sendTo(id: string, prompt: string): void; stop(): void; decide(approved: boolean, scope?: 'session' | 'saved'): void
   openSession(id: string): void; newChat(): void; setDraft(value: string): void
-  editQueued(id: string, prompt: string): void; removeQueued(id: string): void; resumeQueue(): void; sendQueuedNow(id: string): Promise<boolean>
+  editQueued(id: string, prompt: string): void; removeQueued(id: string): void; resumeQueue(): void; sendQueuedNow(id: string): Promise<boolean>; steerQueued(id: string): Promise<boolean>; steerAllQueued(): Promise<number>
   runningSessions: string[]
   setToolExpansion(key: string, details: boolean, open: boolean): void
 }
@@ -33,7 +33,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (error === 'Unauthorized') setUnauthorized(true); else if (error) toast.error(error)
     refreshSessions()
     if (id && !isPendingSessionId(id)) void fetchSnapshot(id).then(snapshot => conversations.synchronize(snapshot)).catch(reportError)
-  }))
+  }, steerSession))
   useEffect(() => conversations.subscribe(() => setRevision(value => value + 1)), [conversations])
   // Delayed disposal tolerates React StrictMode's setup/cleanup/setup probe.
   const disposal = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -113,6 +113,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return false
     }
   }, [conversations])
+  const steer = useCallback((prompt: string, attachments?: string[]): boolean => {
+    const id = selected.current
+    if (!id) return send(prompt, attachments)
+    const previousDraft = conversations.get(id).draft
+    try {
+      conversations.patch(id, { draft: '' })
+      void conversations.steer(id, prompt, attachments).catch(error => {
+        if (error instanceof UnauthorizedError || error instanceof BackendError && error.status === 401) setUnauthorized(true)
+        reportError(error)
+      })
+      return true
+    } catch (error) {
+      conversations.patch(id, { draft: previousDraft })
+      reportError(error)
+      return false
+    }
+  }, [conversations, send])
+  const steerQueued = useCallback(async (messageId: string): Promise<boolean> => {
+    const id = selected.current; if (!id) return false
+    try { return await conversations.steerQueued(id, messageId) }
+    catch (error) {
+      if (error instanceof UnauthorizedError || error instanceof BackendError && error.status === 401) setUnauthorized(true)
+      reportError(error)
+      return false
+    }
+  }, [conversations])
+  const steerAllQueued = useCallback(async (): Promise<number> => {
+    const id = selected.current; if (!id) return 0
+    try { return await conversations.steerAllQueued(id) }
+    catch (error) {
+      if (error instanceof UnauthorizedError || error instanceof BackendError && error.status === 401) setUnauthorized(true)
+      reportError(error)
+      return 0
+    }
+  }, [conversations])
   const decide = useCallback((approved: boolean, scope?: 'session' | 'saved') => {
     const id = selected.current; const approval = id ? conversations.get(id).approval : null
     if (id && approval) void respondApproval(approval.id, approved, scope).then(() => { if (conversations.get(id).approval?.id === approval.id) conversations.patch(id, { approval: null }) }).catch(reportError)
@@ -122,14 +157,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     void jobAction(id, jobId, action).then(job => conversations.patch(id, { jobs: conversations.get(id).jobs.map(item => item.jobId === jobId ? { ...item, ...job } : item) })).catch(reportError)
   }, [conversations])
   const state = useMemo(() => { void revision; return sessionId ? conversations.get(sessionId) : { ...blank, draft: newDraft } }, [sessionId, conversations, revision, newDraft])
-  const value = useMemo<AppState>(() => ({ ...state, info, unauthorized, sessions, sessionId, refreshInfo, refreshSessions, openSession, newChat, send, sendTo, stop, answer, decide, controlJob, sendQueuedNow,
+  const value = useMemo<AppState>(() => ({ ...state, info, unauthorized, sessions, sessionId, refreshInfo, refreshSessions, openSession, newChat, send, steer, sendTo, stop, answer, decide, controlJob, sendQueuedNow, steerQueued, steerAllQueued,
     setToolExpansion: (key, details, open) => { if (sessionId) conversations.setToolExpansion(sessionId, key, details, open) },
     clearSession: () => select(), setDraft: draft => { if (selected.current) conversations.patch(selected.current, { draft }); else setNewDraft(draft) },
     editQueued: (id, prompt) => { if (selected.current) { try { conversations.editQueued(selected.current, id, prompt) } catch (error) { reportError(error) } } },
     removeQueued: id => { if (selected.current) conversations.removeQueued(selected.current, id) },
     resumeQueue: () => { if (selected.current) conversations.resume(selected.current) },
     runningSessions: sessions.filter(item => item.busy || conversations.peek(item.id)?.busy).map(item => item.id),
-  }), [state, info, unauthorized, sessions, sessionId, refreshInfo, refreshSessions, openSession, newChat, send, sendTo, stop, answer, decide, controlJob, sendQueuedNow, select, conversations])
+  }), [state, info, unauthorized, sessions, sessionId, refreshInfo, refreshSessions, openSession, newChat, send, steer, sendTo, stop, answer, decide, controlJob, sendQueuedNow, steerQueued, steerAllQueued, select, conversations])
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
 }
 export function useApp(): AppState { const context = useContext(AppContext); if (!context) throw new Error('useApp must be used within an AppProvider'); return context }

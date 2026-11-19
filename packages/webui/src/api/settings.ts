@@ -1,7 +1,8 @@
 // Runtime settings and session-control endpoints.
 
 import { BASE, UnauthorizedError, authHeaders } from "./http";
-import type { AccessMode, PermissionPreset, Info, UploadedFile } from "../api";
+import { splitUploadBatches } from "../lib/attachment-intake";
+import type { AccessMode, BusyEnterMode, PermissionPreset, Info, UploadedFile } from "../api";
 
 export async function setPermissionPreset(preset: PermissionPreset): Promise<Info> {
   const response = await fetch(`${BASE}/api/access`, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify({ preset }) });
@@ -41,14 +42,28 @@ export async function setAccess(mode: AccessMode): Promise<Info> {
   return (await response.json()) as Info;
 }
 
+export async function uploadFiles(files: readonly File[]): Promise<UploadedFile[]> {
+  if (files.length === 0) return [];
+  const uploaded: UploadedFile[] = [];
+  for (const batch of splitUploadBatches(files)) {
+    const form = new FormData();
+    for (const file of batch) form.append("file", file, file.name);
+    const response = await fetch(`${BASE}/api/upload`, { method: "POST", headers: authHeaders(), body: form });
+    if (response.status === 401) throw new UnauthorizedError();
+    if (!response.ok) {
+      const detail = await response.json().catch(() => null) as { error?: unknown } | null;
+      throw new Error(typeof detail?.error === "string" ? detail.error : `Upload failed (${response.status}).`);
+    }
+    const data = (await response.json()) as { files: UploadedFile[] };
+    uploaded.push(...data.files);
+  }
+  return uploaded;
+}
+
 export async function uploadFile(file: File): Promise<UploadedFile> {
-  const form = new FormData();
-  form.append("file", file);
-  const response = await fetch(`${BASE}/api/upload`, { method: "POST", headers: authHeaders(), body: form });
-  if (response.status === 401) throw new UnauthorizedError();
-  if (!response.ok) throw new Error(`Upload failed (${response.status}).`);
-  const data = (await response.json()) as { files: UploadedFile[] };
-  return data.files[0];
+  const [saved] = await uploadFiles([file]);
+  if (!saved) throw new Error("Upload failed.");
+  return saved;
 }
 
 export async function setThinking(level: string): Promise<Info> {
@@ -62,7 +77,7 @@ export async function setThinking(level: string): Promise<Info> {
   return (await response.json()) as Info;
 }
 
-export async function setUi(patch: { expandThinking?: boolean; expandTools?: boolean }): Promise<Info> {
+export async function setUi(patch: { expandThinking?: boolean; expandTools?: boolean; busyEnter?: BusyEnterMode; favoriteModels?: string[] }): Promise<Info> {
   const response = await fetch(`${BASE}/api/ui`, {
     method: "POST",
     headers: authHeaders({ "content-type": "application/json" }),

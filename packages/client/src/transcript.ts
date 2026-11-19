@@ -36,7 +36,12 @@ export function restoreTranscript<T extends TranscriptMetadata & { role: string;
       if (run) run.status = event.type === "run/completed" ? "completed" : event.type === "run/cancelled" ? "cancelled" : "failed";
     }
     if (event.type === "user/message") {
-      if (!current || current.user) { current = { start: event.seq, explicit: false, user: false, shell: false, result: false, failed: false }; runs.push(current); }
+      // An open explicit run (`run/started` without a terminal event) owns any
+      // mid-run steered user messages; implicit legacy runs split per user input.
+      if (!current || (current.user && (!current.explicit || Boolean(current.status)))) {
+        current = { start: event.seq, explicit: false, user: false, shell: false, result: false, failed: false };
+        runs.push(current);
+      }
       current.user = true;
     }
     if (MESSAGE_EVENTS.has(event.type) && current) owners.set(event.seq, current);

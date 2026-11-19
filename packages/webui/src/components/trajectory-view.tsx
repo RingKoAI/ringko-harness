@@ -11,6 +11,26 @@ import { cn } from '@/lib/utils'
 
 const KINDS: TrajectoryKind[] = ['user', 'model', 'assistant', 'tool', 'task', 'compaction', 'session']
 const ICONS = { user: MessageSquare, model: Activity, assistant: Bot, tool: Wrench, task: GitBranch, compaction: Shrink, session: Settings }
+
+/** Per-kind colors for the timeline bar and list icon. */
+const KIND_TIMELINE_COLOR: Record<TrajectoryKind, string> = {
+  user: 'bg-blue-500/40',
+  model: 'bg-indigo-500/40',
+  assistant: 'bg-violet-500/40',
+  tool: 'bg-amber-500/40',
+  task: 'bg-teal-500/40',
+  compaction: 'bg-slate-400/40',
+  session: 'bg-emerald-500/40',
+}
+const KIND_ICON_COLOR: Record<TrajectoryKind, string> = {
+  user: 'text-blue-500',
+  model: 'text-indigo-500',
+  assistant: 'text-violet-500',
+  tool: 'text-amber-500',
+  task: 'text-teal-500',
+  compaction: 'text-slate-400',
+  session: 'text-emerald-500',
+}
 const TIMELINE_LIMIT = 100
 
 export function TrajectoryView({ sessionId }: { sessionId?: string }) {
@@ -58,7 +78,7 @@ export function TrajectoryView({ sessionId }: { sessionId?: string }) {
                 <button key={record.seq} type="button" aria-pressed={selected?.seq === record.seq}
                   aria-label={`#${record.seq} ${record.label} ${time(record.time)}`}
                   title={`#${record.seq} · ${record.type} · ${time(record.time)}`}
-                  className={cn('h-6 min-w-2 flex-1 rounded-sm bg-muted-foreground/25 hover:bg-primary/60 focus-visible:outline-2 focus-visible:outline-ring', record.failed && 'bg-destructive/60', selected?.seq === record.seq && 'bg-primary')}
+                  className={cn('h-6 min-w-2 flex-1 rounded-sm hover:bg-primary/60 focus-visible:outline-2 focus-visible:outline-ring', record.failed ? 'bg-destructive/60' : KIND_TIMELINE_COLOR[record.kind], selected?.seq === record.seq && 'bg-primary')}
                   onClick={() => { setSelectedSeq(record.seq); rowElements.current.get(record.seq)?.scrollIntoView({ block: 'nearest' }) }} />
               ))}
             </div>
@@ -81,7 +101,7 @@ export function TrajectoryView({ sessionId }: { sessionId?: string }) {
               return (
                 <button key={record.seq} type="button" ref={node => { if (node) rowElements.current.set(record.seq, node); else rowElements.current.delete(record.seq) }} onClick={() => setSelectedSeq(record.seq)} aria-pressed={selected?.seq === record.seq}
                   className={cn('flex w-full items-start gap-2 rounded-lg border border-transparent p-2 text-left hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-ring', selected?.seq === record.seq && 'border-border bg-muted/50')}>
-                  <Icon className={cn('mt-0.5 size-4 shrink-0 text-muted-foreground', record.failed && 'text-destructive')} />
+                  <Icon className={cn('mt-0.5 size-4 shrink-0', record.failed ? 'text-destructive' : KIND_ICON_COLOR[record.kind])} />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-baseline gap-x-2"><span className="text-sm font-medium">{record.label}</span><span className="font-mono text-[11px] text-muted-foreground">#{record.seq} · {record.type}</span>{record.agent === 'subagent' ? <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">{t('trajectory.subagent')}</span> : null}{record.failed ? <span className="text-xs text-destructive">{t('toolLog.error')}</span> : null}</div>
                     <p className="truncate text-xs text-muted-foreground">{record.preview}</p>

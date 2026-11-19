@@ -1,0 +1,20 @@
+{
+  "ext.displayName": "RingKo Code",
+  "ext.description": "VS Code 内的供应商中立 RingKo Agent Harness —— 共享会话、实时流式输出、运行中插话与工具审批。",
+  "viewContainer.title": "RingKo",
+  "view.chat.name": "RingKo 智能体",
+  "cmd.openChat": "聚焦智能体侧栏",
+  "cmd.newSession": "新建对话会话",
+  "cmd.sendSelection": "将当前文件 / 选区添加到对话",
+  "cmd.explainSelection": "解释选中代码",
+  "cmd.fixDiagnostics": "修复当前文件中的诊断问题",
+  "cmd.switchModel": "切换模型",
+  "cmd.openTerminal": "在终端打开 RingKo TUI",
+  "cmd.openWebUi": "在浏览器打开 RingKo WebUI",
+  "cmd.reconnect": "重新连接工作区后端",
+  "cmd.status": "查看运行状态",
+  "cfg.serverUrl": "可选的显式本地 RingKo 后端地址（如 http://127.0.0.1:8787）。留空则按工作区自动发现或拉起。",
+  "cfg.authToken": "连接开启鉴权的本地后端时使用的 RINGKO_WEB_TOKEN 令牌。",
+  "cfg.cliPath": "用于自动拉起本地 RingKo 后端与 TUI 的命令名或绝对路径。",
+  "cfg.autoStartBackend": "当前工作区没有运行中的后端时，自动启动本地共享 RingKo 后端。"
+}

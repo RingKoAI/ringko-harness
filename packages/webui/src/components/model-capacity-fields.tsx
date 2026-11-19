@@ -4,7 +4,26 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useI18n } from '@/i18n'
 import { TOKEN_FIELDS, TOKEN_LABELS, tokenDraft, type EditableModel, type EditableProvider } from '@/lib/model-settings'
+import { cn } from '@/lib/utils'
 const LOOKUP_TIMEOUT_MS = 10_000
+/** Context-window quick fills offered above the field, in tokens. */
+const CONTEXT_PRESETS = [128_000, 200_000, 256_000, 1_000_000] as const
+/** Numeric fields that stay free-form. */
+const LIMIT_FIELDS = ['maxInputTokens', 'maxOutputTokens'] as const
+
+/** Short spelling for a context preset: `128K`, `1M`. */
+function presetLabel(value: number): string {
+  return value >= 1_000_000 ? `${value / 1_000_000}M` : `${Math.round(value / 1000)}K`
+}
+
+/** A stored limit as a number, or `undefined` when unset or unusable. */
+function storedLimit(value: EditableModel['contextWindow']): number | undefined {
+  try {
+    return tokenDraft(value)
+  } catch {
+    return undefined
+  }
+}
 
 export function ModelCapacityFields({ provider, model, onChange }: { provider: EditableProvider; model: EditableModel; onChange: (model: EditableModel) => void }) {
   const { t, locale } = useI18n()
@@ -31,6 +50,11 @@ export function ModelCapacityFields({ provider, model, onChange }: { provider: E
   }
   const number = (value?: number) => value === undefined ? t('models.unknown') : value.toLocaleString(locale)
   const automatic = preview ? { contextWindow: preview.automatic.contextWindow, maxInputTokens: preview.automatic.maxInputTokens, maxOutputTokens: preview.automatic.reserveOutputTokens } : undefined
+  const storedContext = storedLimit(model.contextWindow)
+  const isPreset = storedContext !== undefined && (CONTEXT_PRESETS as readonly number[]).includes(storedContext)
+  let contextInvalid = false
+  try { tokenDraft(model.contextWindow) } catch { contextInvalid = true }
+  const contextRef = useRef<HTMLInputElement>(null)
   return (
     <section aria-labelledby={`${id}-title`} className="min-w-0 space-y-3 pt-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -41,7 +65,61 @@ export function ModelCapacityFields({ provider, model, onChange }: { provider: E
         </div>
       </div>
       <div className="grid gap-3 sm:grid-cols-3">
-        {TOKEN_FIELDS.map(field => {
+        <div className="min-w-0 space-y-1 text-xs">
+          <label id={`${id}-contextWindow-label`} htmlFor={`${id}-contextWindow`}>{t(TOKEN_LABELS.contextWindow)}</label>
+          <div className="flex flex-wrap gap-1">
+            {CONTEXT_PRESETS.map(value => {
+              const isActive = storedContext === value
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={isActive}
+                  className={cn(
+                    'rounded-md border px-1.5 py-0.5 text-[11px] font-medium transition-colors',
+                    isActive
+                      ? 'border-primary/60 bg-primary/15 text-foreground'
+                      : 'border-border/70 bg-muted/40 text-muted-foreground hover:border-foreground/30 hover:text-foreground',
+                  )}
+                  onClick={() => onChange({ ...model, contextWindow: value })}
+                >
+                  {presetLabel(value)}
+                </button>
+              )
+            })}
+            <button
+              type="button"
+              aria-pressed={!isPreset}
+              className={cn(
+                'rounded-md border px-1.5 py-0.5 text-[11px] font-medium transition-colors',
+                !isPreset
+                  ? 'border-primary/60 bg-primary/15 text-foreground'
+                  : 'border-border/70 bg-muted/40 text-muted-foreground hover:border-foreground/30 hover:text-foreground',
+              )}
+              onClick={() => {
+                const next = { ...model }
+                delete next.contextWindow
+                onChange(next)
+                contextRef.current?.focus()
+              }}
+            >
+              {t('models.contextCustom')}
+            </button>
+          </div>
+          <Input
+            id={`${id}-contextWindow`}
+            ref={contextRef}
+            inputMode="numeric"
+            value={model.contextWindow ?? ''}
+            aria-labelledby={`${id}-contextWindow-label`}
+            aria-invalid={contextInvalid}
+            aria-describedby={contextInvalid ? `${id}-contextWindow-error` : `${id}-hint`}
+            placeholder={automatic?.contextWindow !== undefined ? t('models.autoValue', { value: number(automatic.contextWindow) }) : t('models.auto')}
+            onChange={event => onChange({ ...model, contextWindow: event.target.value })}
+          />
+          {contextInvalid && <span id={`${id}-contextWindow-error`} className="block text-destructive">{t('models.integerHint')}</span>}
+        </div>
+        {LIMIT_FIELDS.map(field => {
           let invalid = false
           try { tokenDraft(model[field]) } catch { invalid = true }
           return <label key={field} className="min-w-0 space-y-1 text-xs" htmlFor={`${id}-${field}`}>

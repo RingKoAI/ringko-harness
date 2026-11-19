@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS = {
   thinking: "high",
   expandThinking: false,
   expandTools: false,
+  busyEnter: "queue",
   maxTurns: 50,
   compaction: { enabled: true, ratio: 0.8, keepRecent: 6, margin: 2000 },
   plugins: { trusted: [] },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { Agent, AgentTurnLimitError, type AgentEvent, type ChatMessage, type ModelClient } from "../src/agent.ts";
+import { Agent, AgentTurnLimitError, MAX_STEERING_QUEUE, type AgentEvent, type ChatMessage, type ModelClient } from "../src/agent.ts";
 import { ToolRegistry, type ToolDefinition } from "../src/tools.ts";
 
 function echoTool(kind: "safe" | "shell"): ToolDefinition<{ text: string }, string> {
@@ -273,4 +273,103 @@ it("records a renderer failure as a tool error without losing the run", async ()
   expect(result.content).toBe("done");
   expect(seen?.find((message) => message.role === "tool")?.content).toContain("invalid image data");
   expect(events.find((event) => event.type === "tool_error")?.toolName).toBe("capture");
+});
+
+describe("Agent steering", () => {
+  it("injects steered user messages after tool results and preserves correlation ids", async () => {
+    const seenRequests: ChatMessage[][] = [];
+    const events: AgentEvent[] = [];
+    const tools = new ToolRegistry();
+    let agentRef: Agent | undefined;
+    tools.register({
+      name: "step",
+      description: "Steer mid-tool.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      parseInput: () => ({}),
+      assessRisk: () => ({ kind: "safe", reason: "fixture" }),
+      execute: () => {
+        agentRef?.steer({ id: "steer-1", content: "Include BANANA" });
+        return "tool-done";
+      },
+    });
+    const model: ModelClient = async (request) => {
+      seenRequests.push([...request.messages]);
+      if (seenRequests.length === 1) {
+        return { content: "Running step", toolCalls: [{ id: "c1", name: "step", arguments: {} }] };
+      }
+      return { content: "Final BANANA", toolCalls: [] };
+    };
+    const agent = new Agent({ model, tools, onEvent: (event) => events.push(event) });
+    agentRef = agent;
+    const result = await agent.run("Start work");
+
+    expect(result.content).toBe("Final BANANA");
+    expect(result.turns).toBe(2);
+    expect(seenRequests[1]?.map((m) => [m.role, m.content])).toEqual([
+      ["user", "Start work"],
+      ["assistant", "Running step"],
+      ["tool", "tool-done"],
+      ["user", "Include BANANA"],
+    ]);
+    expect(events.find((e) => e.type === "user")).toMatchObject({
+      type: "user",
+      turn: 1,
+      inputId: "steer-1",
+      message: { role: "user", content: "Include BANANA" },
+    });
+  });
+
+  it("keeps the run open when steering arrives during a final no-tool model turn", async () => {
+    const events: AgentEvent[] = [];
+    const tools = new ToolRegistry();
+    const externalSteers: Array<{ id: string; content: string }> = [];
+    let calls = 0;
+    const model: ModelClient = async () => {
+      calls += 1;
+      if (calls === 1) {
+        externalSteers.push({ id: "late-steer", content: "One more thing" });
+        return { content: "Initial final answer", toolCalls: [] };
+      }
+      return { content: "Addressed one more thing", toolCalls: [] };
+    };
+    const agent = new Agent({
+      model,
+      tools,
+      drainSteering: () => externalSteers.splice(0),
+      onEvent: (event) => events.push(event),
+    });
+    const result = await agent.run("Hello");
+
+    expect(calls).toBe(2);
+    expect(result.content).toBe("Addressed one more thing");
+    expect(result.messages.map((m) => [m.role, m.content])).toEqual([
+      ["user", "Hello"],
+      ["assistant", "Initial final answer"],
+      ["user", "One more thing"],
+      ["assistant", "Addressed one more thing"],
+    ]);
+    expect(events.map((e) => e.type)).toEqual(["model", "user", "model"]);
+  });
+
+  it("validates steered prompts, enforces queue capacity, and does not drain after abort", async () => {
+    const controller = new AbortController();
+    const externalSteers = ["keep-unclaimed"];
+    const tools = new ToolRegistry();
+    const agent = new Agent({
+      model: async () => {
+        controller.abort();
+        return { content: "aborted", toolCalls: [] };
+      },
+      tools,
+      signal: controller.signal,
+      drainSteering: () => externalSteers.splice(0),
+    });
+
+    expect(() => agent.steer("   ")).toThrow(TypeError);
+    for (let i = 0; i < MAX_STEERING_QUEUE; i += 1) agent.steer(`msg ${i}`);
+    expect(() => agent.steer("overflow")).toThrow("full");
+
+    await expect(agent.run("start")).rejects.toThrow();
+    expect(externalSteers).toEqual(["keep-unclaimed"]);
+  });
 });

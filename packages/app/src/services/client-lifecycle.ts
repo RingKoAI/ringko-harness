@@ -40,7 +40,7 @@ export class ClientLifecycle {
   }
   private grant(id: string): ClientLeaseGrant { return { id, instance: this.instance, ttlMs: this.limits.ttlMs, heartbeatMs: this.limits.heartbeatMs }; }
   acquire(kind: FrontendKind): ClientLeaseGrant {
-    if (kind !== "cli" && kind !== "web") throw new TypeError("Invalid frontend kind.");
+    if (kind !== "cli" && kind !== "web" && kind !== "ide") throw new TypeError("Invalid frontend kind.");
     this.prune();
     if (this.leases.size >= CLIENT_LEASE_LIMITS.clients) throw new ClientCapacityError("Too many frontend clients.");
     const id = randomUUID(); this.leases.set(id, { kind, expires: this.now() + this.limits.ttlMs }); this.everAttached = true;
@@ -56,9 +56,13 @@ export class ClientLifecycle {
   }
   pin(): void { this.persistent = true; }
   status(): ClientLifecycleStatus {
-    this.prune(); let cli = 0, web = 0;
-    for (const lease of this.leases.values()) if (lease.kind === "cli") cli++; else web++;
-    return { version: CLIENT_LIFECYCLE_VERSION, managed: !this.persistent, clients: cli + web, cli, web, webui: this.baseWebui || web > 0 };
+    this.prune(); let cli = 0, web = 0, ide = 0;
+    for (const lease of this.leases.values()) {
+      if (lease.kind === "cli") cli++;
+      else if (lease.kind === "ide") ide++;
+      else web++;
+    }
+    return { version: CLIENT_LIFECYCLE_VERSION, managed: !this.persistent, clients: cli + web + ide, cli, web, ide, webui: this.baseWebui || web > 0 };
   }
   shouldClose(hasWork: boolean): boolean {
     this.prune(); const now = this.now();

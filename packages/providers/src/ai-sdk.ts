@@ -29,6 +29,11 @@ export interface AiSdkModelOptions {
   model?: string;
   /** Reasoning/thinking depth: "off" | "low" | "high" | "max". */
   thinking?: string;
+  /**
+   * Per-level override of the value sent for a thinking level. A level absent
+   * from the map keeps the provider's default mapping.
+   */
+  reasoningEfforts?: Readonly<Record<string, string>>;
   /** Stable cache key for provider-side prompt caching (OpenAI family). */
   cacheKey?: string;
   /**
@@ -308,25 +313,33 @@ function thinkingBudget(level: string, maxOutputTokens?: number): number {
   return Math.max(1_024, Math.min(preferred, Math.floor(maxOutputTokens) - 1_024));
 }
 
-function anthropicThinking(level: string, model: string, maxOutputTokens?: number): Record<string, JSONValue> {
+/** The value a level sends: the model's declared override, else its fallback. */
+function effortFor(options: AiSdkModelOptions, level: string, fallback: string = level): string {
+  const declared = options.reasoningEfforts?.[level];
+  return declared !== undefined && declared.length > 0 ? declared : fallback;
+}
+
+function anthropicThinking(level: string, model: string, options: AiSdkModelOptions): Record<string, JSONValue> {
   if (level === "off") return { thinking: { type: "disabled" } };
-  if (ANTHROPIC_ADAPTIVE.test(model)) return { thinking: { type: "adaptive", display: "summarized" }, effort: level };
-  return { thinking: { type: "enabled", budgetTokens: thinkingBudget(level, maxOutputTokens) } };
+  if (ANTHROPIC_ADAPTIVE.test(model)) return { thinking: { type: "adaptive", display: "summarized" }, effort: effortFor(options, level) };
+  return { thinking: { type: "enabled", budgetTokens: thinkingBudget(level, options.maxOutputTokens) } };
 }
 
 /** Map the thinking depth onto Google's `thinkingConfig`. */
-function googleThinking(level: string, model: string): Record<string, JSONValue> {
+function googleThinking(level: string, model: string, options: AiSdkModelOptions): Record<string, JSONValue> {
   if (level === "off") return { thinkingBudget: 0, includeThoughts: true };
   if (model.includes("2.5")) {
     const budget = level === "max" ? 24_576 : level === "high" ? 16_000 : level === "medium" ? 8_000 : 4_000;
     return { thinkingBudget: budget, includeThoughts: true };
   }
-  return { thinkingLevel: level === "max" ? "high" : level, includeThoughts: true };
+  return { thinkingLevel: effortFor(options, level, level === "max" ? "high" : level), includeThoughts: true };
 }
 
 /**
  * Map the thinking depth onto each provider's own field. Provider option keys
  * must match the name the AI SDK provider was created with, including hyphens.
+ * A model's `reasoningEfforts` replaces the value a level sends wherever the
+ * protocol accepts a named effort; budget-based mappings keep their numbers.
  */
 function reasoningOptions(options: AiSdkModelOptions): { providerOptions?: ProviderOptions } {
   const level = options.thinking;
@@ -335,18 +348,18 @@ function reasoningOptions(options: AiSdkModelOptions): { providerOptions?: Provi
   switch (options.provider) {
     case "anthropic":
     case "anthropic-oauth":
-      return { providerOptions: { anthropic: anthropicThinking(level, model, options.maxOutputTokens) } };
+      return { providerOptions: { anthropic: anthropicThinking(level, model, options) } };
     case "google":
-      return { providerOptions: { google: { thinkingConfig: googleThinking(level, model) } } };
+      return { providerOptions: { google: { thinkingConfig: googleThinking(level, model, options) } } };
     case "openai":
     case "openai-oauth":
-      return { providerOptions: { openai: { reasoningEffort: level === "off" ? "none" : level } } };
+      return { providerOptions: { openai: { reasoningEffort: effortFor(options, level, level === "off" ? "none" : level) } } };
     case "xai-oauth":
-      return level === "off" ? {} : { providerOptions: { xai: { reasoningEffort: level } } };
+      return level === "off" ? {} : { providerOptions: { xai: { reasoningEffort: effortFor(options, level) } } };
     case "github-copilot":
-      return level === "off" ? {} : { providerOptions: { "github-copilot": { reasoningEffort: level } } };
+      return level === "off" ? {} : { providerOptions: { "github-copilot": { reasoningEffort: effortFor(options, level) } } };
     default:
-      return level === "off" ? {} : { providerOptions: { [options.name ?? "openaiCompatible"]: { reasoningEffort: level } } };
+      return level === "off" ? {} : { providerOptions: { [options.name ?? "openaiCompatible"]: { reasoningEffort: effortFor(options, level) } } };
   }
 }
 

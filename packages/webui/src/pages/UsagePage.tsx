@@ -5,14 +5,17 @@ import { fetchUsageStatistics, type UsageCallKind, type UsageStatistics, type Us
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { UsageTrend } from '@/components/usage-trend'
 import { useI18n } from '@/i18n'
 import { localDateInput, usageRange, USAGE_PAGE_SIZE, USAGE_REFRESH_MS, type UsageRange } from '@/lib/usage-statistics'
 import { useApp } from '@/store'
 import { isPendingSessionId } from '@/lib/conversations'
 
-const SELECT_CLASS = 'h-9 w-full min-w-0 rounded-md border bg-background px-2 text-sm'
+const SELECT_CLASS = 'h-9 w-full min-w-0 text-sm'
 const CALL_KINDS: UsageCallKind[] = ['primary', 'task', 'compaction', 'metadata', 'unknown']
+/** Radix Select rejects empty item values, so "no filter" travels as this sentinel. */
+const ANY_FILTER = '__any__'
 
 function Metric({ label, value, icon }: { label: string; value: string; icon: ReactNode }) {
   return <div className="min-w-0 rounded-lg border bg-muted/20 p-3"><div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">{icon}<span>{label}</span></div><div className="break-all text-xl font-semibold tabular-nums">{value}</div></div>
@@ -105,11 +108,85 @@ function UsageDashboard() {
     <Card className="gap-3">
       <CardContent className="space-y-3">
         <div className="grid min-w-0 grid-cols-2 gap-3 lg:grid-cols-3">
-          <label className="min-w-0 space-y-1 text-xs text-muted-foreground"><span>{t('usage.range')}</span><select className={SELECT_CLASS} value={range} onChange={event => change(() => setRange(event.target.value as UsageRange))}>{(['today', '7d', '30d', 'all', 'custom'] as const).map(value => <option key={value} value={value}>{t(`usage.range.${value}`)}</option>)}</select></label>
-          <label className="min-w-0 space-y-1 text-xs text-muted-foreground"><span>{t('usage.scope')}</span><select className={SELECT_CLASS} value={scope} onChange={event => change(() => setScope(event.target.value as 'workspace' | 'session'))}><option value="workspace">{t('usage.workspace')}</option><option value="session">{t('usage.currentSession')}</option></select></label>
-          <label className="min-w-0 space-y-1 text-xs text-muted-foreground"><span>{t('usage.kind')}</span><select className={SELECT_CLASS} value={kind} onChange={event => change(() => setKind(event.target.value as UsageCallKind | ''))}><option value="">{t('usage.allKinds')}</option>{CALL_KINDS.map(value => <option key={value} value={value}>{t(`usage.kind.${value}`)}</option>)}</select></label>
-          <label className="min-w-0 space-y-1 text-xs text-muted-foreground"><span>{t('usage.provider')}</span><select className={SELECT_CLASS} value={provider ? `v:${provider}` : ''} onChange={event => change(() => { setProvider(event.target.value.slice(2)); setModel('') })}><option value="">{t('usage.allProviders')}</option>{[...providerOptions].map(value => <option key={value} value={`v:${value}`}>{value}</option>)}</select></label>
-          <label className="min-w-0 space-y-1 text-xs text-muted-foreground"><span>{t('usage.model')}</span><select className={SELECT_CLASS} value={model ? `v:${model}` : ''} onChange={event => change(() => setModel(event.target.value.slice(2)))}><option value="">{t('usage.allModels')}</option>{[...modelOptions].map(value => <option key={value} value={`v:${value}`}>{value}</option>)}</select></label>
+          <div className="min-w-0 space-y-1 text-xs text-muted-foreground">
+            <span>{t('usage.range')}</span>
+            <Select value={range} onValueChange={value => change(() => setRange(value as UsageRange))}>
+              <SelectTrigger aria-label={t('usage.range')} className={SELECT_CLASS}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(['today', '7d', '30d', 'all', 'custom'] as const).map(value => (
+                  <SelectItem key={value} value={value}>{t(`usage.range.${value}`)}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="min-w-0 space-y-1 text-xs text-muted-foreground">
+            <span>{t('usage.scope')}</span>
+            <Select value={scope} onValueChange={value => change(() => setScope(value as 'workspace' | 'session'))}>
+              <SelectTrigger aria-label={t('usage.scope')} className={SELECT_CLASS}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="workspace">{t('usage.workspace')}</SelectItem>
+                <SelectItem value="session">{t('usage.currentSession')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="min-w-0 space-y-1 text-xs text-muted-foreground">
+            <span>{t('usage.kind')}</span>
+            <Select
+              value={kind === '' ? ANY_FILTER : kind}
+              onValueChange={value => change(() => setKind(value === ANY_FILTER ? '' : value as UsageCallKind))}
+            >
+              <SelectTrigger aria-label={t('usage.kind')} className={SELECT_CLASS}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ANY_FILTER}>{t('usage.allKinds')}</SelectItem>
+                {CALL_KINDS.map(value => (
+                  <SelectItem key={value} value={value}>{t(`usage.kind.${value}`)}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="min-w-0 space-y-1 text-xs text-muted-foreground">
+            <span>{t('usage.provider')}</span>
+            <Select
+              value={provider ? `v:${provider}` : ANY_FILTER}
+              onValueChange={value => change(() => {
+                setProvider(value === ANY_FILTER ? '' : value.slice(2))
+                setModel('')
+              })}
+            >
+              <SelectTrigger aria-label={t('usage.provider')} className={SELECT_CLASS}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ANY_FILTER}>{t('usage.allProviders')}</SelectItem>
+                {[...providerOptions].map(value => (
+                  <SelectItem key={value} value={`v:${value}`}>{value}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="min-w-0 space-y-1 text-xs text-muted-foreground">
+            <span>{t('usage.model')}</span>
+            <Select
+              value={model ? `v:${model}` : ANY_FILTER}
+              onValueChange={value => change(() => setModel(value === ANY_FILTER ? '' : value.slice(2)))}
+            >
+              <SelectTrigger aria-label={t('usage.model')} className={SELECT_CLASS}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ANY_FILTER}>{t('usage.allModels')}</SelectItem>
+                {[...modelOptions].map(value => (
+                  <SelectItem key={value} value={`v:${value}`}>{value}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={autoRefresh} onChange={event => setAutoRefresh(event.target.checked)} />{t('usage.autoRefresh')}</label>
         </div>
         {range === 'custom' ? <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><label className="space-y-1 text-xs text-muted-foreground"><span>{t('usage.from')}</span><Input type="date" value={from} max={localDateInput()} onChange={event => change(() => setFrom(event.target.value))} /></label><label className="space-y-1 text-xs text-muted-foreground"><span>{t('usage.to')}</span><Input type="date" value={to} min={from} max={localDateInput()} onChange={event => change(() => setTo(event.target.value))} /></label></div> : null}

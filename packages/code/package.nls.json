@@ -1,0 +1,20 @@
+{
+  "ext.displayName": "RingKo Code",
+  "ext.description": "Provider-neutral RingKo Agent Harness inside VS Code — shared sessions, live streaming, mid-run steering, and approval gates.",
+  "viewContainer.title": "RingKo",
+  "view.chat.name": "RingKo Agent",
+  "cmd.openChat": "Focus Agent Sidebar",
+  "cmd.newSession": "New Chat Session",
+  "cmd.sendSelection": "Add Active File / Selection to Chat",
+  "cmd.explainSelection": "Explain Selected Code",
+  "cmd.fixDiagnostics": "Fix Diagnostics in Active File",
+  "cmd.switchModel": "Switch Model",
+  "cmd.openTerminal": "Open RingKo TUI in Terminal",
+  "cmd.openWebUi": "Open RingKo WebUI in Browser",
+  "cmd.reconnect": "Reconnect to Workspace Backend",
+  "cmd.status": "Show Status",
+  "cfg.serverUrl": "Optional explicit local RingKo backend URL (e.g. http://127.0.0.1:8787). Leave empty to auto-discover or launch per workspace.",
+  "cfg.authToken": "Optional RINGKO_WEB_TOKEN bearer token when connecting to an authenticated local backend.",
+  "cfg.cliPath": "Executable name or absolute path used to auto-start the local RingKo backend and TUI.",
+  "cfg.autoStartBackend": "Automatically spawn a local shared RingKo backend when none is running for the active workspace."
+}

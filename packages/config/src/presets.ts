@@ -59,7 +59,7 @@ import spark from "./providers/spark.ts";
 import custom from "./providers/custom.ts";
 import type { ProviderPreset } from "./providers/types.ts";
 
-export type { ProviderPreset } from "./providers/types.ts";
+export type { PresetStarterModel, ProviderPreset } from "./providers/types.ts";
 
 export const OAUTH_DOMAIN_BY_TYPE: Record<string, string> = {
   "openai-oauth": "openai-oauth",
@@ -76,6 +76,29 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
   deepinfra, nebius, featherless, kluster, friendli, requesty, ai21, upstage, baichuan,
   stepfun, hunyuan, volcengineArk, qianfan, spark, custom,
 ];
+
+/** The 15 always-available built-in preset providers surfaced directly in the workbench. */
+export const BUILTIN_PROVIDER_IDS: readonly string[] = [
+  "openai",
+  "anthropic",
+  "google",
+  "xai-api",
+  "deepseek",
+  "siliconflow",
+  "dashscope",
+  "volcengine-ark",
+  "moonshotai-cn",
+  "zhipu",
+  "minimax-cn",
+  "openrouter",
+  "groq",
+  "ollama",
+  "lmstudio",
+];
+
+export const BUILTIN_PROVIDER_PRESETS: readonly ProviderPreset[] = BUILTIN_PROVIDER_IDS
+  .map(id => PROVIDER_PRESETS.find(preset => preset.id === id))
+  .filter((preset): preset is ProviderPreset => preset !== undefined);
 
 export function findProviderPreset(id: string): ProviderPreset | undefined {
   return PROVIDER_PRESETS.find(preset => preset.id === id);

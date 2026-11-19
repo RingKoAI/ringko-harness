@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["bun", "vscode"]
+    "types": ["bun-types", "vscode"]
   },
-  "include": ["src"]
+  "include": ["src", "tests"]
 }
